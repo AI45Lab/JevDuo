@@ -1,10 +1,14 @@
 """Slow-model transport failures use the existing bounded retry path."""
 
+import base64
 import http.client
+import io
 import json
+import random
 import urllib.request
 
 import pytest
+from PIL import Image
 
 from tandem.config import SessionConfig
 from tandem.models.slow import ModelResponseError, SlowModelClient
@@ -112,3 +116,83 @@ def test_task_deadline_bounds_api_timeout_and_stops_retry_before_worker_is_kille
     with pytest.raises(TimeoutError, match="deadline"):
         client.json_request([{"role": "user", "content": "plan"}], lambda v: True, role="plan_stage")
     assert timeouts == [5.0]
+
+
+@pytest.mark.parametrize("size", [(960, 540), (1920, 1080)])
+def test_goal_rejects_oversized_images_at_resize_floor_before_sending(tmp_path, monkeypatch, size):
+    parts = []
+    for seed in range(3):
+        pixels = random.Random(seed).randbytes(size[0] * size[1])
+        frame = Image.frombytes("L", size, pixels)
+        encoded = io.BytesIO()
+        frame.save(encoded, format="PNG")
+        url = "data:image/png;base64," + base64.b64encode(encoded.getvalue()).decode("ascii")
+        parts.append({"type": "image_url", "image_url": {"url": url}})
+
+    def opener(*args, **kwargs):
+        pytest.fail("An oversized request must not reach the API")
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    config = SessionConfig(execution_mode="goal", slow_max_request_bytes=300_000)
+    client = SlowModelClient({"base_url": "http://synthetic"}, config, tmp_path / "audit.jsonl")
+    with pytest.raises(ValueError, match=r"exceeds slow_max_request_bytes: \d+ > 300000 bytes"):
+        client.json_request([{"role": "user", "content": parts}], lambda v: True, role="plan_stage")
+    for part in parts:
+        raw = base64.b64decode(part["image_url"]["url"].split(",", 1)[1])
+        with Image.open(io.BytesIO(raw)) as image:
+            assert image.size == (960, 540)
+
+
+def test_goal_rejects_oversized_text_without_images(tmp_path, monkeypatch):
+    def opener(*args, **kwargs):
+        pytest.fail("An oversized request must not reach the API")
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    config = SessionConfig(execution_mode="goal", slow_max_request_bytes=300_000)
+    client = SlowModelClient({"base_url": "http://synthetic"}, config, tmp_path / "audit.jsonl")
+    with pytest.raises(ValueError, match="exceeds slow_max_request_bytes"):
+        client.json_request([{"role": "user", "content": "x" * 300_001}],
+                            lambda v: True, role="plan_stage")
+
+
+def test_goal_allows_request_at_exact_body_limit(tmp_path, monkeypatch):
+    requests = []
+
+    def opener(request, **kwargs):
+        requests.append(request)
+        return _Response()
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    config = SessionConfig(execution_mode="goal")
+    client = SlowModelClient({"base_url": "http://synthetic"}, config, tmp_path / "audit.jsonl")
+    messages = [{"role": "user", "content": "plan"}]
+    client.json_request(messages, lambda v: True, role="plan_stage")
+    config = SessionConfig(execution_mode="goal", slow_max_request_bytes=len(requests[0].data))
+    client = SlowModelClient({"base_url": "http://synthetic"}, config, tmp_path / "audit.jsonl")
+    assert client.json_request(messages, lambda v: True, role="plan_stage") == {"done": True}
+    assert len(requests) == 2
+    assert len(requests[-1].data) == config.slow_max_request_bytes
+
+
+def test_goal_rechecks_body_limit_after_json_repair(tmp_path, monkeypatch):
+    requests = []
+    config = SessionConfig(execution_mode="goal", slow_max_request_bytes=200)
+
+    class Response(_Response):
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": '{"done":'},
+                                            "finish_reason": "length"}]}).encode()
+
+    def opener(request, **kwargs):
+        requests.append(request)
+        return Response()
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    monkeypatch.setattr("tandem.models.slow.time.sleep", lambda seconds: None)
+    client = SlowModelClient({"base_url": "http://synthetic"}, config, tmp_path / "audit.jsonl")
+    messages = [{"role": "user", "content": "plan"}]
+    with pytest.raises(ValueError, match="exceeds slow_max_request_bytes"):
+        client.json_request(messages, lambda v: True, role="plan_stage")
+    assert len(requests) == 1
+    assert len(requests[0].data) <= config.slow_max_request_bytes
+    assert "NOTHING" in messages[-1]["content"]

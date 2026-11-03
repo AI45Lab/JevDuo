@@ -30,7 +30,7 @@ class ModelResponseError(ValueError):
 
 
 def _pack_images(payload, quality, max_bytes):
-    """Pack bounded-size send copies; only exactly identical decoded frames share an image.
+    """Compress send copies; only exactly identical decoded frames share an image.
 
     Mutate the existing messages list so validators can still append correction turns on retry.
     Never write source files or discard distinct evidence frames to meet the body budget.
@@ -187,9 +187,16 @@ class SlowModelClient:
                        if self.config.execution_mode == "goal" else {})
 
         def build_request():
+            data = json.dumps(payload).encode("utf-8")
+            # Repairs can append messages after image packing; enforce the limit on every attempt.
+            if self.config.execution_mode == "goal" and len(data) > self.config.slow_max_request_bytes:
+                raise ValueError(
+                    "slow model request body exceeds slow_max_request_bytes: "
+                    f"{len(data)} > {self.config.slow_max_request_bytes} bytes"
+                )
             return urllib.request.Request(
                 credentials["base_url"].rstrip("/") + "/chat/completions",
-                data=json.dumps(payload).encode("utf-8"),
+                data=data,
                 headers={
                     **(
                         {"Authorization": "Bearer " + key["api_key"]}
