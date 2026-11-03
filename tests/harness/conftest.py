@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from tandem.components import Components
 from tandem.gui.candidates import ActionCandidateBuilder
@@ -61,7 +62,7 @@ def make_observation(tmp_path: Path, step_idx: int, *, receipt: Receipt | None =
                      tree_xml: str | None = A11Y_XML, steps: int = 50,
                      wall: float = 1800.0, screenshot_sha: str = SHA) -> Observation:
     shot = tmp_path / f"step_{step_idx:02d}.png"
-    shot.write_bytes(b"png-bytes")
+    Image.new("RGB", (64, 64), "white").save(shot)
     a11y_path = None
     if tree_xml is not None:
         a11y_path = str(tmp_path / f"a11y_{step_idx:02d}.xml")

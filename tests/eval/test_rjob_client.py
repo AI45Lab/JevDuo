@@ -146,6 +146,18 @@ def test_cli_budget_override_merges_with_config(tmp_path):
     assert spec["budget"] == {"max_steps": 3, "max_wall_seconds": 60.0}
 
 
+def test_goal_recovery_budget_is_taken_from_execution_config(tmp_path):
+    config = with_paths(CONFIG, deploy_root=str(tmp_path / "deploy"))
+    config["harness"]["execution"] = {
+        "mode": "goal", "recovery_max_calls": 3, "recovery_max_seconds": 240,
+    }
+    spec = build_job_spec(config=config, run_id="goal", repo_root=tmp_path,
+                          spec_overrides={"benchmark": "mock"})
+    assert spec["harness_config"]["execution_mode"] == "goal"
+    assert spec["harness_config"]["goal_recovery_max_calls"] == 3
+    assert spec["harness_config"]["goal_recovery_max_seconds"] == 240
+
+
 def test_watch_until_terminal_and_timeout():
     runner = FakeRunner({"get": ["running", "succeeded"]})
     client = RjobClient(runner)

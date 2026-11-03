@@ -17,7 +17,8 @@ def _norm(value: str) -> str:
 
 
 def _key(target: UITarget) -> str:
-    return "|".join((target.role, _norm(target.name), *(_norm(p) for p in target.parent_context)))
+    return "|".join((target.role, _norm(target.name), *(_norm(p) for p in target.parent_context),
+                     _norm(target.nearby_text) if "dom" in target.source else ""))
 
 
 def _bounds(element: ET.Element) -> tuple[int, int, int, int] | None:
@@ -38,11 +39,13 @@ def _a11y_context(root: ET.Element | None) -> tuple[list[dict], bool]:
             for key, value in element.attrib.items()
         )
 
-    for app in root:
+    apps = [root] if root.tag.rsplit("}", 1)[-1] == "application" else list(root)
+    for app in apps:
         app_active = active(app) or any(active(child) for child in app)
         chrome_active = chrome_active or (
             app_active and "chrome" in app.attrib.get("name", "").lower()
         )
+    owners = {element: app.get("name", "") for app in apps for element in app.iter()}
     for element in root.iter():
         role = element.tag.rsplit("}", 1)[-1].replace("-", "_")
         if role not in _LABEL_ROLES:
@@ -51,7 +54,8 @@ def _a11y_context(root: ET.Element | None) -> tuple[list[dict], bool]:
         text = " ".join((element.attrib.get("name") or element.text or "").split())
         if box and text and len(text) <= 120:
             x, y, width, height = box
-            labels.append({"text": text, "box": box, "cx": x + width / 2, "cy": y + height / 2})
+            labels.append({"text": text, "box": box, "cx": x + width / 2, "cy": y + height / 2,
+                           "application": owners.get(element, "")})
     return labels, chrome_active
 
 
@@ -61,9 +65,13 @@ def _nearest_label(target: UITarget, labels: list[dict]) -> str:
     cx, cy = target.x + target.width / 2, target.y + target.height / 2
     best, best_score = "", float("inf")
     for item in labels:
+        if item["application"] != target.application:
+            continue
         x, y, width, height = item["box"]
-        left = x + width <= target.x + 4 and abs(item["cy"] - cy) <= max(14, target.height)
-        above = y + height <= target.y + 4 and x + width >= target.x and x <= target.x + target.width
+        left = (0 <= target.x - x - width <= 160
+                and abs(item["cy"] - cy) <= max(14, min(40, target.height)))
+        above = (0 <= target.y - y - height <= 48 and x + width >= target.x
+                 and x <= target.x + target.width)
         if not left and not above:
             continue
         score = (
@@ -137,7 +145,7 @@ def _dom_target(item: dict, snapshot_id: str) -> UITarget | None:
         showing=True,
         selected=item.get("selected"),
         checked=item.get("checked"),
-        focused=None,
+        focused=item.get("focused"),
         x=x,
         y=y,
         width=width,
@@ -151,6 +159,8 @@ def _dom_target(item: dict, snapshot_id: str) -> UITarget | None:
         scope="web_content",
         label_source=str(item.get("label_source") or "dom"),
         operations=tuple(item.get("operations") or ("click",)),
+        input_type=str(item.get("input_type") or ""),
+        date_order=tuple(item.get("date_order") or ()),
     )
     return replace(target, semantic_key=_key(target))
 
@@ -164,7 +174,7 @@ def _merge(base: UITarget, dom: UITarget) -> UITarget:
     merged = replace(
         base,
         name=dom.name if use_dom_name else base.name,
-        value=dom.value or base.value,
+        value=dom.value if "type_text" in dom.operations else dom.value or base.value,
         checked=dom.checked if dom.checked is not None else base.checked,
         selected=dom.selected if dom.selected is not None else base.selected,
         source="a11y+dom",
@@ -173,8 +183,48 @@ def _merge(base: UITarget, dom: UITarget) -> UITarget:
         scope="web_content",
         label_source=dom.label_source,
         operations=dom.operations,
+        input_type=dom.input_type or base.input_type,
+        date_order=dom.date_order or base.date_order,
     )
     return replace(merged, semantic_key=_key(merged))
+
+
+def _date_fields(targets):
+    """Compose adjacent, explicitly named date segments; never infer order from locale or a screenshot."""
+    parts = [replace(t, name=t.name.split(" ", 1)[0],
+                     nearby_text=t.nearby_text or t.name.partition(" ")[2])
+             for t in targets if t.role == "spin_button"
+             and t.name.casefold().split(" ", 1)[0] in {"day", "month", "year"}]
+    for day in [t for t in parts if t.name.casefold() == "day"]:
+        nearby = [t for t in parts if t.application == day.application
+                  and t.parent_context == day.parent_context and abs(t.y - day.y) <= 4
+                  and abs(t.x - day.x) <= 180]
+        if len(nearby) != 3 or {t.name.casefold() for t in nearby} != {"day", "month", "year"}:
+            continue
+        name = next((t.nearby_text for t in nearby if re.search(r"[\w]{3}", t.nearby_text)), "")
+        if not name:
+            continue
+        ordered = sorted(nearby, key=lambda t: t.x)
+        values = {t.name.casefold(): t.value for t in nearby}
+        value = (f"{int(values['year']):04d}-{int(values['month']):02d}-{int(values['day']):02d}"
+                 if all(v.isdigit() and int(v) > 0 for v in values.values()) else "")
+        left, top = min(t.x for t in nearby), min(t.y for t in nearby)
+        field = replace(day, id="date:" + day.id, role="entry", name=name, value=value,
+                        x=left, y=top, width=max(t.x + t.width for t in nearby) - left,
+                        height=max(t.y + t.height for t in nearby) - top, description="Segmented date",
+                        operations=("click", "type_text"), input_type="date",
+                        date_order=tuple(t.name.casefold() for t in ordered))
+        yield replace(field, semantic_key=_key(field))
+
+
+def unrepresented_window(root: ET.Element | None) -> str:
+    """A foreground window absent from A11y must not inherit the background page's controls."""
+    if root is None:
+        return ""
+    title = root.get("foreground_title", "")
+    windows = {n.get("name") for n in root.iter()
+               if n.tag.rsplit("}", 1)[-1] in {"frame", "dialog"} and n.get("name")}
+    return title if windows and title not in windows else ""
 
 
 def enrich_targets(
@@ -188,6 +238,8 @@ def enrich_targets(
         root = ET.fromstring(accessibility_tree) if accessibility_tree else None
     except ET.ParseError:
         root = None
+    if unrepresented_window(root):
+        return []  # The existing visual fallback must locate this real input owner first.
     labels, chrome_active = _a11y_context(root)
     content_y = _content_y(targets, browser_snapshot)
     enriched = []
@@ -196,7 +248,9 @@ def enrich_targets(
         if target.role == "page_tab":
             name = _MEMORY_USAGE.sub("", name)
         nearby = target.nearby_text or _nearest_label(target, labels)
-        if not name and nearby:
+        if not name and nearby and (target.role in {"entry", "text", "textbox", "searchbox",
+                                                    "spin_button", "combo_box"}
+                                     or "type_text" in target.operations):
             name, source = nearby, "a11y_nearby"
         if not name and target.focused:
             name, source = f"Focused {target.role.replace('_', ' ')}", "synthetic"
@@ -210,6 +264,7 @@ def enrich_targets(
             label_source=source,
         )
         enriched.append(replace(item, semantic_key=_key(item)))
+    enriched.extend(list(_date_fields(enriched)))
     chrome_targets = any(
         "chrome" in target.application.lower() or "chromium" in target.application.lower()
         for target in targets

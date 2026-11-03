@@ -16,6 +16,7 @@ import shutil
 import struct
 import sys
 import time
+import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,20 @@ from .browser import capture_browser_snapshot
 
 RECEIPT_TAIL = 12000
 
+_FOREGROUND_QUERY = """import json
+from Xlib.display import Display
+d=Display()
+p=d.screen().root.get_full_property(d.intern_atom('_NET_ACTIVE_WINDOW'),0)
+info={'foreground_title':'','foreground_class':[]}
+if p is not None and int(p.value[0]):
+ w=d.create_resource_object('window',int(p.value[0]))
+ title=w.get_full_property(d.intern_atom('_NET_WM_NAME'),0)
+ info={'foreground_title':title.value.decode('utf-8','replace') if title else str(w.get_wm_name() or ''),
+       'foreground_class':list(w.get_wm_class() or [])}
+print(json.dumps(info))
+d.close()
+"""
+
 
 def png_size(data: bytes) -> tuple[int, int]:
     width, height = struct.unpack(">II", data[16:24])
@@ -47,8 +62,9 @@ def png_size(data: bytes) -> tuple[int, int]:
 
 def gui_code(action: GuiAction) -> str:
     params = action.parameters
-    if action.action_type in {"click", "double_click"}:
-        method = "click" if action.action_type == "click" else "doubleClick"
+    if action.action_type in {"click", "double_click", "right_click"}:
+        method = {"click": "click", "double_click": "doubleClick", "right_click": "rightClick"}[
+            action.action_type]
         return f"pyautogui.{method}(x={params['x']}, y={params['y']})"
     if action.action_type == "hotkey":
         steps = []
@@ -66,7 +82,12 @@ def gui_code(action: GuiAction) -> str:
             steps.append("pyautogui.press('f2')")
         if params.get("input_mode", "replace") == "replace":
             steps.append("pyautogui.hotkey('ctrl', 'a')")
-        steps.append(f"pyautogui.write({params['text']!r})")
+        if params["text"].isascii():
+            steps.append(f"pyautogui.write({params['text']!r}, interval=0.03)")
+        else:
+            steps.append("__import__('subprocess').run(['xclip','-selection','clipboard','-t','UTF8_STRING'],"
+                         f"input={params['text']!r}.encode('utf-8'),check=True)")
+            steps.append("pyautogui.hotkey('ctrl','v')")
         return "; ".join(steps)
     raise ValueError(f"不支持的 GUI 动作类型: {action.action_type}")
 
@@ -126,6 +147,7 @@ class OsWorldEnv:
             os.environ["OSWORLD_FILE_BASE_URL"] = str(self.asset_root)
         self.env: Any = None
         self._step_seq = 0
+        self._frame_seq = 0
         self.last_screenshot: bytes = b""
         self.last_a11y: str = ""
         self.last_browser_snapshot: dict | None = None
@@ -182,13 +204,15 @@ class OsWorldEnv:
                      receipt: Receipt | None) -> Observation:
         stage = self.run_root / "obs_stage" / str(task["id"])
         stage.mkdir(parents=True, exist_ok=True)
-        shot_path = stage / f"step_{step_idx:02d}.png"
+        self._frame_seq += 1
+        frame_name = f"step_{step_idx:02d}_obs_{self._frame_seq:04d}"
+        shot_path = stage / f"{frame_name}.png"
         shot_path.write_bytes(self.last_screenshot)
         a11y_path: str | None = None
         digest = node_count = None
         present = bool(self.last_a11y.strip())
         if present:
-            a11y_path = str(stage / f"step_{step_idx:02d}.xml")
+            a11y_path = str(stage / f"{frame_name}.xml")
             Path(a11y_path).write_text(self.last_a11y, encoding="utf-8")
             digest = hashlib.sha256(self.last_a11y.encode()).hexdigest()
             node_count = self.last_a11y.count("<")
@@ -196,7 +220,7 @@ class OsWorldEnv:
         browser_snapshot = None
         if self.last_browser_snapshot is not None:
             serialized = json.dumps(self.last_browser_snapshot, ensure_ascii=False)
-            browser_path = stage / f"step_{step_idx:02d}.dom.json"
+            browser_path = stage / f"{frame_name}.dom.json"
             browser_path.write_text(serialized, encoding="utf-8")
             browser_snapshot = BrowserSnapshot(
                 present=True,
@@ -220,14 +244,35 @@ class OsWorldEnv:
         )
 
     def _capture(self) -> None:
-        obs = self.env._get_obs()
+        for attempt in range(3):
+            obs = self.env._get_obs()
+            if obs.get("screenshot"):
+                break
+            if attempt < 2:
+                time.sleep(1)
+        else:
+            raise RuntimeError("Environment returned no screenshot after three read-only observations")
         self.last_screenshot = obs["screenshot"]
         self.last_a11y = obs.get("accessibility_tree") or ""
+        result = self.env.controller.execute_python_command(_FOREGROUND_QUERY)
+        if result is None or result.get("returncode", 0):
+            raise RuntimeError("Read-only foreground-window observation failed")
+        info = json.loads(result.get("output") or "{}")
+        if self.last_a11y:
+            tree = ET.fromstring(self.last_a11y)
+            tree.set("foreground_title", info.get("foreground_title", ""))
+            tree.set("foreground_class", json.dumps(info.get("foreground_class", [])))
+            self.last_a11y = ET.tostring(tree, encoding="unicode")
         self.last_browser_snapshot, diagnostic = capture_browser_snapshot(self.env.controller)
         if not self._cdp_reported:
             self._cdp_reported = True
             public = {key: value for key, value in diagnostic.items() if key != "url"}
             print(json.dumps({"event": "cdp_snapshot", **public}, ensure_ascii=False), flush=True)
+
+    def observe(self, task, *, budget, previous):
+        """Refresh screenshot, A11y and CDP without executing or replaying any action."""
+        self._capture()
+        return self._observation(task, previous.step_idx, budget, previous.last_receipt)
 
     # ------------------------------------------------------------------ 协议
     def _seed_setup_cache(self, task_id: str) -> None:
@@ -291,9 +336,17 @@ class OsWorldEnv:
             stdout = result.get("output", "")
             stderr = result.get("error", "")
             returncode = int(result.get("returncode", 0))
+        output_ref = None
+        if kind == "cli":
+            output = self.run_root / "cli_outputs" / f"action_{self._step_seq:04d}.json"
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(json.dumps({"stdout": stdout, "stderr": stderr,
+                                          "returncode": returncode}), encoding="utf-8")
+            output_ref = str(output)
         return Receipt(
             returncode=returncode, stdout=stdout[-RECEIPT_TAIL:], stderr=stderr[-RECEIPT_TAIL:],
             kind=kind if kind in {"cli", "gui", "wait"} else "gui", acknowledged=True,
+            full_output_ref=output_ref,
         )
 
     def execute(self, action: Action, *, budget: Budget, task: dict) -> tuple[Receipt, Observation]:

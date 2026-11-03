@@ -33,6 +33,10 @@ class UITarget:
     scope: str = "native"
     label_source: str = "a11y"
     operations: tuple[str, ...] = ()
+    range_min: float | None = None
+    range_max: float | None = None
+    input_type: str = ""
+    date_order: tuple[str, ...] = ()
 
     def compact(self) -> dict:
         return {key: value for key, value in asdict(self).items() if value not in (None, "", (), False)}
@@ -100,6 +104,32 @@ def _attribute(element: ET.Element, name: str) -> str:
     return ""
 
 
+def _number(element, name):
+    value = _attribute(element, name)
+    return float(value) if re.fullmatch(r"-?\d+(?:\.\d+)?", value) else None
+
+
+def _is_overlay(element):
+    return _local(element.tag) in {"dialog", "alert", "popup_menu"} or (
+        _local(element.tag) == "menu" and _attribute(element, "ispopup") in {"true", "auto", "menu"})
+
+
+def _field_labels(root):
+    labels = {}
+    for parent in root.iter():
+        preceding = ""
+        for child in parent:
+            if _local(child.tag) in {"label", "static"}:
+                preceding = str(child.get("name") or child.text or "").strip()
+                continue
+            fields = [e for e in child.iter() if _state(e, "editable") is True
+                      or _local(e.tag) in {"entry", "textbox", "searchbox", "combo_box", "spin_button"}]
+            if preceding and len(fields) == 1:
+                labels[fields[0]] = preceding
+            preceding = ""
+    return labels
+
+
 class A11yTargetBuilder:
     def build(
         self,
@@ -108,23 +138,43 @@ class A11yTargetBuilder:
         max_targets: int = 64,
         infer_button_labels: bool = False,
         include_sliders: bool = False,
+        context: str = "",
+        filter_occluded: bool = False,
     ) -> list[UITarget]:
         root = ET.fromstring(raw_tree)
         targets: list[UITarget] = []
+        field_labels = _field_labels(root) if filter_occluded else {}
+        target_nodes, overlays = {}, {}
+        if filter_occluded:
+            for node in root.iter():
+                if (_is_overlay(node) and _state(node, "showing") is True
+                        and _state(node, "visible") is not False):
+                    position, size = _pair(_attribute(node, "screencoord")), _pair(_attribute(node, "size"))
+                    if position and size and min(size) > 0:
+                        overlays.setdefault((*position, *size), set()).update(node.iter())
 
-        def visit(element: ET.Element, active: bool, parents: tuple[str, ...], app_name: str) -> None:
+        def visit(element, active, parents, app_name, modal=False, roles=(), file_manager=False):
             active = active or _state(element, "active") is True
             role = _local(element.tag)
+            modal = modal or _is_overlay(element)
             raw_name = str(element.attrib.get("name") or "").strip()
             name = raw_name
             if role == "application":
                 app_name = name
             label_source = "a11y" if name else "unresolved"
+            if not name and element in field_labels:
+                name, label_source = field_labels[element], "a11y_adjacent"
+            if (not name and filter_occluded and "gnome-shell" in parents
+                    and "Overview" in parents and _state(element, "editable") is True):
+                name, label_source = "Desktop search", "a11y_context"
+            file_manager = file_manager or "nautilus" in app_name.lower() or "file chooser" in name.lower()
             value = (
                 str(element.text or "").strip()
                 if role in {"text", "textbox", "entry", "searchbox", "spin_button"}
-                else ""
+                else _attribute(element, "value") if role == "slider" else ""
             )
+            if role == "spin_button" and not value and (number := _number(element, "value")) is not None:
+                value = format(number, "g")
             position = _pair(_attribute(element, "screencoord"))
             size = _pair(_attribute(element, "size"))
             if infer_button_labels and not name and role in {"button", "push_button"} and position and size:
@@ -149,6 +199,9 @@ class A11yTargetBuilder:
                 and active
                 and (
                     any("file chooser" in item.lower() or item.lower() == "places" for item in parents)
+                    or filter_occluded and file_manager and any(r in {
+                        "list_item", "tree_item", "button", "push_button", "menu_item", "option", "link"}
+                        for r in roles)
                     or bool(
                         re.search(
                             r"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", name, re.I
@@ -158,7 +211,8 @@ class A11yTargetBuilder:
             )
             if (
                 (active or system_target)
-                and (role in SUPPORTED_ROLES or safe_label or (include_sliders and role == "slider"))
+                and (role in SUPPORTED_ROLES or safe_label or (include_sliders and role == "slider")
+                     or filter_occluded and (role == "image" or file_manager and role == "canvas"))
                 and (name or role in SUPPORTED_ROLES)
                 and interactive_text
                 and enabled is not False
@@ -168,7 +222,6 @@ class A11yTargetBuilder:
                 and size
                 and size[0] > 0
                 and size[1] > 0
-                and len(targets) < max_targets
             ):
                 normalized_name = " ".join(name.lower().split())
                 parent_context = tuple(item for item in parents[-3:] if item)
@@ -198,10 +251,24 @@ class A11yTargetBuilder:
                             or _attribute(element, "placeholder-text")
                         ),
                         label_source=label_source,
+                        source="a11y_dialog" if filter_occluded and modal else "a11y",
+                        range_min=_number(element, "min") if role == "slider" else None,
+                        range_max=_number(element, "max") if role == "slider" else None,
                     )
                 )
+                target_nodes[targets[-1].id] = element
             for child in element:
-                visit(child, active, context[-4:], app_name)
+                visit(child, active, context[-4:], app_name, modal, (*roles, role), file_manager)
 
         visit(root, False, (), "")
-        return targets
+        if filter_occluded:
+            targets = [t for t in targets if not any(
+                target_nodes[t.id] not in nodes and x <= t.x + t.width // 2 < x + width
+                and y <= t.y + t.height // 2 < y + height
+                for (x, y, width, height), nodes in overlays.items())]
+        if context:
+            words = set(re.findall(r"\w+", context.lower()))
+            targets.sort(key=lambda t: (t.source == "a11y_dialog",
+                len(words & set(re.findall(r"\w+", t.name.lower()))), t.focused is True,
+                t.role in {"button", "push_button", "combo_box", "entry", "textbox"}), reverse=True)
+        return targets[:max_targets]

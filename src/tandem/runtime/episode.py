@@ -12,6 +12,7 @@ import shlex
 from pathlib import Path
 
 from ..gui.focus import action_key, toggle_transition
+from ..memory.context import verification_context
 from ..protocol.models import CliAction, FailAction, FinishAction, Observation
 from .stopping import NO_ACTION_LIMIT
 
@@ -75,6 +76,7 @@ def terminal_decision(session, plan, observation: Observation, tree, output_file
         control_state_check=unchanged,
         requirements=session.requirements,
         output_files=output_files,
+        **({"task_memory": verification_context(session.goal.memory)} if session.goal is not None else {}),
     )
     session.events.append(
         {

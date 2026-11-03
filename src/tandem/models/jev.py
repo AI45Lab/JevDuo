@@ -21,11 +21,12 @@ TRANSIENT_HTTP_STATUS = {408, 429, 500, 502, 503, 504}
 
 class JevOmniPolicy:
     def __init__(self, endpoint: str, timeout_seconds: float = 300, opener=None,
-                 image_stage: tuple[str, str] | None = None, endpoint_provider=None):
+                 image_stage: tuple[str, str] | None = None, endpoint_provider=None, joint_actions=False):
         self.endpoint = str(endpoint).rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.opener = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}))
         self.endpoint_provider = endpoint_provider
+        self.joint_actions = joint_actions
         # (写视角目录, 排序服务宿主机读视角目录)：/rank 要求 image_path 在服务端可读，
         # 截图本体在 adpc 时先暂存到 evobox 中转目录（按内容哈希命名去重）。
         self.image_stage = image_stage
@@ -164,6 +165,18 @@ class JevOmniPolicy:
             candidate for candidate in candidates if candidate.operation == selected_operation
         ]
         action_request = action_requests[selected_operation]
+        if self.joint_actions:
+            # Keep the operation ranking diagnostic; do not prune other concrete goal actions.
+            descriptions = {choice_id: option for request in action_requests.values()
+                            for choice_id, option in zip(
+                                request["option_ids"], request["options"], strict=True)}
+            selected_candidates = candidates
+            action_request = {
+                "state": operation_request["state"],
+                "question": "Which complete concrete action should be performed next across ALL operations?",
+                "option_ids": [c.id for c in candidates],
+                "options": [f"{c.operation}: {descriptions[c.id]}" for c in candidates],
+            }
         if len(selected_candidates) == 1:
             action_scores, action_used_image = [1.0], operation_used_image
         else:

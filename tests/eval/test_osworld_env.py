@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import struct
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from types import ModuleType
 
@@ -42,10 +43,10 @@ def test_gui_code_matches_legacy_pyautogui_semantics():
     assert gui_code(GuiAction("type", {
         "text": "42", "input_mode": "replace", "click": [650, 102], "press_f2": True,
     })) == ("pyautogui.click(x=650, y=102); pyautogui.press('f2'); "
-            "pyautogui.hotkey('ctrl', 'a'); pyautogui.write('42')")
+            "pyautogui.hotkey('ctrl', 'a'); pyautogui.write('42', interval=0.03)")
     assert gui_code(GuiAction("type", {
         "text": "cmd", "input_mode": "insert", "click": None, "press_f2": False,
-    })) == "pyautogui.write('cmd')"
+    })) == "pyautogui.write('cmd', interval=0.03)"
 
 
 def test_action_code_cli_wait_and_terminals():
@@ -62,6 +63,64 @@ def test_png_size_parses_ihdr():
     assert png_size(_png(1920, 1080)) == (1920, 1080)
 
 
+def test_read_only_refresh_keeps_cdp_receipt_and_prior_evidence(tmp_path, env, monkeypatch):
+    snapshot = {"elements": [{"index": 1, "role": "entry", "name": "Receipt Date"}]}
+    monkeypatch.setattr("tandem_eval.osworld.capture_browser_snapshot",
+                        lambda controller: (snapshot, {"status": "ok"}))
+    task = _task_file(tmp_path)
+    first = env.reset(task)
+    budget = Budget(steps_remaining=10, wall_seconds_remaining=60)
+    receipt, previous = env.execute(GuiAction("click", {"x": 1, "y": 2}), budget=budget, task=task)
+    steps, commands = list(env.env.steps), list(env.env.controller.commands)
+    before = Path(previous.screenshot.path).read_bytes()
+    refreshed = env.observe(task, budget=budget, previous=previous)
+    assert refreshed.protocol_version == "0.2" and refreshed.last_receipt is receipt
+    assert refreshed.step_idx == previous.step_idx
+    assert env.env.steps == steps
+    assert env.env.controller.commands[:-1] == commands
+    assert "_NET_ACTIVE_WINDOW" in env.env.controller.commands[-1]  # Read-only window observation.
+    tree = ET.fromstring(Path(refreshed.accessibility_tree.path).read_text())
+    assert tree.get("foreground_title") == "main-window"
+    assert json.loads(tree.get("foreground_class")) == ["app", "App"]
+    assert refreshed.browser_snapshot.source == "cdp"
+    assert json.loads(Path(refreshed.browser_snapshot.path).read_text()) == snapshot
+    assert refreshed.screenshot.path != previous.screenshot.path != first.screenshot.path
+    assert Path(previous.screenshot.path).read_bytes() == before
+
+
+def test_empty_screenshot_retries_only_observation(tmp_path, env, monkeypatch):
+    from unittest.mock import Mock
+
+    task = _task_file(tmp_path)
+    previous = env.reset(task)
+    valid = env.env._get_obs()
+    observe = Mock(side_effect=[{"screenshot": None}, {"screenshot": b""}, valid])
+    monkeypatch.setattr(env.env, "_get_obs", observe)
+    monkeypatch.setattr("tandem_eval.osworld.time.sleep", lambda seconds: None)
+    budget = Budget(steps_remaining=5, wall_seconds_remaining=30)
+    refreshed = env.observe(task, budget=budget, previous=previous)
+    assert observe.call_count == 3 and env.env.steps == []
+    assert refreshed.step_idx == previous.step_idx and refreshed.last_receipt is None
+    assert Path(refreshed.screenshot.path).read_bytes() == valid["screenshot"]
+
+
+def test_repeated_empty_screenshot_is_explicit_observation_failure(tmp_path, env, monkeypatch):
+    from unittest.mock import Mock
+
+    task = _task_file(tmp_path)
+    previous = env.reset(task)
+    observe = Mock(return_value={"screenshot": None})
+    monkeypatch.setattr(env.env, "_get_obs", observe)
+    monkeypatch.setattr("tandem_eval.osworld.time.sleep", lambda seconds: None)
+    with pytest.raises(RuntimeError, match="no screenshot after three read-only"):
+        env.observe(task, budget=previous.budget, previous=previous)
+    assert observe.call_count == 3 and env.env.steps == []
+
+
+def test_right_click_codegen_uses_real_mouse_button():
+    assert gui_code(GuiAction("right_click", {"x": 20, "y": 30})) == "pyautogui.rightClick(x=20, y=30)"
+
+
 # ------------------------------------------------------------------ adapter
 class FakeController:
     def __init__(self):
@@ -71,6 +130,9 @@ class FakeController:
 
     def execute_python_command(self, command):
         self.commands.append(command)
+        if "_NET_ACTIVE_WINDOW" in command:
+            return {"returncode": 0, "output": json.dumps({
+                "foreground_title": "main-window", "foreground_class": ["app", "App"]})}
         return {"returncode": 0, "output": json.dumps(
             {"returncode": 0, "stdout": "ok-out", "stderr": ""})}
 

@@ -7,8 +7,8 @@ name = "tandem"
 version = "0.1.0"
 description = "Tandem：快慢双模 CUA harness（主体）+ tandem_eval 集群测评薄适配层"
 requires-python = ">=3.10"
-# 运行时依赖白名单见 AGENTS.md。当前为空：M0 尚无消费者；Pillow 在 M1 截图处理落地时加入。
-dependencies = []
+# 截图处理使用仓库白名单内的 Pillow。
+dependencies = ["Pillow"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "ruff>=0.4"]

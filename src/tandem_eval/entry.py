@@ -103,8 +103,15 @@ class _ScriptedPlanner:
         self.stage_mode = stage_mode
 
     def __call__(self, instruction, screenshot, targets, recent, tree,
-                 verified_focus, requirements, remaining_steps):
+                 verified_focus=None, requirements=None, remaining_steps=None, *, memory=None,
+                 remaining_seconds=None):
         self.calls += 1
+        if memory is not None and self.calls == 1:
+            return {"done": False, "work_item_id": memory.ready_items()[0]["id"],
+                    "route": "gui", "purpose": "produce", "goal": "mock click",
+                    "completion_criteria": "mock receipt", "method": "mock click",
+                    "inputs": [], "input_fact_keys": [], "guidance": "", "max_actions": 1,
+                    "command": ""}
         if self.calls == 1 and targets:
             target = targets[0]
             plan = {
@@ -146,19 +153,32 @@ class _FirstCandidateSelector:
         )
 
 
-def mock_components(*, stage_mode=False) -> Components:
+def mock_components(*, stage_mode=False, goal_mode=False) -> Components:
     from tandem.gui.candidates import ActionCandidateBuilder
     from tandem.gui.compile import gui_action
     from tandem.gui.proposals import focused_candidates
     from tandem.gui.semantics import enrich_targets
     from tandem.gui.targets import A11yTargetBuilder
+    from tandem.memory.state import TaskMemory
+
+    def goal_verifier(*args, **kwargs):
+        return {"stage_outcome": "met", "unit_met": True, "delivery_state": "verified",
+                "summary": "mock evidence only", "remaining": [],
+                "evidence_refs": list(kwargs["evidence"]), "facts": [], "materials": [],
+                "requirement_checks": [], "artifacts": [], "invalidated_work_item_ids": []}
+
+    def requirements(instruction):
+        return [{"id": "R1", "requirement": instruction, "kind": "delivery", "units": [instruction],
+                 "unit_fact_keys": [[]], "facts_needed": [], "output_path": None}] if goal_mode else []
 
     return Components(
         planner=_ScriptedPlanner(stage_mode=stage_mode), verifier=_ScriptedVerifier(),
-        requirements=lambda instruction: [], selector=_FirstCandidateSelector(),
+        requirements=requirements, selector=_FirstCandidateSelector(),
         target_builder=A11yTargetBuilder(), candidate_builder=ActionCandidateBuilder(),
         semantic_enricher=enrich_targets,
         focus_candidates=focused_candidates, grounder=None, compile_gui=gui_action,
+        memory_factory=TaskMemory if goal_mode else None,
+        stage_verifier=goal_verifier if goal_mode else None,
     )
 
 
@@ -166,14 +186,16 @@ def build_session(spec: dict, *, llm_tap: LlmTap | None = None) -> TandemSession
     config = SessionConfig(**spec.get("harness_config", {}))
     benchmark = spec.get("benchmark")
     if benchmark == "mock":
-        return TandemSession(mock_components(stage_mode=config.execution_mode == "stage"), config=config)
+        return TandemSession(mock_components(stage_mode=config.execution_mode == "stage",
+                                             goal_mode=config.execution_mode == "goal"), config=config)
     if benchmark in {"osworld1", "osworld2", "osworld21"}:
         from tandem.components import build_default
         from tandem.models.slow import SlowModelClient
 
         secrets = spec["secrets"]
         credentials = dict(secrets["slow_model"])
-        endpoint = resolve_fast_model_endpoint(secrets.get("fast_model") or {})
+        endpoint = ("" if config.fast_backend == "planner" else
+                    resolve_fast_model_endpoint(secrets.get("fast_model") or {}))
         run_root = Path(spec["output_root"])
         run_root.mkdir(parents=True, exist_ok=True)
         client = SlowModelClient(credentials, config, run_root / "slow_model_http.jsonl",

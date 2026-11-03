@@ -5,16 +5,84 @@
 
 from __future__ import annotations
 
+import base64
+import io
 import json
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
+from PIL import Image
+
 from .key_pool import ApiKeyPool, PoolExhausted, classify_api_error, retry_after_seconds
 
 # 空正文（全留在思考通道）或截断时，下一次重试升档思考强度，避免原样重发重复失败
 _REASON_EFFORT_LADDER = {"low": "medium", "medium": "high"}
+
+
+class TaskBudgetExceeded(TimeoutError):
+    """The agent's task budget ended, not an external API timeout."""
+
+
+class ModelResponseError(ValueError):
+    """Bounded repair could not produce a valid structured model response."""
+
+
+def _pack_images(payload, quality, max_bytes):
+    """Compress send copies; only exactly identical decoded frames share an image.
+
+    Mutate the existing messages list so validators can still append correction turns on retry.
+    Never write source files or discard distinct evidence frames to meet the body budget.
+    """
+    frames, pixels = [], []
+    stats = {"image_count": 0, "duplicate_images": 0, "source_image_bytes": 0}
+    for message in payload["messages"]:
+        if not isinstance(message.get("content"), list):
+            continue
+        for part in message["content"]:
+            if part.get("type") != "image_url":
+                continue
+            url = part["image_url"]["url"]
+            if not url.startswith("data:image/"):
+                continue
+            raw = base64.b64decode(url.split(",", 1)[1])
+            with Image.open(io.BytesIO(raw)) as source:
+                frame = source.convert("RGB")
+            identity = (frame.size, frame.tobytes())
+            stats["image_count"] += 1
+            stats["source_image_bytes"] += len(raw)
+            if identity in pixels:
+                ordinal = pixels.index(identity) + 1
+                part.clear()
+                part.update(type="text", text=f"Same screenshot as supplied image #{ordinal} (exact pixels).")
+                stats["duplicate_images"] += 1
+            else:
+                pixels.append(identity)
+                frames.append((part, frame))
+    while frames:
+        image_bytes = 0
+        for part, frame in frames:
+            encoded = io.BytesIO()
+            frame.save(encoded, format="JPEG", quality=quality, subsampling=0, optimize=True)
+            raw = encoded.getvalue()
+            image_bytes += len(raw)
+            part["image_url"]["url"] = "data:image/jpeg;base64," + base64.b64encode(raw).decode("ascii")
+        stats.update(image_quality=quality, sent_image_bytes=image_bytes)
+        if len(json.dumps(payload).encode("utf-8")) <= max_bytes or quality == 65:
+            break
+        quality = max(65, quality - 10)
+    while frames and len(json.dumps(payload).encode("utf-8")) > max_bytes and max(
+        max(frame.size) for _, frame in frames
+    ) > 960:
+        for part, frame in frames:
+            frame.thumbnail((max(960, int(frame.width * 0.8)), max(540, int(frame.height * 0.8))))
+            encoded = io.BytesIO()
+            frame.save(encoded, format="JPEG", quality=quality, subsampling=0, optimize=True)
+            part["image_url"]["url"] = "data:image/jpeg;base64," + base64.b64encode(
+                encoded.getvalue()).decode("ascii")
+    return {**stats, "unique_images": len(frames), "sent_image_sizes": [list(f.size) for _, f in frames]}
+
 
 
 def extract_json_object(text: str):
@@ -75,6 +143,22 @@ class SlowModelClient:
         # llm_sink(role=..., request=..., response=..., **meta)：全量请求/响应落盘钩子，
         # 由 tandem_eval.recorder 提供（llm_calls.jsonl）；None 时仅审计。
         self.llm_sink = llm_sink
+        self.deadline = None
+
+    def set_deadline(self, deadline):
+        """Absolute monotonic task deadline, shared by requirements, planning and verification."""
+        self.deadline = deadline
+
+    def _remaining(self):
+        remaining = self.deadline - time.perf_counter() if self.deadline is not None else float("inf")
+        if remaining <= 0:
+            raise TaskBudgetExceeded("Task deadline exhausted during slow-model execution")
+        return remaining
+
+    def _retry_wait(self, seconds):
+        if seconds >= self._remaining():
+            raise TaskBudgetExceeded("Task budget cannot accommodate another slow-model retry")
+        time.sleep(seconds)
 
     def json_request(self, messages, validate, *, role):
         credentials = self.credentials
@@ -84,18 +168,35 @@ class SlowModelClient:
             "model": credentials.get("model") or "unknown",
             "messages": messages,
             "stream": False,
-            "max_tokens": self.config.slow_max_tokens,
+            "max_tokens": (min(self.config.slow_max_tokens, self.config.slow_verify_max_tokens)
+                           if role == "verify_stage" else self.config.slow_max_tokens),
         }
+        if role == "gui_choice":
+            payload["max_tokens"] = min(self.config.slow_max_tokens, 2048)
         effort = self.config.slow_reasoning_effort
+        if role == "gui_choice":
+            effort = "low"
+        if role == "verify_stage" and self.config.slow_verify_reasoning_effort is not None:
+            effort = self.config.slow_verify_reasoning_effort
         if effort == "off":
             payload["enable_thinking"] = False
         elif effort is not None:
             payload["reasoning_effort"] = effort
+        image_stats = (_pack_images(payload, self.config.slow_image_quality,
+                                    self.config.slow_max_request_bytes)
+                       if self.config.execution_mode == "goal" else {})
 
         def build_request():
+            data = json.dumps(payload).encode("utf-8")
+            # Repairs can append messages after image packing; enforce the limit on every attempt.
+            if self.config.execution_mode == "goal" and len(data) > self.config.slow_max_request_bytes:
+                raise ValueError(
+                    "slow model request body exceeds slow_max_request_bytes: "
+                    f"{len(data)} > {self.config.slow_max_request_bytes} bytes"
+                )
             return urllib.request.Request(
                 credentials["base_url"].rstrip("/") + "/chat/completions",
-                data=json.dumps(payload).encode("utf-8"),
+                data=data,
                 headers={
                     **(
                         {"Authorization": "Bearer " + key["api_key"]}
@@ -125,6 +226,7 @@ class SlowModelClient:
                 "time": time.time(),
                 "elapsed_seconds": round(time.perf_counter() - started, 3),
                 "request_bytes": len(request.data),
+                **image_stats,
                 **details,
             }
             text = json.dumps(self.key_pool.redact(record), ensure_ascii=False)
@@ -152,13 +254,14 @@ class SlowModelClient:
         attempt = 0
         failures = 0
         while True:
+            timeout = min(self.config.slow_timeout_seconds, self._remaining())
             attempt += 1
             started = time.perf_counter()
             request = build_request()  # 每次重试重建：升档思考强度需重新序列化
             audit("request_start", started, attempt)
             try:
                 try:
-                    with opener(request, timeout=self.config.slow_timeout_seconds) as response:
+                    with opener(request, timeout=timeout) as response:
                         status = response.status
                         headers = public_headers(response.headers)
                         raw = json.load(response)
@@ -209,7 +312,7 @@ class SlowModelClient:
                         raise error
                     delay = retry_after_seconds(headers.get("retry-after"), 30)
                     audit("retry_wait", started, attempt, retry_wait_seconds=delay)
-                    time.sleep(delay)
+                    self._retry_wait(delay)
                     continue
                 choices = raw.get("choices") or []
                 if not choices:
@@ -221,20 +324,23 @@ class SlowModelClient:
                       finish_reason=finish_reason, usage=raw.get("usage"))
                 if finish_reason == "length":
                     completion_tokens = (raw.get("usage") or {}).get("completion_tokens")
-                    raise ValueError(
+                    raise ModelResponseError(
                         f"slow model response truncated by max_tokens (finish_reason=length, "
                         f"completion_tokens={completion_tokens}); raise slow_max_tokens"
                     )
                 if not content and choice.get("message", {}).get("reasoning_content"):
-                    raise ValueError(
+                    raise ModelResponseError(
                         "slow model returned empty content (all completion tokens stayed in the "
                         "reasoning channel); escalating reasoning_effort for the next attempt"
                     )
                 value = extract_json_object(content)
                 if value is None:
-                    raise ValueError("slow model response contains no JSON object")
+                    raise ModelResponseError("slow model response contains no JSON object")
                 if not validate(value):
-                    raise ValueError("slow model response is missing required fields")
+                    correction = messages[-1].get("content", "") if messages else ""
+                    detail = (correction if isinstance(correction, str)
+                              and correction.startswith("Invalid") else "")
+                    raise ModelResponseError("slow model response failed validation: " + detail[:600])
                 return value
             except (urllib.error.URLError, ConnectionError, TimeoutError, ValueError) as error:
                 audit(
@@ -249,7 +355,15 @@ class SlowModelClient:
                     raise
                 # 内容级失败（空正文/截断/非法 JSON）时升档思考强度后重试，不原样重发
                 current_effort = payload.get("reasoning_effort")
-                if current_effort in _REASON_EFFORT_LADDER:
+                if (self.config.execution_mode == "goal" and role == "plan_stage"
+                        and "finish_reason=length" in str(error)):
+                    payload["reasoning_effort"] = "low"
+                    messages.append({"role": "user", "content":
+                        "The previous response was truncated and NOTHING from it was executed. "
+                        "Return one COMPLETE compact goal-stage JSON object, without reasoning or "
+                        "a long script. Use one bounded edit/read, reuse memory, and preserve the "
+                        "original requirements. Do not repeat the unbounded response."})
+                elif current_effort in _REASON_EFFORT_LADDER:
                     payload["reasoning_effort"] = _REASON_EFFORT_LADDER[current_effort]
                 audit("retry_wait", started, attempt, retry_wait_seconds=30)
-                time.sleep(30)
+                self._retry_wait(30)

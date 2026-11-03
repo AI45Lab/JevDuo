@@ -54,6 +54,16 @@ def test_invalid_experiment_name_is_rejected(tmp_path):
     assert not (tmp_path / "bad name").exists()
 
 
+def test_dry_run_selects_goal_mode_without_changing_script_default(tmp_path):
+    result = subprocess.run([
+        "bash", str(SCRIPT), "--experiment", "goal-smoke", "--tasks", "008", "--execution-mode", "goal",
+        "--stage-max-actions", "2", "--dry-run"], capture_output=True, text=True,
+        env={**os.environ, "TANDEM_EXPERIMENT_ROOT": str(tmp_path)})
+    assert result.returncode == 0, result.stderr
+    manifest = json.loads((tmp_path / "goal-smoke/manifest.json").read_text())
+    assert manifest["execution_mode"] == "goal" and manifest["stage_max_actions"] == 2
+
+
 def test_dry_run_uses_example_when_private_config_is_missing(tmp_path):
     env = {
         **os.environ,

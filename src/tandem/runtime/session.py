@@ -18,6 +18,7 @@ from ..gui.focus import prune_stalled
 from ..models.ranking import ranking_dict
 from ..protocol.models import Action, CliAction, FailAction, GuiAction, Observation, WaitAction
 from .episode import handle_done, resolve_done_probe, verify_pending
+from .goal_stage import GoalExecution
 from .stages import StageExecution, recovery_scopes
 from .stopping import NO_ACTION_LIMIT, budget_exhausted
 
@@ -30,6 +31,7 @@ class TandemSession:
         self.begin(requirements=[])  # 构造即重置，但不触发 requirements 抽取
 
     def begin(self, instruction: str = "", requirements: list | None = None) -> None:
+        self.goal = None
         self.instruction = instruction
         # requirements=None（真实 run）时走组件抽取（旧 runtime 同款）；
         # 显式 []（mock 链路）跳过 LLM 调用
@@ -45,9 +47,14 @@ class TandemSession:
         self.stage = (
             StageExecution(self.config.stage_max_actions) if self.config.execution_mode == "stage" else None
         )
+        if self.config.execution_mode == "goal":
+            self.goal = GoalExecution(self.components.memory_factory(instruction, requirements),
+                                      self.config.stage_max_actions, self.components.interaction_factory())
 
     # ------------------------------------------------------------------ 主入口
     def act(self, observation: Observation) -> Action:
+        if self.goal is not None:
+            return self.goal.act(self, observation)
         tree = self._read_tree(observation)
         if self.pending is not None:
             verify_pending(self, observation, tree)

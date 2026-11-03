@@ -7,9 +7,12 @@ M2 提供 Environment 契约 + MockEnv（全链路测试用）；真实 OSWorld 
 from __future__ import annotations
 
 import hashlib
+import io
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
+
+from PIL import Image
 
 from tandem.protocol.models import (
     AccessibilityTree,
@@ -29,6 +32,8 @@ class Environment(Protocol):
     def reset(self, task: dict) -> Observation: ...
 
     def execute(self, action: Action, *, budget: Budget, task: dict) -> tuple[Receipt, Observation]: ...
+
+    def observe(self, task: dict, *, budget: Budget, previous: Observation) -> Observation: ...
 
     def fetch_task(self, task_id: str) -> dict: ...
 
@@ -75,7 +80,9 @@ class MockEnv:
     def _screenshot_ref(self, task_id: str, step_idx: int) -> tuple[str, str]:
         key = f"{task_id}:{step_idx}"
         if key not in self.shots:
-            self.shots[key] = f"png-{key}".encode()
+            image = io.BytesIO()
+            Image.new("RGB", (1920, 1080), "white").save(image, format="PNG")
+            self.shots[key] = image.getvalue()
         digest = hashlib.sha256(self.shots[key]).hexdigest()
         if self.base_dir is not None:
             target = self.base_dir / "screenshots" / f"step_{step_idx:02d}.png"
@@ -139,6 +146,9 @@ class MockEnv:
         step_idx = self.screenshot_counter
         self.screenshot_counter += 1
         return receipt, self._observation(task, step_idx, budget, receipt)
+
+    def observe(self, task, *, budget, previous):
+        return self._observation(task, previous.step_idx, budget, previous.last_receipt)
 
     def export_outputs(self, paths: list[str], episode_dir) -> list[dict]:
         records = []

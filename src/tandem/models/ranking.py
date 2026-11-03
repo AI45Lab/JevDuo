@@ -22,6 +22,7 @@ class Ranking:
     confident: bool = True
     operation_request: dict[str, Any] | None = None
     action_request: dict[str, Any] | None = None
+    score_type: str = "fast_model_choice_softmax"
 
 
 def build_choice_requests(
@@ -121,7 +122,7 @@ def ranking_dict(value: Ranking) -> dict[str, Any]:
         "target_margin": value.target_margin,
         "latency_ms": value.latency_ms,
         "used_image": value.used_image,
-        "score_type": "fast_model_choice_softmax",
+        "score_type": value.score_type,
         "score_is_calibrated_correctness_probability": False,
         "operation_request": value.operation_request,
         "action_request": value.action_request,

@@ -70,8 +70,8 @@ ABSOLUTE_PATH_PATHS = (
     "harness.fast_model.image_stage.read",
 )
 
-#: 快模型后端协议（决定用哪种排序传输：jev 的 /rank 还是 kev 的 /v1/systemone）
-FAST_BACKENDS = ("jev", "kev")
+#: 选择后端：jev /rank、kev /v1/systemone；planner 复用 slow_model，不需要独立 endpoint。
+FAST_BACKENDS = ("jev", "kev", "planner")
 
 #: 慢模型每个 API 条目必填的键
 SLOW_API_KEYS = ("base_url", "model")
@@ -175,7 +175,7 @@ def _validate_fast_models(config: dict) -> list[str]:
         endpoint = api.get("endpoint")
         endpoint_file = api.get("endpoint_file")
         # endpoint 允许留空 = 自动从发现文件读取最新地址（服务闲时部署，地址会变）
-        if _is_missing(endpoint) and _is_missing(endpoint_file):
+        if api.get("backend") != "planner" and _is_missing(endpoint) and _is_missing(endpoint_file):
             problems.append(
                 f"harness.fast_model.apis.{name}.endpoint / .endpoint_file（至少给一个）"
             )
@@ -241,8 +241,8 @@ def validate(config: dict) -> list[str]:
     if not isinstance(execution, dict):
         problems.append("harness.execution（应为对象）")
     else:
-        if execution.get("mode", "step") not in {"step", "stage"}:
-            problems.append("harness.execution.mode（应为 step / stage）")
+        if execution.get("mode", "step") not in {"step", "stage", "goal"}:
+            problems.append("harness.execution.mode（应为 step / stage / goal）")
         limit = execution.get("stage_max_actions", 24)
         if type(limit) is not int or limit < 1:
             problems.append("harness.execution.stage_max_actions（应为正整数）")

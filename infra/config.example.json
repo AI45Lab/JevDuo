@@ -44,6 +44,11 @@
           "endpoint_file": "/mnt/shared-storage-gpfs2/evobox-share-gpfs2/xuyuanxun/shared_resources/sa_cua/services/qwen_jev.json",
           "timeout_seconds": 300
         },
+        "planner": {
+          "backend": "planner",
+          "endpoint": "",
+          "timeout_seconds": 300
+        },
         "kev": {
           "backend": "kev",
           "endpoint": "",
@@ -63,7 +68,14 @@
     },
     "execution": {
       "mode": "step",
-      "stage_max_actions": 24
+      "stage_max_actions": 24,
+      "recovery_max_calls": 2,
+      "recovery_max_seconds": 300,
+      "verify_max_tokens": 16384,
+      "verify_reasoning_effort": null,
+      "verify_max_chars": 48000,
+      "image_quality": 85,
+      "max_request_bytes": 2097152
     },
     "budget": {
       "max_steps": 30,

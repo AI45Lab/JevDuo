@@ -17,10 +17,14 @@ def gui_action(
 ) -> GuiAction | WaitAction | None:
     operation = winner.operation
     metadata = winner.metadata
-    if operation in {"click", "double_click"} and target is not None:
+    if operation in {"click", "double_click", "right_click"} and (
+        target is not None or metadata.get("visual_point")
+    ):
+        point = metadata.get("visual_point") if target is None else [
+            target.x + target.width // 2, target.y + target.height // 2]
         return GuiAction(
             action_type=operation,
-            parameters={"x": target.x + target.width // 2, "y": target.y + target.height // 2},
+            parameters={"x": point[0], "y": point[1]},
             target_id=winner.target_id,
             description=winner.description,
         )
@@ -36,6 +40,10 @@ def gui_action(
             description=winner.description,
         )
     if operation == "keypress":
+        if metadata.get("commit_action") and metadata.get("focus_point"):
+            return GuiAction(action_type="type", target_id=winner.target_id, description=winner.description,
+                             parameters={"text": "\n", "input_mode": "insert",
+                                         "click": metadata["focus_point"]})
         sequence = metadata.get("key_sequence") or (
             [list(KEYS[winner.id])] if winner.id in KEYS else None
         )
@@ -56,16 +64,22 @@ def gui_action(
             description=winner.description,
         )
     if operation == "type_text":
-        click = None
+        click = metadata.get("visual_point")
+        text = metadata["text"]
         press_f2 = False
         if target is not None and not metadata.get("focused_input"):
             click = [target.x + target.width // 2, target.y + target.height // 2]
             press_f2 = target.role in {"table_cell", "grid_cell"}
+        if target is not None and target.input_type == "date":
+            return None  # Native date segments are separate observed inputs, not a tab-delimited textbox.
+        if metadata.get("choice_input"):
+            text = text.rstrip("\r\n") + "\n"
         return GuiAction(
             action_type="type",
             parameters={
-                "text": metadata["text"],
-                "input_mode": metadata.get("input_mode", "replace"),
+                "text": text,
+                "input_mode": ("insert" if metadata.get("choice_input")
+                               else metadata.get("input_mode", "replace")),
                 "click": click,
                 "press_f2": press_f2,
             },
