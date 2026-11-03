@@ -40,6 +40,8 @@ EXPRESSION = r"""
     'gridcell','combobox','textbox','searchbox','spinbutton','slider']);
   const selector = 'a[href],button,input,textarea,select,summary,[contenteditable="true"],' +
     [...roles].map(role => '[role="' + role + '"]').join(',');
+  const clickable = element => element.tabIndex >= 0 || typeof element.onclick === 'function' ||
+    getComputedStyle(element).cursor === 'pointer';
   const secretAutocomplete = new RegExp(
     '(^|\\s)(current-password|new-password|one-time-code|cc-number|' +
     'cc-csc|cc-exp|cc-exp-month|cc-exp-year)(\\s|$)');
@@ -55,9 +57,9 @@ EXPRESSION = r"""
       if (['button','submit','reset','image'].includes(element.type)) return 'button';
       if (element.type === 'search') return 'searchbox';
       if (element.type === 'number') return 'spinbutton';
-      if (['text','email','url','tel'].includes(element.type)) return 'textbox';
+      if (['text','email','url','tel','date'].includes(element.type)) return 'textbox';
     }
-    return null;
+    return clickable(element) ? 'button' : null;
   };
   const roleNames = {button:'push_button', link:'link', checkbox:'check_box', radio:'radio_button',
     switch:'switch', tab:'page_tab', menuitem:'menu_item', option:'option', gridcell:'table_cell',
@@ -94,10 +96,27 @@ EXPRESSION = r"""
     clone.querySelectorAll('input,textarea,select,[contenteditable="true"]').forEach(node => node.remove());
     return norm(clone.innerText).slice(0, 240);
   };
+  const itemContext = element => {
+    const row = element.closest('li,tr,[role="row"]');
+    if (row) return contextText(row);
+    for (let node = element.parentElement, depth = 0; node && depth < 4;
+         node = node.parentElement, depth++) {
+      if (node.matches('body,html,form,dialog,[role="dialog"]')) break;
+      const text = contextText(node);
+      if (text.length > name(element).length + 8 && text.length < 240 &&
+          node.querySelectorAll(selector).length <= 8) return text;
+    }
+    return contextText(element.closest('fieldset,form,dialog,[role="dialog"]'));
+  };
   const elements = [];
   let rawCount = 0;
-  for (const element of document.querySelectorAll(selector)) {
+  for (const element of document.querySelectorAll(selector + ',div,span,li,td')) {
     rawCount++;
+    if (!element.matches(selector)) {
+      if (!clickable(element)) continue;
+      const parent = element.parentElement;
+      if (parent && (parent.closest(selector) || clickable(parent))) continue;
+    }
     if (!visible(element) || element.disabled || element.getAttribute('aria-disabled') === 'true') continue;
     if (element.type === 'password' || element.type === 'hidden' || element.type === 'file' ||
         secretAutocomplete.test(element.getAttribute('autocomplete') || '')) continue;
@@ -105,6 +124,8 @@ EXPRESSION = r"""
     const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
     if (rect.width < 2 || rect.height < 2 || cx < 0 || cy < 0 ||
         cx >= innerWidth || cy >= innerHeight) continue;
+    const hit = document.elementFromPoint(cx, cy);
+    if (!hit || !element.contains(hit)) continue;  // A visible background node may still be occluded.
     const domRole = roleOf(element);
     if (!domRole) continue;
     const hint = hintFor(rect);
@@ -112,17 +133,22 @@ EXPRESSION = r"""
     const editable = !element.readOnly && element.getAttribute('aria-readonly') !== 'true' &&
       (['textbox','searchbox','spinbutton'].includes(domRole) ||
        (domRole === 'combobox' && ['INPUT','TEXTAREA'].includes(element.tagName)));
-    const contextElement = element.closest('form,dialog,[role="dialog"],fieldset,li,tr,[role="row"]');
     const item = {
       index: elements.length + 1,
       role: roleNames[domRole] || domRole,
       name: label,
       description: norm(element.getAttribute('aria-description') || element.getAttribute('title') ||
         element.getAttribute('placeholder')),
-      value: 'value' in element ? String(element.value).slice(0, 200) : '',
+      value: element.tagName === 'SELECT' ? norm(element.selectedOptions[0]?.label) :
+        'value' in element ? String(element.value).slice(0, 200) : '',
+      input_type: ['INPUT','SELECT'].includes(element.tagName) ? element.type : '',
+      focused: document.activeElement === element,
+      date_order: element.type === 'date' ? new Intl.DateTimeFormat(navigator.language)
+        .formatToParts(new Date(2001,10,22)).filter(p => ['year','month','day'].includes(p.type))
+        .map(p => p.type) : [],
       x: originX + rect.left, y: originY + rect.top, width: rect.width, height: rect.height,
       scope: 'web_content', label_source: name(element) ? 'dom' : 'dom_nearby',
-      nearby_text: contextText(contextElement),
+      nearby_text: itemContext(element),
       operations: editable ? ['click','type_text'] : ['click'],
       source: 'dom'
     };

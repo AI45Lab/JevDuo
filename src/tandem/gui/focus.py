@@ -83,7 +83,6 @@ def input_and_menu_context(accessibility_tree: str) -> tuple[list[dict], list[di
                             ["esc"],
                             ["alt", path[0][-1].lower()],
                             *[[part.lower()] for part in path[1:]],
-                            *([["enter"]] if role == "menu_item" else []),
                         ],
                     }
                 )

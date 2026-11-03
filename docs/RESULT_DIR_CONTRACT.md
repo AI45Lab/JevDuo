@@ -39,6 +39,12 @@ OSWorld 2.1 显式配置替代 judge/用户模拟器时，`code_version.json.res
 | `result.txt` | 分数（`score\n`） | 同上 |
 | `episode.json` | `{task_id, harness, stop_reason, steps, status(scored\|failed_unscored), score, exception_type, error?, error_traceback?}` | episode 终态（必写）。`error`/`error_traceback` 仅异常题有：异常消息与栈尾几行（脱敏）——只记类型事后没法定位 |
 | `timing.json` | `{wall_seconds, status}` | episode 终态 |
+| `task_memory.json`（goal） | 最新任务记忆：要求、事实、资料覆盖、交付单元、成果、失败与当前阶段 | goal 事件排水及终态 |
+| `evidence/`（goal） | 阶段验证引用的截图/CLI 全文正本；临时目录清理后仍可读取 | 阶段验收/记忆落盘 |
+
+`timing.json` 另外提供 `environment_seconds`、`model_usage_by_role`、`fast_model`，分别记录环境
+分段时间、逐角色请求时间/token、排序次数/耗时/图像使用次数。缺失 usage 不补零冒充已测值，
+另记 `calls_missing_usage`。原字段及 `browser/` 正本规则保持不变。
 
 ## 步号语义（demo 侧对齐依据）
 
@@ -63,7 +69,10 @@ OSWorld 2.1 显式配置替代 judge/用户模拟器时，`code_version.json.res
 |------|--------|---------|
 | `task_requirements` | verifier.task_requirements | episode 开始时抽取任务需求（1-12 条） |
 | `plan_step` | planner.plan_step | 每步规划（截图+可见控件+需求+近期动作→下一步决策） |
-| `plan_stage` | stage_planner.plan_stage | 仅 stage 模式：初始阶段、阶段完成或请求修复时生成阶段计划 |
+| `plan_stage` | stage_planner.plan_stage / goal_planner.plan_goal | stage/goal 的阶段开始或修复；goal 允许读取已存资料后继续规划 |
+| `verify_stage` | goal_verifier.verify_goal | goal 阶段结束时独立验证或提取资料增量；明确执行失败的本地检查不算模型调用 |
+| `ground_visual` | grounding.ground_visual | goal 按需生成当前截图的有限候选，不直接执行慢模型坐标 |
+| `gui_choice` | planner_choice.PlannerChoicePolicy | 仅显式启用 planner 选择后端时，在相同候选与截图上选 ID；独立记录时间/token，不冒充 JEV 排序分数 |
 | `verify_observation` | verifier.verify_observation | 每步动作执行后独立验证（BEFORE/AFTER 截图→achieved/not_achieved/uncertain）|
 
 `verify_observation` 不信任 planner 的自我宣称：它拿前后截图+预期变化独立裁决，驱动 recent 历史、no_action 连击计数、toggle 检查、以及终态双确认（terminal_claim 模式下逐条核验 requirements + 输出文件存在性）。
@@ -80,6 +89,12 @@ OSWorld 2.1 显式配置替代 judge/用户模拟器时，`code_version.json.res
 | `stage_local` | 消费已生成的阶段计划；含 stage_goal、milestone 和当帧重绑定后的 plan，不代表新的模型调用 |
 | `stage_progress` | 里程碑推进，含 stage_goal、milestone、验证 source |
 | `stage_replan` | 阶段修复请求，含原因及当前里程碑；target_unbound 时另含 `unbound_proposals`、`available_targets`、`recovery_scopes`；不等于调用已经完成 |
+| `task_memory` / `memory_update_rejected` | goal 的完整记忆快照/拒绝理由；不是规划模型自行宣称的完成 |
+| `goal_action` | 真实回执、当前控件、画面变化与局部效果；effect_verified=false，不等于业务验收通过 |
+| `stage_verified` | goal 的阶段裁决、证据引用、结束原因与用时，区分阶段成功和单元完成 |
+| `observation_refresh` | 刷新观察而未执行动作，action_replayed=false；不增加动作步数 |
+| `recovery` / `goal_stalled` | goal 的视觉候选补全/无可执行进展终止原因 |
+| `environment_timing` | setup/observe/execute/export/evaluate 分段耗时 |
 | `action`（kind 字段） | runner 写的执行记录 `{step, kind: "action", action: {…协议动作…}}` |
 
 stage 模式的 planner 事件只在真实规划调用时写入，增加 mode、reason、seconds；

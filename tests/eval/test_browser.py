@@ -33,6 +33,49 @@ def test_cdp_failure_returns_a11y_fallback_diagnostic():
     assert diagnostic["available"] is False and "connection refused" in diagnostic["error"]
 
 
+def test_readonly_javascript_collects_clickable_cards_but_not_their_children_or_occluded_controls():
+    import shutil
+    import subprocess
+
+    import pytest
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Optional Node runtime is unavailable")
+    namespace = {"__name__": "cdp_test"}
+    exec(VM_SCRIPT, namespace)
+    setup = r'''
+    const body = {tabIndex:-1, onclick:null, cursor:'auto', closest:()=>null,
+                  matches:s=>s.includes('body')};
+    const make = (text, x, parent=body, native=false) => ({
+      tagName:native?'BUTTON':'DIV', type:'', tabIndex:-1, onclick:native?null:()=>{},
+      cursor:native?'auto':'pointer', parentElement:parent, childNodes:[{nodeType:3,textContent:text}],
+      labels:[], innerText:text, disabled:false, checkVisibility:()=>true,
+      getAttribute:()=>null, matches:s=>native&&s.includes('button'), closest:()=>null,
+      querySelector:()=>null, querySelectorAll:()=>[],
+      getBoundingClientRect:()=>({left:x,top:20,right:x+100,bottom:60,width:100,height:40}),
+      contains(other){return other===this||other.parentElement===this;},
+      cloneNode(){return {innerText:text,querySelectorAll:()=>[]};}
+    });
+    const card=make('Afternoon class',20);
+    const child=make('Child label',20,card);
+    const hidden=make('Covered button',200,body,true);
+    const cover=make('Overlay',200);
+    global.getComputedStyle=e=>({cursor:e.cursor,display:'block',visibility:'visible',opacity:'1'});
+    global.innerWidth=800;global.innerHeight=600;
+    global.window={screenX:0,screenY:0,outerWidth:800,innerWidth:800,outerHeight:600,innerHeight:600};
+    global.location={href:'https://example.test/'};global.devicePixelRatio=1;
+    global.document={title:'Synthetic cards',visibilityState:'visible',activeElement:null,
+      getElementById:()=>null,
+      querySelectorAll:s=>s.startsWith('a[href]')?[card,child,hidden]:[],
+      elementFromPoint:x=>x<150?child:cover};
+    '''
+    run = subprocess.run([node, "-e", setup + "\nconsole.log(JSON.stringify(" + namespace["EXPRESSION"]
+                          + "));"], capture_output=True, text=True, check=False)
+    assert run.returncode == 0, run.stderr
+    assert [e["name"] for e in json.loads(run.stdout)["elements"]] == ["Afternoon class"]
+
+
 def test_vm_websocket_frame_parser_executes_with_stdlib_only():
     namespace = {"__name__": "cdp_test"}
     exec(VM_SCRIPT, namespace)

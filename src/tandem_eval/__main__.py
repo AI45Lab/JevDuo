@@ -36,7 +36,7 @@ def main(argv: list[str] | None = None) -> int:
     run_cmd.add_argument("--allow-cli", choices=["true", "false"], default=None,
                          help="harness 是否允许 CLI 路由")
     run_cmd.add_argument("--route-policy", choices=["auto", "gui", "cli"], default=None)
-    run_cmd.add_argument("--execution-mode", choices=["step", "stage"], default=None)
+    run_cmd.add_argument("--execution-mode", choices=["step", "stage", "goal"], default=None)
     run_cmd.add_argument("--stage-max-actions", type=int, default=None,
                          help="阶段内动作数上限，达到后请求剩余工作的重规划")
     run_cmd.add_argument("--slow-model", default=None, metavar="NAME",

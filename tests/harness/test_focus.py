@@ -14,6 +14,14 @@ def test_menu_extraction_with_alt_mnemonic():
     assert menus[0]["key_sequence"] == [["esc"], ["alt", "f"], ["i"]]
 
 
+def test_menu_item_mnemonic_does_not_confirm_the_dialog_it_opens():
+    tree = '''<application active="true"><menu name="File">
+      <menu_item name="Open..." click_kb=";&lt;Alt&gt;f:o;"/>
+    </menu></application>'''
+    _, menus = input_and_menu_context(tree)
+    assert menus[0]["key_sequence"] == [["esc"], ["alt", "f"], ["o"]]
+
+
 def test_inputs_include_focused_editable_with_bounds():
     inputs, _ = input_and_menu_context(A11Y_XML)
     focused = [item for item in inputs if item["focused"]]

@@ -336,4 +336,6 @@ python -m http.server 8899 --directory demo/site    # 本地预览
 
 默认保持逐步规划；启用 `--execution-mode stage` 后，由慢模型规划阶段、快模型连续选择动作，
 规则验证优先，仅在必要时调用模型验证或重规划。
+`--execution-mode goal` 可启用带任务记忆的局部连续执行，阶段结束再独立 Verify；
+保留 A11y/CDP 语义融合及 JEV 服务恢复，默认 step/stage 行为不变。
 配置、执行边界、开发入口和验收方法见 [阶段执行说明](docs/STAGE_EXECUTION.md)。

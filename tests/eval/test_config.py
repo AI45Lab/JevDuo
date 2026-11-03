@@ -69,8 +69,9 @@ def test_models_are_named_api_registries():
     for api in slow["apis"].values():
         assert set(api) >= {"base_url", "api_key", "model"}
     for api in fast["apis"].values():
-        assert api["backend"] in {"jev", "kev"}
-        assert api.get("endpoint") or api.get("endpoint_file")
+        assert api["backend"] in {"jev", "kev", "planner"}
+        if api["backend"] != "planner":
+            assert api.get("endpoint") or api.get("endpoint_file")
 
 
 def test_paths_are_absolute_and_credentials_inlined():

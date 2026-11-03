@@ -57,6 +57,10 @@ class EpisodeRecorder:
         self.dir.mkdir(parents=True, exist_ok=True)
         self.task = task
         self.a11y_full = a11y_full
+        self.executed_steps = 0
+        self.environment_seconds = {}
+        self.model_usage = {}
+        self.fast_model = {"choice_cycles": 0, "seconds": 0.0, "cycles_with_image": 0}
         self.started = time.perf_counter()
         self._traj = (self.dir / "traj.jsonl").open("w", encoding="utf-8")
         self._events = (self.dir / "events.jsonl").open("w", encoding="utf-8")
@@ -65,6 +69,7 @@ class EpisodeRecorder:
 
     # ------------------------------------------------------------------ 逐步记录
     def traj(self, observation: Observation, action: Action, receipt: Receipt | None) -> None:
+        self.executed_steps += 1
         browser_snapshot = observation.browser_snapshot
         browser_record = browser_snapshot.to_dict() if browser_snapshot else None
         if browser_snapshot and browser_snapshot.present and browser_snapshot.path:
@@ -89,8 +94,39 @@ class EpisodeRecorder:
         self._traj.flush()
 
     def event(self, event: dict) -> None:
+        if event.get("route") == "environment_timing":
+            phase = event["phase"]
+            self.environment_seconds[phase] = self.environment_seconds.get(phase, 0.0) + event["seconds"]
+        if event.get("route") == "gui" and event.get("ranking"):
+            ranking = event["ranking"]
+            self.fast_model["choice_cycles"] += 1
+            self.fast_model["seconds"] += ranking["latency_ms"] / 1000
+            self.fast_model["cycles_with_image"] += int(ranking["used_image"])
+        if event.get("route") == "stage_verified":
+            event = self._persist_evidence(event)
         self._events.write(json.dumps(event, ensure_ascii=False) + "\n")
         self._events.flush()
+
+    def task_memory(self, state: dict) -> None:
+        """Persist the latest host memory and retain its transient evidence before cleanup."""
+        _write_json(self.dir / "task_memory.json", self._persist_evidence(state))
+
+    def _persist_evidence(self, state):
+        def persist(value):
+            if isinstance(value, dict):
+                return {k: persist(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [persist(v) for v in value]
+            if (isinstance(value, str) and any(part in value for part in ("/obs_stage/", "/cli_outputs/"))
+                    and Path(value).is_file()):
+                target = self.dir / "evidence" / Path(value).name
+                target.parent.mkdir(exist_ok=True)
+                if not target.exists():
+                    shutil.copy2(value, target)
+                return str(target)
+            return value
+
+        return persist(state)
 
     def record_llm_call(self, *, role: str, request: Any, response: Any, **meta: Any) -> None:
         """慢模型客户端的 llm_sink；全量请求/响应落盘，密钥脱敏。"""
@@ -110,6 +146,16 @@ class EpisodeRecorder:
             + "\n"
         )
         self._llm.flush()
+        stats = self.model_usage.setdefault(role, {"calls": 0, "seconds": 0.0, "prompt_tokens": 0,
+            "completion_tokens": 0, "reasoning_tokens": 0, "cached_tokens": 0, "calls_missing_usage": 0})
+        stats["calls"] += 1
+        stats["seconds"] += meta.get("elapsed_seconds", 0.0)
+        usage = response.get("usage") or {}
+        stats["calls_missing_usage"] += int(not usage)
+        for key in ("prompt_tokens", "completion_tokens"):
+            stats[key] += usage.get(key, 0)
+        stats["reasoning_tokens"] += (usage.get("completion_tokens_details") or {}).get("reasoning_tokens", 0)
+        stats["cached_tokens"] += (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
 
     def screenshot(self, step_idx: int, data: bytes) -> None:
         target = self.dir / "screenshots" / f"step_{step_idx:02d}.png"
@@ -150,7 +196,7 @@ class EpisodeRecorder:
             "task_id": self.task["id"],
             "harness": f"tandem {__version__}",
             "stop_reason": stop_reason,
-            "steps": steps,
+            "steps": self.executed_steps if exception is not None else steps,
             "status": status,
             "score": score,
             "exception_type": type(exception).__name__ if exception else None,
@@ -163,6 +209,9 @@ class EpisodeRecorder:
             self.dir / "timing.json",
             {
                 "wall_seconds": round(time.perf_counter() - self.started, 3),
+                "environment_seconds": self.environment_seconds,
+                "model_usage_by_role": self.model_usage,
+                "fast_model": self.fast_model,
                 "status": status,
             },
         )

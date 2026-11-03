@@ -30,8 +30,8 @@ OPERATION_DESCRIPTIONS = {
     "double_click": "The next useful step is to open one observed file or list item with a double click.",
     "set_slider": "The next useful step is to set a visible slider to the required value.",
     "keypress": "The next useful step is one supported keyboard navigation or submission command, not text replacement.",
-    "scroll": "A required control is outside the current viewport, so scrolling is the next useful step.",
-    "wait": "The required control is still loading, absent, or disabled, so waiting is the only useful next step.",
+    "scroll": "Scroll within the foreground view to reveal more controls or content.",
+    "wait": "Wait briefly, then observe the current UI again.",
     "done": "Every requirement of the current local GUI goal is visibly satisfied.",
     "visual_fallback": "The required interaction depends on visual or spatial information not represented by the semantic targets.",
     "return_to_planner": "The current UI state contradicts the assumptions of the current stage and requires replanning.",
@@ -103,7 +103,8 @@ class ActionCandidateBuilder:
         def relevance(target: UITarget) -> tuple[int, int]:
             words = set(re.findall(r"[a-z0-9]+", target.name.lower()))
             contextual_words = set(
-                re.findall(r"[a-z0-9]+", " ".join((target.name, *target.parent_context)).lower())
+                re.findall(r"[a-z0-9]+", " ".join(
+                    (target.name, *target.parent_context, target.nearby_text)).lower())
             )
             return (
                 len(words & hint_words) * 4 + len(contextual_words & context_words),
@@ -149,7 +150,8 @@ class ActionCandidateBuilder:
                     id=f"{operation}:{target.id}",
                     operation=operation,
                     target_id=target.id,
-                    description=description.format(role=target.role.replace("_", " "), name=target.name),
+                    description=description.format(role=target.role.replace("_", " "), name=target.name)
+                                + (f" Context: {target.nearby_text}" if target.nearby_text else ""),
                     source=target.source,
                     metadata={"semantic_key": target.semantic_key},
                 )

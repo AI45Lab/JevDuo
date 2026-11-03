@@ -37,6 +37,7 @@ def verify_observation(
     requirements=None,
     output_files=None,
     execution_result=None,
+    task_memory=None,
 ):
     context = {
         "task": instruction,
@@ -50,6 +51,8 @@ def verify_observation(
     }
     if execution_result is not None:
         context["execution_result"] = execution_result
+    if task_memory is not None:
+        context["verified_task_memory"] = task_memory
     content = [{"type": "text", "text": json.dumps(context, ensure_ascii=False)}]
     for label, path in (("BEFORE", previous), ("CURRENT", screenshot)):
         if path is not None:
@@ -107,6 +110,13 @@ def verify_observation(
             "A CLI read-only inspection can be achieved without a GUI change; preserve state_changed=false "
             "in that case. Report contradictory command failures instead of assuming the intended edit happened."
         )
+    if task_memory is not None:
+        messages[0]["content"] += (
+            " For whole-task verification, use supplied independently verified stage evidence and "
+            "confirmed source facts as historical evidence; do not require every prior page or source "
+            "to appear simultaneously in the current screenshot. The ledger is not infallible: current "
+            "contradictions override it. A pending publication or unsaved working copy is not delivery."
+        )
     result = client.json_request(
         messages,
         lambda value: (
@@ -147,6 +157,9 @@ def verify_observation(
             not exists for exists in (output_files or {}).values()
         ):
             result.update(task_status="incomplete", outcome="not_achieved")
+        if task_memory and any(a.get("delivery_pending") for a in task_memory["artifacts"]):
+            result.update(task_status="incomplete", outcome="not_achieved",
+                          evidence=result["evidence"] + " Working-copy publication remains pending.")
     return result
 
 

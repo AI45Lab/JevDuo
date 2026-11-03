@@ -41,9 +41,10 @@ def _spec(tmp_path: Path, **overrides) -> dict:
     return base
 
 
-@pytest.mark.parametrize("mode", ["step", "stage"])
+@pytest.mark.parametrize("mode", ["step", "stage", "goal"])
 def test_full_mock_chain_produces_renderable_result_dir(tmp_path, mode):
-    episodes = run_from_spec(_spec(tmp_path, harness_config={"execution_mode": mode}))
+    episodes = run_from_spec(_spec(tmp_path, harness_config={"execution_mode": mode},
+                                   requirements=None if mode == "goal" else []))
     assert episodes and episodes[0]["status"] == "scored"
     run_root = tmp_path / "run"
     episode_dir = run_root / "episodes" / "mock-mock-000"
@@ -64,6 +65,12 @@ def test_full_mock_chain_produces_renderable_result_dir(tmp_path, mode):
     assert episode["stop_reason"] == "done" and episode["score"] == 1.0
     summary = json.loads((run_root / "summary.json").read_text())
     assert summary["scored"] == 1 and summary["average_score"] == 1.0
+    if mode == "goal":
+        memory = json.loads((episode_dir / "task_memory.json").read_text())
+        assert memory["work_items"][0]["status"] == "done"
+        events = [json.loads(line) for line in (episode_dir / "events.jsonl").read_text().splitlines()]
+        assert any(e.get("route") == "stage_verified" for e in events)
+        assert any(e.get("route") == "observation_refresh" for e in events)
 
     # 渲染（demo 占位）可离线打开
     page = render_summary.render(run_root)
@@ -93,6 +100,51 @@ def test_failed_task_marks_unscored_and_run_continues(tmp_path):
     assert [item["status"] for item in episodes] == ["scored", "failed_unscored"]
     summary = json.loads((tmp_path / "run" / "summary.json").read_text())
     assert summary["failed_unscored"] == 1 and summary["average_score"] == 1.0
+
+
+def test_agent_budget_exhausted_inside_model_still_reaches_official_scoring(tmp_path):
+    from tandem.config import SessionConfig
+    from tandem.models.slow import TaskBudgetExceeded
+    from tandem.runtime.session import TandemSession
+
+    def planner(*args, **kwargs):
+        raise TaskBudgetExceeded("Agent task budget exhausted")
+
+    components = make_components(planner, lambda *a, **kw: None, FixedSelector())
+    root = tmp_path / "run"
+    episodes = run(_spec(tmp_path), env=MockEnv(base_dir=root / "mock_env"),
+                   session=TandemSession(components, config=SessionConfig()),
+                   tasks=[TaskRef("one", "mock")], run_root=root)
+    assert episodes[0]["stop_reason"] == "wall_time_limit"
+    assert episodes[0]["status"] == "scored"
+    assert episodes[0]["score"] is not None
+
+
+def test_requirement_timeout_has_a_deadline_and_flushes_summary_before_next_task(tmp_path):
+    from tandem.config import SessionConfig
+    from tandem.runtime.session import TandemSession
+
+    deadlines = []
+    root = tmp_path / "run"
+
+    class Env(MockEnv):
+        def fetch_task(self, task_id, domain=""):
+            if task_id == "second":
+                assert json.loads((root / "summary.json").read_text())["failed_unscored"] == 1
+            return super().fetch_task(task_id, domain)
+
+    def requirements(instruction):
+        assert isinstance(deadlines[-1], float)
+        raise TimeoutError("Task deadline exhausted during requirements")
+
+    components = make_components(lambda *a, **kw: None, lambda *a, **kw: None, FixedSelector())
+    components.requirements = requirements
+    components.set_deadline = deadlines.append
+    episodes = run(_spec(tmp_path, requirements=None), env=Env(base_dir=root / "mock_env"),
+                   session=TandemSession(components, config=SessionConfig()),
+                   tasks=[TaskRef("first"), TaskRef("second")], run_root=root)
+    assert [item["status"] for item in episodes] == ["failed_unscored", "failed_unscored"]
+    assert deadlines[1] is None and deadlines[3] is None
 
 
 def test_entry_cli_from_spec_file(tmp_path, capsys):
