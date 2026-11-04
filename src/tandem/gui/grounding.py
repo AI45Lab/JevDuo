@@ -70,7 +70,8 @@ def ground_visual(client, instruction, plan, screenshot):
                     and re.search(r"date|time|calendar|日期|时间", str(item.get("target_hint", "")), re.I)):
                 continue  # Native date typing requires observed CDP input_type/date_order.
             if ((item.get("text"), item.get("input_mode"), item.get("target_hint")) not in allowed_text
-                    or not matches_field(item.get("target_hint", ""), item.get("target", ""))):
+                    or not matches_field(item.get("target_hint", ""), item.get("target", ""),
+                                         metadata.get("overlay_name", ""))):
                 continue
             metadata.update(text=item["text"], input_mode=item["input_mode"],
                             target_hint=item["target_hint"], field_label=item["target"])

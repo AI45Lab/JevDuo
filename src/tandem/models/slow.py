@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import base64
+import http.client
 import io
 import json
 import time
@@ -250,6 +251,17 @@ class SlowModelClient:
             return {name.lower(): value for name, value in headers.items() if name.lower() in allowed}
 
         excluded: set[str] = set()
+
+        def alternate_key(category, seconds, started, attempt):
+            if len(self.key_pool.keys) == 1:
+                return key  # A manually configured endpoint keeps its bounded retry path.
+            self.key_pool.cooldown(key["id"], seconds, category)
+            excluded.add(key["id"])
+            audit("key_cooldown", started, attempt, category=category, cooldown_seconds=seconds)
+            replacement = self.key_pool.select(excluded)
+            audit("key_changed", started, attempt, category=category, next_key_id=replacement["id"])
+            return replacement
+
         key = self.key_pool.select()
         attempt = 0
         failures = 0
@@ -311,6 +323,7 @@ class SlowModelClient:
                     if failures >= 3:
                         raise error
                     delay = retry_after_seconds(headers.get("retry-after"), 30)
+                    key = alternate_key("transient", max(60, delay), started, attempt)
                     audit("retry_wait", started, attempt, retry_wait_seconds=delay)
                     self._retry_wait(delay)
                     continue
@@ -342,7 +355,8 @@ class SlowModelClient:
                               and correction.startswith("Invalid") else "")
                     raise ModelResponseError("slow model response failed validation: " + detail[:600])
                 return value
-            except (urllib.error.URLError, ConnectionError, TimeoutError, ValueError) as error:
+            except (urllib.error.URLError, ConnectionError, TimeoutError,
+                    http.client.IncompleteRead, ValueError) as error:
                 audit(
                     "transport_or_validation_error",
                     started,
@@ -355,7 +369,12 @@ class SlowModelClient:
                     raise
                 # 内容级失败（空正文/截断/非法 JSON）时升档思考强度后重试，不原样重发
                 current_effort = payload.get("reasoning_effort")
-                if (self.config.execution_mode == "goal" and role == "plan_stage"
+                if isinstance(error, (urllib.error.URLError, ConnectionError, TimeoutError,
+                                      http.client.IncompleteRead)):
+                    if isinstance(error, TaskBudgetExceeded):
+                        raise
+                    key = alternate_key("transport_error", 60, started, attempt)
+                elif (self.config.execution_mode == "goal" and role == "plan_stage"
                         and "finish_reason=length" in str(error)):
                     payload["reasoning_effort"] = "low"
                     messages.append({"role": "user", "content":

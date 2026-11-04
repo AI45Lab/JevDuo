@@ -189,6 +189,8 @@ class A11yTargetBuilder:
             enabled = _state(element, "enabled")
             visible = _state(element, "visible")
             showing = _state(element, "showing")
+            native_click = any(_local(key) in {"clickancestor_desc", "click_desc", "press_desc"}
+                               for key in element.attrib)
             context = parents + ((name,) if name else ())
             interactive_text = role != "text" or (
                 _state(element, "editable") is True or _state(element, "focusable") is True
@@ -212,6 +214,7 @@ class A11yTargetBuilder:
             if (
                 (active or system_target)
                 and (role in SUPPORTED_ROLES or safe_label or (include_sliders and role == "slider")
+                     or native_click
                      or filter_occluded and (role == "image" or file_manager and role == "canvas"))
                 and (name or role in SUPPORTED_ROLES)
                 and interactive_text
@@ -252,6 +255,7 @@ class A11yTargetBuilder:
                         ),
                         label_source=label_source,
                         source="a11y_dialog" if filter_occluded and modal else "a11y",
+                        operations=("click",) if native_click else (),
                         range_min=_number(element, "min") if role == "slider" else None,
                         range_max=_number(element, "max") if role == "slider" else None,
                     )

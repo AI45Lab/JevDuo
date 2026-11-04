@@ -82,11 +82,12 @@ def gui_code(action: GuiAction) -> str:
             steps.append("pyautogui.press('f2')")
         if params.get("input_mode", "replace") == "replace":
             steps.append("pyautogui.hotkey('ctrl', 'a')")
-        if params["text"].isascii():
+        if params["text"].isascii() and not any(c in params["text"] for c in "\r\n\t"):
             steps.append(f"pyautogui.write({params['text']!r}, interval=0.03)")
         else:
             steps.append("__import__('subprocess').run(['xclip','-selection','clipboard','-t','UTF8_STRING'],"
-                         f"input={params['text']!r}.encode('utf-8'),check=True)")
+                         f"input={params['text']!r}.encode('utf-8'),check=True,timeout=10,"
+                         "stdout=__import__('subprocess').DEVNULL,stderr=__import__('subprocess').DEVNULL)")
             steps.append("pyautogui.hotkey('ctrl','v')")
         return "; ".join(steps)
     raise ValueError(f"不支持的 GUI 动作类型: {action.action_type}")
