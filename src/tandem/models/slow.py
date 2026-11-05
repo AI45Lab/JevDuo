@@ -17,6 +17,8 @@ from pathlib import Path
 
 from PIL import Image
 
+from .api_errors import classify_api_error
+
 # 空正文（全留在思考通道）或截断时，下一次重试升档思考强度，避免原样重发重复失败
 _REASON_EFFORT_LADDER = {"low": "medium", "medium": "high"}
 
@@ -308,7 +310,7 @@ class SlowModelClient:
                 failure = _api_failure(status, raw)
                 if failure is not None:
                     code, message = failure
-                    category = "transient" if status >= 500 or status in {408, 429} else "fatal"
+                    category = classify_api_error(status, raw)
                     audit("api_error", started, attempt, http_status=status, headers=headers,
                           error_code=code, category=category, error=message[:2000], usage=raw.get("usage"))
                     error = RuntimeError(self._redact(
