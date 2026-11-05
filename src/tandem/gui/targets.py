@@ -192,7 +192,7 @@ class A11yTargetBuilder:
             native_click = any(_local(key) in {"clickancestor_desc", "click_desc", "press_desc"}
                                for key in element.attrib)
             context = parents + ((name,) if name else ())
-            interactive_text = role != "text" or (
+            interactive_text = role != "text" or native_click or (
                 _state(element, "editable") is True or _state(element, "focusable") is True
             )
             system_target = "gnome-shell" in {item.lower() for item in parents}

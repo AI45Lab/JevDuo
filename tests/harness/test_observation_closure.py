@@ -2,6 +2,8 @@
 
 from dataclasses import replace
 
+import pytest
+
 from tandem.gui.candidates import ActionCandidateBuilder
 from tandem.gui.field_binding import _input_target, matches_field
 from tandem.gui.goal_candidates import foreground_tree, goal_candidates, modal_frontier
@@ -12,16 +14,18 @@ from tandem.gui.targets import A11yTargetBuilder
 from .test_semantics import _named, _targets
 
 
-def test_native_click_capability_preserves_static_navigation_not_plain_text():
-    tree = '''<application name="Google Chrome" active="true" xmlns:a="urn:actions">
+@pytest.mark.parametrize("role", ["static", "text"])
+@pytest.mark.parametrize("action", ["clickAncestor_desc", "click_desc", "press_desc"])
+def test_native_click_capability_preserves_navigation_not_plain_text(role, action):
+    tree = f'''<application name="Google Chrome" active="true" xmlns:a="urn:actions">
       <frame name="Workspace" active="true">
-        <static name="Inventory" a:clickAncestor_desc="" screencoord="(20,100)" size="(80,20)"/>
-        <static name="/inventory" screencoord="(400,200)" size="(80,20)"/>
+        <{role} name="Inventory" a:{action}="" screencoord="(20,100)" size="(80,20)"/>
+        <{role} name="/inventory" screencoord="(400,200)" size="(80,20)"/>
       </frame></application>'''
     targets = A11yTargetBuilder().build(tree, "test", filter_occluded=True)
     assert [t.name for t in targets] == ["Inventory"]
     assert targets[0].operations == ("click",)
-    space = ActionCandidateBuilder().build(targets, context="Use sidebar Inventory")
+    space = ActionCandidateBuilder().build(targets, action_inputs=[], context="Use sidebar Inventory")
     assert [c.target_id for c in space.target_heads["click"]] == [targets[0].id]
 
 
