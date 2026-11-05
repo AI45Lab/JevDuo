@@ -200,25 +200,19 @@ def test_goal_rechecks_body_limit_after_json_repair(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def pooled_client(tmp_path, monkeypatch):
-    credentials = tmp_path / "synthetic-credentials.json"
-    credentials.write_text(json.dumps({"kimi": [
-        {"id": f"synthetic-{i}", "priority": 1, "api_key": f"test-only-{i}"}
-        for i in range(3)
-    ]}))
+def endpoint_client(tmp_path, monkeypatch):
     monkeypatch.setattr("tandem.models.slow.time.sleep", lambda seconds: None)
     return SlowModelClient({
-        "base_url": "https://api.kimi.com/coding/v1", "model": "synthetic",
-        "key_pool": {"provider": "kimi", "key_ids": [1, 2, 3],
-                     "credentials_file": str(credentials), "state_file": str(tmp_path / "state.json")},
+        "base_url": "http://gateway/v1/", "model": "MiniMax-M3.1-Flash",
+        "api_key": "test-only-gateway-key",
     }, SessionConfig(slow_reasoning_effort="low"), tmp_path / "audit.jsonl")
 
 
 @pytest.mark.parametrize("role", ["plan_stage", "verify_stage", "ground_visual"])
 @pytest.mark.parametrize("failure", [TimeoutError, http.client.RemoteDisconnected,
                                      urllib.error.URLError, http.client.IncompleteRead])
-def test_transport_failure_switches_key_without_changing_reasoning_or_replaying_actions(
-        pooled_client, monkeypatch, role, failure):
+def test_transport_failure_retries_endpoint_without_changing_reasoning_or_replaying_actions(
+        endpoint_client, monkeypatch, role, failure):
     requests = []
 
     def opener(request, **kwargs):
@@ -230,18 +224,21 @@ def test_transport_failure_switches_key_without_changing_reasoning_or_replaying_
         return _Response()
 
     monkeypatch.setattr(urllib.request, "urlopen", opener)
-    assert pooled_client.json_request([{"role": "user", "content": "plan"}], lambda v: True,
+    assert endpoint_client.json_request([{"role": "user", "content": "plan"}], lambda v: True,
                                       role=role) == {"done": True}
-    assert [r.get_header("Authorization") for r in requests] == ["Bearer test-only-0", "Bearer test-only-1"]
+    assert len(requests) == 2
+    assert all(r.full_url == "http://gateway/v1/chat/completions" for r in requests)
+    assert all(r.get_header("Authorization") == "Bearer test-only-gateway-key" for r in requests)
     assert requests[0].data == requests[1].data
-    events = [json.loads(line) for line in pooled_client.audit_path.read_text().splitlines()]
-    changed = next(e for e in events if e["event"] == "key_changed")
-    assert (changed["key_id"], changed["next_key_id"]) == ("synthetic-0", "synthetic-1")
-    assert "test-only-" not in pooled_client.audit_path.read_text()
-    assert pooled_client.key_pool.select()["id"] != "synthetic-0"
+    payload = json.loads(requests[0].data)
+    assert payload["model"] == "MiniMax-M3.1-Flash" and payload["stream"] is False
+    events = [json.loads(line) for line in endpoint_client.audit_path.read_text().splitlines()]
+    assert not any(e["event"] in {"key_cooldown", "key_changed"} for e in events)
+    assert "test-only-gateway-key" not in endpoint_client.audit_path.read_text()
+    assert sorted(p.name for p in endpoint_client.audit_path.parent.iterdir()) == ["audit.jsonl"]
 
 
-def test_temporary_server_error_switches_key(pooled_client, monkeypatch):
+def test_temporary_server_error_retries_same_endpoint(endpoint_client, monkeypatch):
     requests = []
 
     class Unavailable(_Response):
@@ -255,13 +252,14 @@ def test_temporary_server_error_switches_key(pooled_client, monkeypatch):
         return Unavailable() if len(requests) == 1 else _Response()
 
     monkeypatch.setattr(urllib.request, "urlopen", opener)
-    assert pooled_client.json_request([{"role": "user", "content": "plan"}], lambda v: True,
+    assert endpoint_client.json_request([{"role": "user", "content": "plan"}], lambda v: True,
                                       role="plan_stage") == {"done": True}
-    assert requests[0].get_header("Authorization") != requests[1].get_header("Authorization")
+    assert len(requests) == 2
+    assert requests[0].get_header("Authorization") == requests[1].get_header("Authorization")
 
 
 @pytest.mark.parametrize("failure", [TimeoutError, http.client.IncompleteRead])
-def test_transport_key_rotation_is_bounded(pooled_client, monkeypatch, failure):
+def test_endpoint_transport_retries_are_bounded(endpoint_client, monkeypatch, failure):
     requests = []
 
     def opener(request, **kwargs):
@@ -272,12 +270,13 @@ def test_transport_key_rotation_is_bounded(pooled_client, monkeypatch, failure):
 
     monkeypatch.setattr(urllib.request, "urlopen", opener)
     with pytest.raises(failure):
-        pooled_client.json_request([{"role": "user", "content": "plan"}], lambda v: True,
+        endpoint_client.json_request([{"role": "user", "content": "plan"}], lambda v: True,
                                    role="plan_stage")
-    assert len(requests) == len({r.get_header("Authorization") for r in requests}) == 3
+    assert len(requests) == 3
+    assert len({r.get_header("Authorization") for r in requests}) == 1
 
 
-def test_invalid_json_does_not_cool_down_or_switch_key(pooled_client, monkeypatch):
+def test_invalid_json_repair_uses_same_endpoint(endpoint_client, monkeypatch):
     requests = []
 
     class Invalid(_Response):
@@ -289,7 +288,66 @@ def test_invalid_json_does_not_cool_down_or_switch_key(pooled_client, monkeypatc
         return Invalid() if len(requests) == 1 else _Response()
 
     monkeypatch.setattr(urllib.request, "urlopen", opener)
-    assert pooled_client.json_request([{"role": "user", "content": "plan"}], lambda v: True,
+    assert endpoint_client.json_request([{"role": "user", "content": "plan"}], lambda v: True,
                                       role="plan_stage") == {"done": True}
     assert requests[0].get_header("Authorization") == requests[1].get_header("Authorization")
-    assert "key_cooldown" not in pooled_client.audit_path.read_text()
+    assert "key_cooldown" not in endpoint_client.audit_path.read_text()
+
+
+@pytest.mark.parametrize("status", [400, 401, 402, 403])
+def test_gateway_errors_are_redacted_without_local_account_state(endpoint_client, monkeypatch, status):
+    calls, captured = [], []
+    secret = endpoint_client.credentials["api_key"]
+    endpoint_client.llm_sink = lambda **record: captured.append(record)
+
+    def opener(request, **kwargs):
+        calls.append(request)
+        body = json.dumps({"error": {"message": "gateway rejected " + secret}}).encode()
+        raise urllib.error.HTTPError(request.full_url, status, "gateway error", {}, io.BytesIO(body))
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    with pytest.raises(RuntimeError, match=f"status={status}") as raised:
+        endpoint_client.json_request([{"role": "user", "content": "plan"}], lambda v: True,
+                                     role="plan_stage")
+    assert len(calls) == 1 and captured[0]["http_status"] == status
+    assert secret not in str(raised.value) + endpoint_client.audit_path.read_text() + json.dumps(captured)
+    assert "[REDACTED]" in json.dumps(captured)
+    assert sorted(p.name for p in endpoint_client.audit_path.parent.iterdir()) == ["audit.jsonl"]
+
+
+@pytest.mark.parametrize("status", [408, 429, 503])
+@pytest.mark.parametrize("headers,delay", [({}, 30), ({"Retry-After": "2"}, 2)])
+def test_gateway_retries_honor_retry_after_and_remain_bounded(
+        endpoint_client, monkeypatch, status, headers, delay):
+    calls, waits = [], []
+
+    def opener(request, **kwargs):
+        calls.append(request)
+        raise urllib.error.HTTPError(request.full_url, status, "busy", headers,
+                                     io.BytesIO(b'{"error":{"message":"busy"}}'))
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    monkeypatch.setattr("tandem.models.slow.time.sleep", waits.append)
+    with pytest.raises(RuntimeError, match=f"status={status}"):
+        endpoint_client.json_request([{"role": "user", "content": "plan"}], lambda v: True,
+                                     role="plan_stage")
+    assert len(calls) == 3 and waits == [delay, delay]
+    assert len({r.get_header("Authorization") for r in calls}) == 1
+
+
+def test_gateway_429_can_recover_on_last_attempt(endpoint_client, monkeypatch):
+    calls, waits = [], []
+
+    def opener(request, **kwargs):
+        calls.append(request)
+        if len(calls) < 3:
+            raise urllib.error.HTTPError(request.full_url, 429, "busy", {},
+                                         io.BytesIO(b'{"error":{"message":"rate limited"}}'))
+        return _Response()
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    monkeypatch.setattr("tandem.models.slow.time.sleep", waits.append)
+    assert endpoint_client.json_request([{"role": "user", "content": "plan"}], lambda v: True,
+                                        role="plan_stage") == {"done": True}
+    assert len(calls) == 3 and waits == [30, 30]
+    assert len({r.data for r in calls}) == 1

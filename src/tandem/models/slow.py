@@ -12,11 +12,12 @@ import json
 import time
 import urllib.error
 import urllib.request
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 from PIL import Image
 
-from .key_pool import ApiKeyPool, PoolExhausted, classify_api_error, retry_after_seconds
+from .api_errors import classify_api_error
 
 # 空正文（全留在思考通道）或截断时，下一次重试升档思考强度，避免原样重发重复失败
 _REASON_EFFORT_LADDER = {"low": "medium", "medium": "high"}
@@ -131,13 +132,25 @@ def _api_failure(status: int, raw: dict):
     return base.get("status_code"), str(error or base.get("status_msg") or json.dumps(raw))
 
 
+def _retry_after_seconds(value: str | None, default: float) -> float:
+    """Honor the endpoint's Retry-After without maintaining account state."""
+    if value is None:
+        return default
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        try:
+            return max(0.0, parsedate_to_datetime(value).timestamp() - time.time())
+        except (TypeError, ValueError):
+            return default
+
+
 class SlowModelClient:
     def __init__(self, credential_file, config, audit_path: Path, llm_sink=None):
         if isinstance(credential_file, dict):
             self.credentials = dict(credential_file)
         else:
             self.credentials = json.loads(Path(credential_file).read_text(encoding="utf-8"))
-        self.key_pool = ApiKeyPool(self.credentials)
         self._call_id = 0
         self.config = config
         self.audit_path = audit_path
@@ -145,6 +158,16 @@ class SlowModelClient:
         # 由 tandem_eval.recorder 提供（llm_calls.jsonl）；None 时仅审计。
         self.llm_sink = llm_sink
         self.deadline = None
+
+    def _redact(self, value):
+        if isinstance(value, str):
+            secret = self.credentials.get("api_key")
+            return value.replace(secret, "[REDACTED]") if secret else value
+        if isinstance(value, dict):
+            return {key: self._redact(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._redact(item) for item in value]
+        return value
 
     def set_deadline(self, deadline):
         """Absolute monotonic task deadline, shared by requirements, planning and verification."""
@@ -200,8 +223,8 @@ class SlowModelClient:
                 data=data,
                 headers={
                     **(
-                        {"Authorization": "Bearer " + key["api_key"]}
-                        if key["api_key"]
+                        {"Authorization": "Bearer " + credentials.get("api_key", "")}
+                        if credentials.get("api_key", "")
                         else {}
                     ),
                     "Content-Type": "application/json",
@@ -218,11 +241,11 @@ class SlowModelClient:
             record = {
                 "event": event,
                 "provider": "slow_model",
-                "api_provider": self.key_pool.provider,
+                "api_provider": "custom",
                 "role": role,
                 "call_id": call_id,
-                "key_id": key["id"],
-                "key_priority": key["priority"],
+                "key_id": "manual",
+                "key_priority": 1,
                 "attempt": attempt,
                 "time": time.time(),
                 "elapsed_seconds": round(time.perf_counter() - started, 3),
@@ -230,7 +253,7 @@ class SlowModelClient:
                 **image_stats,
                 **details,
             }
-            text = json.dumps(self.key_pool.redact(record), ensure_ascii=False)
+            text = json.dumps(self._redact(record), ensure_ascii=False)
             print(text, flush=True)
             with self.audit_path.open("a", encoding="utf-8") as log:
                 log.write(text + "\n")
@@ -250,19 +273,6 @@ class SlowModelClient:
             }
             return {name.lower(): value for name, value in headers.items() if name.lower() in allowed}
 
-        excluded: set[str] = set()
-
-        def alternate_key(category, seconds, started, attempt):
-            if len(self.key_pool.keys) == 1:
-                return key  # A manually configured endpoint keeps its bounded retry path.
-            self.key_pool.cooldown(key["id"], seconds, category)
-            excluded.add(key["id"])
-            audit("key_cooldown", started, attempt, category=category, cooldown_seconds=seconds)
-            replacement = self.key_pool.select(excluded)
-            audit("key_changed", started, attempt, category=category, next_key_id=replacement["id"])
-            return replacement
-
-        key = self.key_pool.select()
         attempt = 0
         failures = 0
         while True:
@@ -280,7 +290,7 @@ class SlowModelClient:
                 except urllib.error.HTTPError as error:
                     status = error.code
                     headers = public_headers(error.headers)
-                    body = self.key_pool.redact(error.read().decode("utf-8", errors="replace"))
+                    body = self._redact(error.read().decode("utf-8", errors="replace"))
                     try:
                         raw = json.loads(body)
                     except ValueError:
@@ -290,40 +300,28 @@ class SlowModelClient:
                 if self.llm_sink is not None:
                     self.llm_sink(
                         role=role,
-                        request=self.key_pool.redact({"payload": payload, "messages": messages}),
-                        response=self.key_pool.redact(raw),
+                        request=self._redact({"payload": payload, "messages": messages}),
+                        response=self._redact(raw),
                         attempt=attempt, call_id=call_id,
-                        key_id=key["id"], key_priority=key["priority"],
+                        key_id="manual", key_priority=1,
                         http_status=status,
                         elapsed_seconds=round(time.perf_counter() - started, 3),
                     )
                 failure = _api_failure(status, raw)
                 if failure is not None:
                     code, message = failure
-                    category, cooldown = classify_api_error(self.key_pool.provider, status, code, message)
+                    category = classify_api_error(status, raw)
                     audit("api_error", started, attempt, http_status=status, headers=headers,
                           error_code=code, category=category, error=message[:2000], usage=raw.get("usage"))
-                    error = RuntimeError(self.key_pool.redact(
+                    error = RuntimeError(self._redact(
                         f"slow model API error: status={status}, code={code}, message={message[:2000]}"
                     ))
-                    if cooldown:
-                        cooldown = retry_after_seconds(headers.get("retry-after"), cooldown)
-                        self.key_pool.cooldown(key["id"], cooldown, category)
-                        excluded.add(key["id"])
-                        audit("key_cooldown", started, attempt, category=category,
-                              cooldown_seconds=cooldown)
-                        try:
-                            key = self.key_pool.select(excluded)
-                        except PoolExhausted as exhausted:
-                            raise exhausted from error
-                        continue
                     if category != "transient":
                         raise error
                     failures += 1
                     if failures >= 3:
                         raise error
-                    delay = retry_after_seconds(headers.get("retry-after"), 30)
-                    key = alternate_key("transient", max(60, delay), started, attempt)
+                    delay = _retry_after_seconds(headers.get("retry-after"), 30)
                     audit("retry_wait", started, attempt, retry_wait_seconds=delay)
                     self._retry_wait(delay)
                     continue
@@ -362,7 +360,7 @@ class SlowModelClient:
                     started,
                     attempt,
                     error_type=type(error).__name__,
-                    error=self.key_pool.redact(str(error))[:1000],
+                    error=self._redact(str(error))[:1000],
                 )
                 failures += 1
                 if failures >= 3:
@@ -373,7 +371,6 @@ class SlowModelClient:
                                       http.client.IncompleteRead)):
                     if isinstance(error, TaskBudgetExceeded):
                         raise
-                    key = alternate_key("transport_error", 60, started, attempt)
                 elif (self.config.execution_mode == "goal" and role == "plan_stage"
                         and "finish_reason=length" in str(error)):
                     payload["reasoning_effort"] = "low"

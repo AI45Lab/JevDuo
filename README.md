@@ -235,7 +235,7 @@ tandem-eval rjob run --run-id <name> --benchmark osworld2 --tasks <task-id> \
 bash scripts/run_experiment.sh \
   --experiment kimi12-retry-20261030 \
   --tasks 024,029,037,045,057,059,069,082,088,093,005,031 \
-  --concurrency 12 --slow-model kimi-k3 --slow-key-ids 1,2,3,4 \
+  --concurrency 12 --slow-model kimi-k3 \
   --max-steps 500 --max-wall 14400
 ```
 
@@ -243,30 +243,17 @@ bash scripts/run_experiment.sh \
 `drivers/<task>.driver.log` 和 `<experiment>-<task>/`（worker、模型、轨迹与结果）。
 worker 的 adpc 挂载只读时仍使用 evobox 暂存，任务结束后立即归档到该实验目录。
 
-集群内使用模板配置时，`api_key` 留空会使用默认号池，也可以手动填写自己的 `api_key`。
-
-需要指定号池中的 key 时，在原启动命令后追加：
-
-```bash
---slow-key-ids 1,2,3,4
-```
-
-也可以在所选慢模型条目的 `key_pool` 中配置，命令行参数优先：
-
-```json
-{"key_ids": [1, 2, 3, 4]}
-```
-
-编号对应凭据列表中的第 1、2、3、4 把 key，不是密钥内容：
-
-- 不填编号或配置 `[]`：使用默认优先级。
-- 填一个编号：只使用这一把。
-- 填多个编号：这些 key 按同级轮询分配给 worker，正常请求固定使用分配到的 key；故障仅在指定集合内切换。
-
-不同实验可指定不重叠的编号集合。这里均分的是 worker，不保证请求量严格相等；编号选择与手填完整 `api_key` 二选一。
+慢模型支持自定义 OpenAI 兼容 API。在 `harness.slow_model.apis` 的条目中填写
+服务地址 `base_url`、访问密钥 `api_key` 和模型名称 `model`。
+客户端以非流式方式向 `<base_url>/chat/completions` 发送 POST 请求，
+使用 `Authorization: Bearer <api_key>` 鉴权；`base_url` 可带尾部斜杠。
+真实密钥只填写在被 gitignore 的 `infra/config.json`；模板中的密钥留空。
 
 慢模型的调用纪律（`models/slow.py`）：
 
+- HTTP 408、429、5xx，以及 MiniMax 通过 HTTP 200 返回的临时故障，
+  最多调用 3 次（首次 + 2 次重试），优先遵循 `Retry-After`，
+  缺失时每次等待 30 秒；等待和请求均受任务剩余预算约束。其他 API 错误直接上报。
 - 思考强度取所选 API 的配置；空正文（全留在思考通道）→ 下一次重试自动升档；
 - 叙述文字包裹 JSON → 自动剥围栏取首个平衡 `{…}` 抢救；
 - `finish_reason=length` → 明确报错，提示调大 `slow_max_tokens`。
