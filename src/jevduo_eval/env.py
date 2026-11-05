@@ -14,7 +14,7 @@ from typing import Protocol
 
 from PIL import Image
 
-from tandem.protocol.models import (
+from jevduo.protocol.models import (
     AccessibilityTree,
     Action,
     Budget,

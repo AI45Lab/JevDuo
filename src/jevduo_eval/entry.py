@@ -12,10 +12,10 @@ import os
 import subprocess
 from pathlib import Path
 
-from tandem.components import Components
-from tandem.config import SessionConfig
-from tandem.models.ranking import Ranking
-from tandem.runtime.session import TandemSession
+from jevduo.components import Components
+from jevduo.config import SessionConfig
+from jevduo.models.ranking import Ranking
+from jevduo.runtime.session import JevDuoSession
 
 from .env import MockEnv
 from .manifest import resolve_manifest
@@ -154,12 +154,12 @@ class _FirstCandidateSelector:
 
 
 def mock_components(*, stage_mode=False, goal_mode=False) -> Components:
-    from tandem.gui.candidates import ActionCandidateBuilder
-    from tandem.gui.compile import gui_action
-    from tandem.gui.proposals import focused_candidates
-    from tandem.gui.semantics import enrich_targets
-    from tandem.gui.targets import A11yTargetBuilder
-    from tandem.memory.state import TaskMemory
+    from jevduo.gui.candidates import ActionCandidateBuilder
+    from jevduo.gui.compile import gui_action
+    from jevduo.gui.proposals import focused_candidates
+    from jevduo.gui.semantics import enrich_targets
+    from jevduo.gui.targets import A11yTargetBuilder
+    from jevduo.memory.state import TaskMemory
 
     def goal_verifier(*args, **kwargs):
         return {"stage_outcome": "met", "unit_met": True, "delivery_state": "verified",
@@ -182,15 +182,15 @@ def mock_components(*, stage_mode=False, goal_mode=False) -> Components:
     )
 
 
-def build_session(spec: dict, *, llm_tap: LlmTap | None = None) -> TandemSession:
+def build_session(spec: dict, *, llm_tap: LlmTap | None = None) -> JevDuoSession:
     config = SessionConfig(**spec.get("harness_config", {}))
     benchmark = spec.get("benchmark")
     if benchmark == "mock":
-        return TandemSession(mock_components(stage_mode=config.execution_mode == "stage",
+        return JevDuoSession(mock_components(stage_mode=config.execution_mode == "stage",
                                              goal_mode=config.execution_mode == "goal"), config=config)
     if benchmark in {"osworld1", "osworld2", "osworld21"}:
-        from tandem.components import build_default
-        from tandem.models.slow import SlowModelClient
+        from jevduo.components import build_default
+        from jevduo.models.slow import SlowModelClient
 
         secrets = spec["secrets"]
         credentials = dict(secrets["slow_model"])
@@ -209,7 +209,7 @@ def build_session(spec: dict, *, llm_tap: LlmTap | None = None) -> TandemSession
             image_stage=image_stage,
             endpoint_provider=lambda: resolve_fast_model_endpoint(secrets.get("fast_model") or {}),
         )
-        return TandemSession(components, config=config)
+        return JevDuoSession(components, config=config)
     raise NotImplementedError(f"未知 benchmark: {benchmark}")
 
 
@@ -273,7 +273,7 @@ def run_from_spec(spec: dict) -> list[dict]:
 def entry_main(argv: list[str]) -> int:
     import argparse
 
-    parser = argparse.ArgumentParser(prog="tandem-eval entry")
+    parser = argparse.ArgumentParser(prog="jevduo-eval entry")
     parser.add_argument("--spec", required=True, help="job spec JSON 路径")
     args = parser.parse_args(argv)
     spec = json.loads(Path(args.spec).read_text(encoding="utf-8"))

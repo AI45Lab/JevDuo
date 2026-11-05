@@ -4,7 +4,7 @@
 站点是**离线可开**的，所以官方数据要 vendored 进 `demo/data/`；本脚本负责
 "重新拉一遍 + 校验 + 写回"，保证快照不是手工维护的。
 
-只用标准库（无新增依赖），不 import `tandem` / `tandem_eval`（demo 层纪律）。
+只用标准库（无新增依赖），不 import `jevduo` / `jevduo_eval`（demo 层纪律）。
 
 用法：
     python3 demo/sync_official.py                  # 刷新全部

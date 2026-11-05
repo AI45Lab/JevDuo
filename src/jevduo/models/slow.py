@@ -155,7 +155,7 @@ class SlowModelClient:
         self.config = config
         self.audit_path = audit_path
         # llm_sink(role=..., request=..., response=..., **meta)：全量请求/响应落盘钩子，
-        # 由 tandem_eval.recorder 提供（llm_calls.jsonl）；None 时仅审计。
+        # 由 jevduo_eval.recorder 提供（llm_calls.jsonl）；None 时仅审计。
         self.llm_sink = llm_sink
         self.deadline = None
 

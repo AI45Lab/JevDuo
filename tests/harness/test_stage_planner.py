@@ -1,6 +1,6 @@
 """Stage planning keeps search submission ahead of result expectations."""
 
-from tandem.planning.stage_planner import plan_stage
+from jevduo.planning.stage_planner import plan_stage
 
 from .conftest import A11Y_XML, build_targets
 

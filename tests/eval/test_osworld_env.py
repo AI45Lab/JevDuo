@@ -10,7 +10,7 @@ from types import ModuleType
 
 import pytest
 
-from tandem.protocol.models import (
+from jevduo.protocol.models import (
     Budget,
     CliAction,
     FailAction,
@@ -18,7 +18,7 @@ from tandem.protocol.models import (
     GuiAction,
     WaitAction,
 )
-from tandem_eval.osworld import (
+from jevduo_eval.osworld import (
     OsWorldEnv,
     action_code,
     gui_code,
@@ -73,7 +73,7 @@ def test_png_size_parses_ihdr():
 
 def test_read_only_refresh_keeps_cdp_receipt_and_prior_evidence(tmp_path, env, monkeypatch):
     snapshot = {"elements": [{"index": 1, "role": "entry", "name": "Receipt Date"}]}
-    monkeypatch.setattr("tandem_eval.osworld.capture_browser_snapshot",
+    monkeypatch.setattr("jevduo_eval.osworld.capture_browser_snapshot",
                         lambda controller: (snapshot, {"status": "ok"}))
     task = _task_file(tmp_path)
     first = env.reset(task)
@@ -104,7 +104,7 @@ def test_empty_screenshot_retries_only_observation(tmp_path, env, monkeypatch):
     valid = env.env._get_obs()
     observe = Mock(side_effect=[{"screenshot": None}, {"screenshot": b""}, valid])
     monkeypatch.setattr(env.env, "_get_obs", observe)
-    monkeypatch.setattr("tandem_eval.osworld.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("jevduo_eval.osworld.time.sleep", lambda seconds: None)
     budget = Budget(steps_remaining=5, wall_seconds_remaining=30)
     refreshed = env.observe(task, budget=budget, previous=previous)
     assert observe.call_count == 3 and env.env.steps == []
@@ -119,7 +119,7 @@ def test_repeated_empty_screenshot_is_explicit_observation_failure(tmp_path, env
     previous = env.reset(task)
     observe = Mock(return_value={"screenshot": None})
     monkeypatch.setattr(env.env, "_get_obs", observe)
-    monkeypatch.setattr("tandem_eval.osworld.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("jevduo_eval.osworld.time.sleep", lambda seconds: None)
     with pytest.raises(RuntimeError, match="no screenshot after three read-only"):
         env.observe(task, budget=previous.budget, previous=previous)
     assert observe.call_count == 3 and env.env.steps == []
@@ -241,7 +241,7 @@ def test_reset_execute_score_lifecycle(tmp_path, env):
 
 def test_browser_snapshot_is_a_hashed_observation_file(tmp_path, env, monkeypatch):
     monkeypatch.setattr(
-        "tandem_eval.osworld.capture_browser_snapshot",
+        "jevduo_eval.osworld.capture_browser_snapshot",
         lambda controller: ({"elements": [{"name": "Save"}], "url": "https://example.test"},
                             {"available": True}),
     )

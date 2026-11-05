@@ -4,15 +4,15 @@ from dataclasses import replace
 
 import pytest
 
-from tandem.config import SessionConfig
-from tandem.gui.goal_candidates import foreground_tree, goal_candidates
-from tandem.memory.context import planning_context
-from tandem.memory.state import TaskMemory
-from tandem.models.ranking import Ranking
-from tandem.protocol.models import FinishAction
-from tandem.runtime.goal_stage import ObservationRequired
-from tandem.runtime.session import TandemSession
-from tandem.verification.goal_verifier import valid_result, verify_goal
+from jevduo.config import SessionConfig
+from jevduo.gui.goal_candidates import foreground_tree, goal_candidates
+from jevduo.memory.context import planning_context
+from jevduo.memory.state import TaskMemory
+from jevduo.models.ranking import Ranking
+from jevduo.protocol.models import FinishAction
+from jevduo.runtime.goal_stage import ObservationRequired
+from jevduo.runtime.session import JevDuoSession
+from jevduo.verification.goal_verifier import valid_result, verify_goal
 
 from .conftest import (
     A11Y_XML,
@@ -81,7 +81,7 @@ def test_multiple_actions_then_one_stage_verification(tmp_path, components):
     components.stage_verifier = stage_verifier
     components.memory_factory = TaskMemory
     components.selector.rank = rank
-    session = TandemSession(components, config=SessionConfig(execution_mode="goal"))
+    session = JevDuoSession(components, config=SessionConfig(execution_mode="goal"))
     session.begin("Edit and save", requirements())
     obs = make_observation(tmp_path, 0)
     with pytest.raises(ObservationRequired, match="planner_returned"):
@@ -101,7 +101,7 @@ def test_multiple_actions_then_one_stage_verification(tmp_path, components):
 def test_missing_receipt_never_replays(tmp_path, components):
     components.planner = lambda *a, **kw: plan()
     components.memory_factory = TaskMemory
-    session = TandemSession(components, config=SessionConfig(execution_mode="goal"))
+    session = JevDuoSession(components, config=SessionConfig(execution_mode="goal"))
     session.begin("Edit", requirements())
     obs = make_observation(tmp_path, 0)
     with pytest.raises(ObservationRequired):
@@ -161,7 +161,7 @@ def test_result_rejects_non_string_evidence_ids():
 
 
 def test_requirement_schema_retry_explains_missing_requirement_field():
-    from tandem.planning.goal_planner import goal_requirements
+    from jevduo.planning.goal_planner import goal_requirements
 
     class Client:
         def json_request(self, messages, validate, **kwargs):
@@ -209,7 +209,7 @@ def test_stage_verifier_reads_full_source_and_retries_missing_array(tmp_path):
 def test_schema_retry_does_not_increase_reasoning_effort(tmp_path, monkeypatch):
     import json
 
-    from tandem.models.slow import SlowModelClient
+    from jevduo.models.slow import SlowModelClient
 
     payloads = []
     responses = iter([{"unexpected": True}, {"done": True}])
@@ -232,7 +232,7 @@ def test_schema_retry_does_not_increase_reasoning_effort(tmp_path, monkeypatch):
         return Response()
 
     monkeypatch.setattr("urllib.request.urlopen", open_request)
-    monkeypatch.setattr("tandem.models.slow.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("jevduo.models.slow.time.sleep", lambda seconds: None)
     client = SlowModelClient({"base_url": "http://synthetic"}, SessionConfig(), tmp_path / "audit.jsonl")
     client.json_request([], lambda value: "done" in value, role="plan_stage")
     assert [p.get("reasoning_effort") for p in payloads] == [None, None]
@@ -261,7 +261,7 @@ def test_diagnostic_success_does_not_become_delivery():
 
 
 def test_delivery_unit_can_prepare_but_cannot_commit_delivery_in_preparation():
-    from tandem.planning.goal_planner import valid_goal
+    from jevduo.planning.goal_planner import valid_goal
 
     memory = TaskMemory("Edit", requirements())
     preparation = {**plan(), "purpose": "prepare"}
@@ -321,8 +321,8 @@ def test_preparation_reuses_registered_confirmed_facts():
 
 
 def test_component_factory_selects_goal_mode():
-    from tandem.components import build_default
-    from tandem.planning.goal_planner import plan_goal
+    from jevduo.components import build_default
+    from jevduo.planning.goal_planner import plan_goal
 
     built = build_default(client=object(), endpoint="http://unused",
                           config=SessionConfig(execution_mode="goal"))
@@ -332,8 +332,8 @@ def test_component_factory_selects_goal_mode():
 
 def test_initial_empty_memory_is_per_session(components):
     components.memory_factory = TaskMemory
-    a = TandemSession(components, config=SessionConfig(execution_mode="goal"))
-    b = TandemSession(replace(components), config=SessionConfig(execution_mode="goal"))
+    a = JevDuoSession(components, config=SessionConfig(execution_mode="goal"))
+    b = JevDuoSession(replace(components), config=SessionConfig(execution_mode="goal"))
     assert a.goal.memory is not b.goal.memory
 
 

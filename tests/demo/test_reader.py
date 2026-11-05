@@ -1,7 +1,7 @@
 """demo 读取层单测：合成结果目录 → view model。
 
-不依赖 `rjob_logs/` 里的真实 run（CI 上没有），也不 import `tandem` /
-`tandem_eval`——demo 与 harness 完全解耦，这条边界本身就是被测项之一。
+不依赖 `rjob_logs/` 里的真实 run（CI 上没有），也不 import `jevduo` /
+`jevduo_eval`——demo 与 harness 完全解耦，这条边界本身就是被测项之一。
 
 **最要紧的一条**：`test_llm_reader_never_reads_whole_file` 用一个"只许逐行读"的
 假文件把 `llm_calls.jsonl`（单题 64MB、整批 39GB）罩住——读取层一旦整文件读，

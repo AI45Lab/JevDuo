@@ -1,4 +1,4 @@
-"""tandem-eval CLI：entry（worker 侧）+ rjob（开发机侧生命周期）。"""
+"""jevduo-eval CLI：entry（worker 侧）+ rjob（开发机侧生命周期）。"""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ def _rjob_args(parser: argparse.ArgumentParser) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="tandem-eval", description="Tandem 集群测评入口")
+    parser = argparse.ArgumentParser(prog="jevduo-eval", description="JevDuo 集群测评入口")
     sub = parser.add_subparsers(dest="command", required=True)
 
     entry = sub.add_parser("entry", help="按 job spec 启动一次测评（worker 内执行）")

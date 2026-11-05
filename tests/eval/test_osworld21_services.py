@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from tandem_eval.config_schema import validate
-from tandem_eval.entry import _mask_secrets, run_from_spec
-from tandem_eval.rjob_spec import build_job_spec
+from jevduo_eval.config_schema import validate
+from jevduo_eval.entry import _mask_secrets, run_from_spec
+from jevduo_eval.rjob_spec import build_job_spec
 
 from .rjob_fakes import CONFIG, with_paths
 
@@ -97,7 +97,7 @@ def test_configured_evaluation_api_requires_its_own_model_and_endpoint(role):
 
 
 def test_credentials_are_injected_before_environment_loading(tmp_path, monkeypatch):
-    from tandem_eval import entry
+    from jevduo_eval import entry
 
     class EnvironmentReached(Exception):
         pass

@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from tandem_eval.rjob import RjobClient, cleanup, run_job
+from jevduo_eval.rjob import RjobClient, cleanup, run_job
 
 from .rjob_fakes import CONFIG, REAL_SUCCEEDED, FakeRunner, with_paths
 

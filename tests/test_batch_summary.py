@@ -194,7 +194,7 @@ def test_collect_rows_accepts_multiple_prefixes(tmp_path):
 def test_noop_rate_counts_every_decision_without_an_executable_action(tmp_path):
     """空转口径：看"动作有没有编译出来"，不是"winner 是不是 return_to_planner"。
 
-    真机路径下 grounder 是关的（`tandem_eval/entry.py` 显式传 `grounder=None`），
+    真机路径下 grounder 是关的（`jevduo_eval/entry.py` 显式传 `grounder=None`），
     所以 visual_fallback 与 return_to_planner 一样编译不出动作，两者都算真空转。
     """
     episode_dir = tmp_path / "episodes" / "004"

@@ -9,10 +9,10 @@ from pathlib import Path
 
 import pytest
 
-from tandem_eval.entry import entry_main, run_from_spec
-from tandem_eval.env import MockEnv
-from tandem_eval.manifest import TaskRef
-from tandem_eval.runner import run
+from jevduo_eval.entry import entry_main, run_from_spec
+from jevduo_eval.env import MockEnv
+from jevduo_eval.manifest import TaskRef
+from jevduo_eval.runner import run
 
 from ..harness.conftest import (
     FixedSelector,
@@ -86,12 +86,12 @@ def test_failed_task_marks_unscored_and_run_continues(tmp_path):
 
     spec = _spec(tmp_path)
     env = FlakyEnv(base_dir=tmp_path / "run" / "mock_env")
-    from tandem.config import SessionConfig
-    from tandem.runtime.session import TandemSession
+    from jevduo.config import SessionConfig
+    from jevduo.runtime.session import JevDuoSession
 
     planner = ScriptedPlanner([{"done": True, "task_status": "completed",
                                 "current_goal": "g", "expected_observation": ""}])
-    session = TandemSession(make_components(planner, ScriptedVerifier(
+    session = JevDuoSession(make_components(planner, ScriptedVerifier(
         [valid_verifier_response(task_status="completed")]), FixedSelector()),
         config=SessionConfig())
     episodes = run(spec, env=env, session=session,
@@ -103,9 +103,9 @@ def test_failed_task_marks_unscored_and_run_continues(tmp_path):
 
 
 def test_agent_budget_exhausted_inside_model_still_reaches_official_scoring(tmp_path):
-    from tandem.config import SessionConfig
-    from tandem.models.slow import TaskBudgetExceeded
-    from tandem.runtime.session import TandemSession
+    from jevduo.config import SessionConfig
+    from jevduo.models.slow import TaskBudgetExceeded
+    from jevduo.runtime.session import JevDuoSession
 
     def planner(*args, **kwargs):
         raise TaskBudgetExceeded("Agent task budget exhausted")
@@ -113,7 +113,7 @@ def test_agent_budget_exhausted_inside_model_still_reaches_official_scoring(tmp_
     components = make_components(planner, lambda *a, **kw: None, FixedSelector())
     root = tmp_path / "run"
     episodes = run(_spec(tmp_path), env=MockEnv(base_dir=root / "mock_env"),
-                   session=TandemSession(components, config=SessionConfig()),
+                   session=JevDuoSession(components, config=SessionConfig()),
                    tasks=[TaskRef("one", "mock")], run_root=root)
     assert episodes[0]["stop_reason"] == "wall_time_limit"
     assert episodes[0]["status"] == "scored"
@@ -121,8 +121,8 @@ def test_agent_budget_exhausted_inside_model_still_reaches_official_scoring(tmp_
 
 
 def test_requirement_timeout_has_a_deadline_and_flushes_summary_before_next_task(tmp_path):
-    from tandem.config import SessionConfig
-    from tandem.runtime.session import TandemSession
+    from jevduo.config import SessionConfig
+    from jevduo.runtime.session import JevDuoSession
 
     deadlines = []
     root = tmp_path / "run"
@@ -141,7 +141,7 @@ def test_requirement_timeout_has_a_deadline_and_flushes_summary_before_next_task
     components.requirements = requirements
     components.set_deadline = deadlines.append
     episodes = run(_spec(tmp_path, requirements=None), env=Env(base_dir=root / "mock_env"),
-                   session=TandemSession(components, config=SessionConfig()),
+                   session=JevDuoSession(components, config=SessionConfig()),
                    tasks=[TaskRef("first"), TaskRef("second")], run_root=root)
     assert [item["status"] for item in episodes] == ["failed_unscored", "failed_unscored"]
     assert deadlines[1] is None and deadlines[3] is None

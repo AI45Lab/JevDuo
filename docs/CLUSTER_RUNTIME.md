@@ -12,8 +12,8 @@ worker 入口、共享资源与已知坑。
 
 | 组件 | 位置 | 职责 |
 |---|---|---|
-| `src/tandem/` | 仓库主体 | harness 本体，与集群无关（见 README） |
-| `src/tandem_eval/` | 薄适配层 | worker 侧 6 文件（entry/env/runner/recorder/scoring/manifest）+ 开发机侧 `rjob.py` / `rjob_spec.py` / `rjob_status.py` / `config_schema.py` |
+| `src/jevduo/` | 仓库主体 | harness 本体，与集群无关（见 README） |
+| `src/jevduo_eval/` | 薄适配层 | worker 侧 6 文件（entry/env/runner/recorder/scoring/manifest）+ 开发机侧 `rjob.py` / `rjob_spec.py` / `rjob_status.py` / `config_schema.py` |
 | `infra/config.json` | 唯一配置 | 全绝对路径、含密钥 → **已 gitignore**，模板 `infra/config.example.json` 提交 |
 | `infra/worker.sh` | worker 入口 | rjob worker 内被调用，按 benchmark 分 mock / 真机两条路 |
 | `scripts/` | 批量脚本 | `run_osw2_20x5.sh` 等批量运行 |
@@ -83,12 +83,12 @@ Harness 内部已按 `runtime` / `planning` / `gui` / `models` / `verification` 
 | `log.results_root` | 唯一落盘位置，run 目录 = `<results_root>/<run_id>/` |
 | `log.record.a11y_full` | 是否落每步完整 a11y XML（默认只落摘要） |
 
-缺项/非法值由 `tandem_eval.config_schema` 统一校验（一次列出全部问题）；
+缺项/非法值由 `jevduo_eval.config_schema` 统一校验（一次列出全部问题）；
 必填路径清单见 `config_schema.REQUIRED_PATHS`。
 
 ## 3. 一次 run 的生命周期
 
-`tandem-eval rjob run` 一站式完成 **sync → spec → submit → watch → fetch → cleanup**
+`jevduo-eval rjob run` 一站式完成 **sync → spec → submit → watch → fetch → cleanup**
 （`rjob.run_job`）：
 
 ```
@@ -153,14 +153,14 @@ cleanup  stop（释放资源）+ delete（永久删除 rjob 记录）——默�
 单独盯一个已提交的 job：
 
 ```bash
-tandem-eval rjob watch tandem-<run-id> --run-id <run-id> --config infra/config.json
+jevduo-eval rjob watch jevduo-<run-id> --run-id <run-id> --config infra/config.json
 ```
 
 ## 4. worker 侧入口
 
 `infra/worker.sh <job spec 绝对路径>` 由 rjob worker 调用：
 
-- **mock 基准**：直接用系统 `python3` 跑 `tandem_eval entry`，不碰共享资源与 docker；
+- **mock 基准**：直接用系统 `python3` 跑 `jevduo_eval entry`，不碰共享资源与 docker；
 - **真实基准**：
   1. source 共享 `env.sh`（`OSWORLD_PYTHON` / `EVAL_TOOLS` / `LD_LIBRARY_PATH` 等）；
   2. 把 config 里的 registry 凭据写入 `~/.docker/config.json`（`chmod 600`）；
@@ -168,10 +168,10 @@ tandem-eval rjob watch tandem-<run-id> --run-id <run-id> --config infra/config.j
      固定为 `httpproxy-headless.kubebrain.svc.pjlab.local:3128`，并设置 `NO_PROXY`；
   4. 起 `dockerd`（独立 data-root/exec-root，指向该代理），拉 `inner_image`，
      打 tag 为 `happysixd/osworld-docker:latest`；
-  5. 用 `$OSWORLD_PYTHON` 跑 `tandem_eval entry`（Pillow / easyocr 已在冻结 venv 内），
+  5. 用 `$OSWORLD_PYTHON` 跑 `jevduo_eval entry`（Pillow / easyocr 已在冻结 venv 内），
      跑前先做一次依赖自检。
 
-worker 侧 `tandem_eval entry --spec <spec>` 是实际执行体：起 VM → 跑任务 → 录事件 → 评分 →
+worker 侧 `jevduo_eval entry --spec <spec>` 是实际执行体：起 VM → 跑任务 → 录事件 → 评分 →
 写 run 目录。环境生命周期、预算强制、落盘都在这一层，harness 只管决策。
 
 ## 5. 共享资源（只读）
@@ -229,7 +229,7 @@ OSW2.1 走**独立环境**（独立 runtime / VM / 资产 / venv / env.sh），�
   `desktop_env/providers/docker/provider.py`。
 - **依赖自检**：OSW2.1 的独立 venv 按官方 `uv.lock` 安装，**没有 easyocr**，
   worker 只检查 Pillow；旧环境仍检查 `easyocr + PIL`。
-- **题目清单**：`tandem_eval/manifest.py` 的 `OSWORLD21_TASK_IDS` 覆盖官方001–108题。
+- **题目清单**：`jevduo_eval/manifest.py` 的 `OSWORLD21_TASK_IDS` 覆盖官方001–108题。
   清单不等于环境验收报告；API、VM或评分异常仍记为 `failed_unscored`。
 - **共享环境**：通用VM为 `vm/unified-20261022-complete.qcow2`，经 `prepared/runtime`
   接入环境准备适配。依赖缓存、网站DNS/证书和控制器传输适配在共享环境侧维护，
@@ -288,7 +288,7 @@ worker 侧各段日志：
 ## 10. 开发闭环
 
 ```
-改代码 → ruff check src tests demo → pytest →（若触碰协议）tandem check → 提交
+改代码 → ruff check src tests demo → pytest →（若触碰协议）jevduo check → 提交
 ```
 
 真机 smoke：
@@ -298,7 +298,7 @@ worker 侧各段日志：
 
 ## 11. 浏览器 CDP 语义快照
 
-- `tandem_eval.browser` 在 VM 内通过 loopback 依次探测 `1337` / `9222`，只调用
+- `jevduo_eval.browser` 在 VM 内通过 loopback 依次探测 `1337` / `9222`，只调用
   `GET /json/list` 与 `Runtime.evaluate`，不重启 Chrome、不激活 tab、不执行页面 mutation。
   多 tab 时选择 `document.visibilityState=visible` 的页面。
 - 任务必须已由环境以远程调试参数启动 Chrome；Task 008 的 setup 已显式启用 `1337`。
@@ -320,7 +320,7 @@ worker 侧各段日志：
 
 ## 13. 命名实验
 
-统一使用仓库内 `scripts/run_experiment.sh`，不要直接散落调用 `tandem-eval rjob run`。
+统一使用仓库内 `scripts/run_experiment.sh`，不要直接散落调用 `jevduo-eval rjob run`。
 每次实验必须指定唯一名称（小写字母、数字、连字符），所有结果归档到
 `rjob_logs/<experiment>/`：
 

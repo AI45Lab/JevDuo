@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from tandem.gui.candidates import ActionCandidate, ActionCandidateBuilder
-from tandem.gui.focus import action_key, input_and_menu_context, prune_stalled, toggle_transition
+from jevduo.gui.candidates import ActionCandidate, ActionCandidateBuilder
+from jevduo.gui.focus import action_key, input_and_menu_context, prune_stalled, toggle_transition
 
 from .conftest import A11Y_XML, build_targets
 

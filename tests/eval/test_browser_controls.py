@@ -14,7 +14,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from tandem_eval.browser import VM_SCRIPT
+from jevduo_eval.browser import VM_SCRIPT
 
 
 def _wait_for_cdp_page(opener, process, active_port, page_url, evaluate):

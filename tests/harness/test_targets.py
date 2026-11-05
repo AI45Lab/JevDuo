@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from tandem.gui.semantics import enrich_targets
-from tandem.gui.targets import A11yTargetBuilder
+from jevduo.gui.semantics import enrich_targets
+from jevduo.gui.targets import A11yTargetBuilder
 
 from .conftest import A11Y_XML
 

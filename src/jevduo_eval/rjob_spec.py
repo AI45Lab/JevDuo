@@ -24,7 +24,7 @@ from .config_schema import select_api
 
 
 def job_name(run_id: str) -> str:
-    return f"tandem-{run_id}"
+    return f"jevduo-{run_id}"
 
 
 def _git_describe(repo_root: Path) -> str:

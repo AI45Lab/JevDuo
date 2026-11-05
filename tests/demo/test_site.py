@@ -105,7 +105,7 @@ def test_demo_layer_does_not_import_harness():
     offenders = []
     for path in (REPO_ROOT / "demo").rglob("*.py"):
         text = path.read_text(encoding="utf-8", errors="replace")
-        if re.search(r"^\s*(from|import)\s+tandem(_eval)?\b", text, re.MULTILINE):
+        if re.search(r"^\s*(from|import)\s+jevduo(_eval)?\b", text, re.MULTILINE):
             offenders.append(str(path.relative_to(REPO_ROOT)))
     assert offenders == []
 

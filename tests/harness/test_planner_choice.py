@@ -5,12 +5,12 @@ from unittest.mock import Mock, patch
 
 from PIL import Image
 
-from tandem.components import build_default
-from tandem.config import SessionConfig
-from tandem.models.planner_choice import PlannerChoicePolicy
-from tandem.models.ranking import ranking_dict
-from tandem.models.slow import SlowModelClient
-from tandem_eval.entry import build_session
+from jevduo.components import build_default
+from jevduo.config import SessionConfig
+from jevduo.models.planner_choice import PlannerChoicePolicy
+from jevduo.models.ranking import ranking_dict
+from jevduo.models.slow import SlowModelClient
+from jevduo_eval.entry import build_session
 
 from .conftest import build_space, build_targets
 from .test_slow_transport import _Response
@@ -45,10 +45,10 @@ def test_api_selector_sees_the_same_offered_actions_and_image(tmp_path):
 
 def test_planner_backend_does_not_construct_or_discover_jev(tmp_path):
     config = SessionConfig(execution_mode="goal", fast_backend="planner")
-    with patch("tandem.components.JevOmniPolicy") as jev:
+    with patch("jevduo.components.JevOmniPolicy") as jev:
         components = build_default(client=Mock(), endpoint="", config=config)
         assert isinstance(components.selector, PlannerChoicePolicy)
-        with patch("tandem_eval.entry.resolve_fast_model_endpoint") as discover:
+        with patch("jevduo_eval.entry.resolve_fast_model_endpoint") as discover:
             session = build_session({"benchmark": "osworld21", "output_root": str(tmp_path),
                 "harness_config": {"execution_mode": "goal", "fast_backend": "planner"},
                 "secrets": {"slow_model": {"base_url": "http://synthetic"}}})

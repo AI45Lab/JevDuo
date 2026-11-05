@@ -1,6 +1,6 @@
 """demo 读取层：结果目录 → 站点数据契约。
 
-**边界**（见 `demo/README.md`）：不 import `tandem` / `tandem_eval`、不调模型、不碰 VM。
+**边界**（见 `demo/README.md`）：不 import `jevduo` / `jevduo_eval`、不调模型、不碰 VM。
 唯一输入是 `docs/RESULT_DIR_CONTRACT.md` 描述的结果目录契约。
 
 **为什么拆成包**：老 `demo/adapter.py` 一个模块同时干了"读目录 / 算指标 / 拼 HTML"，

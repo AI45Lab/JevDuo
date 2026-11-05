@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from tandem.protocol import (
+from jevduo.protocol import (
     ProtocolValidationError,
     action_from_dict,
     observation_from_dict,

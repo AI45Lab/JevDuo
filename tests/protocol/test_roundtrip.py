@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from tandem.protocol import action_from_dict, iter_samples, observation_from_dict, receipt_from_dict
+from jevduo.protocol import action_from_dict, iter_samples, observation_from_dict, receipt_from_dict
 
 _DISPATCH = {
     "action": action_from_dict,

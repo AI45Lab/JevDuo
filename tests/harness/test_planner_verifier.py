@@ -7,8 +7,8 @@ import json
 
 import pytest
 
-from tandem.planning.planner import plan_step
-from tandem.verification.verifier import task_requirements, verify_observation
+from jevduo.planning.planner import plan_step
+from jevduo.verification.verifier import task_requirements, verify_observation
 
 from .conftest import A11Y_XML, build_targets
 

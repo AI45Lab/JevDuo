@@ -6,7 +6,7 @@
 
 ## 边界（硬约束）
 
-demo 层与 harness **完全解耦**：不 import `tandem` / `tandem_eval`、不调模型、不碰 VM。
+demo 层与 harness **完全解耦**：不 import `jevduo` / `jevduo_eval`、不调模型、不碰 VM。
 唯一输入是 `docs/RESULT_DIR_CONTRACT.md` 描述的结果目录契约 + `demo/data/` 里的
 官方数据快照。`tests/demo/test_site.py` 有一条断言专门守这条边界。
 

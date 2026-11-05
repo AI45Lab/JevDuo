@@ -1,4 +1,4 @@
-"""停止条件。墙钟/步数预算的强制执行在 tandem_eval.runner（M2）；
+"""停止条件。墙钟/步数预算的强制执行在 jevduo_eval.runner（M2）；
 本模块提供 harness 侧的判定与 no_action 上限常量（与旧仓库行为一致）。"""
 
 from __future__ import annotations

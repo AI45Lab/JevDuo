@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from tandem.protocol import (
+from jevduo.protocol import (
     ProtocolValidationError,
     action_from_dict,
     iter_samples,
@@ -53,7 +53,7 @@ def test_sample_validates(name, data):
 
 
 def test_malformed_sample_filename_rejected(tmp_path, monkeypatch):
-    from tandem.protocol import samples as samples_mod
+    from jevduo.protocol import samples as samples_mod
 
     bad = tmp_path / "bogus_thing.json"
     bad.write_text("{}", encoding="utf-8")

@@ -4,9 +4,9 @@ from dataclasses import replace
 
 import pytest
 
-from tandem.gui.candidates import ActionCandidateBuilder
-from tandem.gui.semantics import enrich_targets
-from tandem.gui.targets import A11yTargetBuilder
+from jevduo.gui.candidates import ActionCandidateBuilder
+from jevduo.gui.semantics import enrich_targets
+from jevduo.gui.targets import A11yTargetBuilder
 
 from .test_semantics import CHROME_XML, _named, _targets
 

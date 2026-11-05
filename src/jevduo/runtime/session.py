@@ -1,7 +1,7 @@
-"""TandemSession：planner_led 决策状态机（obs → action）。
+"""JevDuoSession：planner_led 决策状态机（obs → action）。
 
 旧仓库 runtime.run_episode 的决策循环按消息层协议重表达：环境生命周期/预算强制/落盘/
-评分归 tandem_eval；回执验证与终态裁决在同包 episode.py。行为对齐旧实现，
+评分归 jevduo_eval；回执验证与终态裁决在同包 episode.py。行为对齐旧实现，
 差异见 DEVIATIONS.md。
 """
 
@@ -23,7 +23,7 @@ from .stages import StageExecution, recovery_scopes
 from .stopping import NO_ACTION_LIMIT, budget_exhausted
 
 
-class TandemSession:
+class JevDuoSession:
     def __init__(self, components: Components, *, config: SessionConfig | None = None):
         self.components = components
         self.config = config or SessionConfig()

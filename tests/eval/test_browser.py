@@ -2,7 +2,7 @@
 
 import json
 
-from tandem_eval.browser import VM_SCRIPT, capture_browser_snapshot
+from jevduo_eval.browser import VM_SCRIPT, capture_browser_snapshot
 
 
 class Controller:

@@ -1,7 +1,7 @@
 # 结果目录契约（Result Directory Contract）
 
 > eval ↔ demo/分析 的唯一接口。demo/分析工具只读本契约描述的目录；任何一侧改动必须先改本文档。
-> 契约版本：`v0.3`。tandem_eval.recorder 是唯一写入者。
+> 契约版本：`v0.3`。jevduo_eval.recorder 是唯一写入者。
 
 ## run 目录（`rjob_logs/<run_id>/`，唯一落盘位置）
 

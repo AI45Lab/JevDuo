@@ -6,18 +6,18 @@ from unittest.mock import Mock
 
 import pytest
 
-from tandem.gui.goal_candidates import (
+from jevduo.gui.goal_candidates import (
     foreground_tree,
     goal_candidates,
     modal_frontier,
     portal_needs_grounding,
 )
-from tandem.gui.interaction import GuiInteractionController, target_effect
-from tandem.gui.semantics import enrich_targets
-from tandem.memory.context import execution_context, planning_context, verification_context
-from tandem.memory.state import TaskMemory
-from tandem.runtime.goal_stage import ObservationRequired
-from tandem.verification.verifier import verify_observation
+from jevduo.gui.interaction import GuiInteractionController, target_effect
+from jevduo.gui.semantics import enrich_targets
+from jevduo.memory.context import execution_context, planning_context, verification_context
+from jevduo.memory.state import TaskMemory
+from jevduo.runtime.goal_stage import ObservationRequired
+from jevduo.verification.verifier import verify_observation
 
 from .conftest import build_space, build_targets, cli_receipt, make_observation
 from .test_goal_memory import session

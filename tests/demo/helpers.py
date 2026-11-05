@@ -1,8 +1,8 @@
 """demo 单测的合成结果目录构造器。
 
 造的是符合 `docs/RESULT_DIR_CONTRACT.md` v0.2 的 run 目录，不依赖
-`rjob_logs/` 里的真实 run（CI 上没有），也不 import `tandem` /
-`tandem_eval`——demo 与 harness 完全解耦，这条边界本身就是被测项之一。
+`rjob_logs/` 里的真实 run（CI 上没有），也不 import `jevduo` /
+`jevduo_eval`——demo 与 harness 完全解耦，这条边界本身就是被测项之一。
 """
 
 from __future__ import annotations

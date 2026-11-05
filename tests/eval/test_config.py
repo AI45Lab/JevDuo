@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from tandem_eval.config_schema import ConfigError, api_names, select_api
-from tandem_eval.rjob import load_config
+from jevduo_eval.config_schema import ConfigError, api_names, select_api
+from jevduo_eval.rjob import load_config
 
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "infra" / "config.example.json"
 
@@ -91,8 +91,8 @@ def test_paths_are_absolute_and_credentials_inlined():
     assert config["eval"]["inner_image"].startswith("registry.")
     assert config["eval"]["rjob"]["image"].startswith("registry.")
     assert "auths" in config["eval"]["registry"]
-    assert config["log"]["results_root"].endswith("tandem/rjob_logs")
-    assert config["eval"]["repo_root"].endswith("/tandem")
+    assert config["log"]["results_root"].endswith("jevduo/rjob_logs")
+    assert config["eval"]["repo_root"].endswith("/jevduo")
 
 
 def test_mounts_cover_both_volumes_without_duplicate_sources():
@@ -199,7 +199,7 @@ def test_osworld21_inner_image_must_be_release_pinned(tmp_path):
 
 def test_cli_model_flags_reach_spec_overrides(monkeypatch):
     """启动命令按名字切大脑/小脑：--slow-model / --fast-model 进 spec 的 models 段。"""
-    from tandem_eval.__main__ import main
+    from jevduo_eval.__main__ import main
 
     captured: dict = {}
 
@@ -207,7 +207,7 @@ def test_cli_model_flags_reach_spec_overrides(monkeypatch):
         captured.update(kwargs)
         return {"status": "succeeded"}
 
-    monkeypatch.setattr("tandem_eval.rjob.run_job", fake_run_job)
+    monkeypatch.setattr("jevduo_eval.rjob.run_job", fake_run_job)
     code = main(["rjob", "run", "--run-id", "r1", "--benchmark", "mock",
                  "--config", str(CONFIG_PATH),
                  "--slow-model", "kimi-k3", "--fast-model", "kev"])
@@ -222,7 +222,7 @@ def test_real_config_is_gitignored_with_example_committed():
 
 
 def test_endpoint_discovery_prefers_explicit_then_file(tmp_path):
-    from tandem_eval.entry import read_endpoint_file, resolve_fast_model_endpoint
+    from jevduo_eval.entry import read_endpoint_file, resolve_fast_model_endpoint
 
     f = tmp_path / "endpoint.json"
     f.write_text(json.dumps({"base_url": "http://10.9.9.9:8891/"}), encoding="utf-8")
@@ -240,7 +240,7 @@ def test_endpoint_discovery_prefers_explicit_then_file(tmp_path):
 
 def test_endpoint_file_symlink_view_fallback(tmp_path, monkeypatch):
     """给定路径不可读时，自动尝试另一挂载视角的等价路径（前缀翻译）。"""
-    from tandem_eval import entry as entry_mod
+    from jevduo_eval import entry as entry_mod
 
     user_dir = tmp_path / "user-view"
     canonical_dir = tmp_path / "canonical-view"
@@ -256,7 +256,7 @@ def test_endpoint_file_symlink_view_fallback(tmp_path, monkeypatch):
 
 def test_endpoint_file_respects_readiness_flag(tmp_path):
     """发现文件标记未就绪时快速失败，不调用半启动的服务。"""
-    from tandem_eval.entry import read_endpoint_file
+    from jevduo_eval.entry import read_endpoint_file
 
     f = tmp_path / "svc.json"
     f.write_text(json.dumps({"status": "starting", "ready": False,

@@ -6,13 +6,13 @@ import json
 
 import pytest
 
-from tandem.components import build_default
-from tandem.config import SessionConfig
-from tandem.models.jev import JevOmniPolicy
-from tandem.models.kev import KevPolicy
-from tandem.models.ranking import ranking_dict
-from tandem.planning.planner import plan_step
-from tandem.planning.stage_planner import plan_stage
+from jevduo.components import build_default
+from jevduo.config import SessionConfig
+from jevduo.models.jev import JevOmniPolicy
+from jevduo.models.kev import KevPolicy
+from jevduo.models.ranking import ranking_dict
+from jevduo.planning.planner import plan_step
+from jevduo.planning.stage_planner import plan_stage
 
 from ..harness.conftest import build_space, build_targets
 
@@ -97,7 +97,7 @@ def test_rank_single_candidate_skips_action_request(tmp_path):
 
 
 def test_missing_probability_counts_as_zero(tmp_path):
-    from tandem.gui.candidates import ActionCandidate
+    from jevduo.gui.candidates import ActionCandidate
 
     policy, _ = _policy(tmp_path, [_answer({"type_text": 1.0})])
     targets = build_targets()

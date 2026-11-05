@@ -2,13 +2,13 @@
 
 from dataclasses import replace
 
-from tandem.gui.candidates import ActionCandidate
-from tandem.gui.compile import gui_action
-from tandem.gui.goal_candidates import goal_candidates
-from tandem.gui.interaction import GuiInteractionController
-from tandem.memory.context import execution_context, planning_context
-from tandem.memory.state import TaskMemory
-from tandem.planning.goal_planner import goal_error
+from jevduo.gui.candidates import ActionCandidate
+from jevduo.gui.compile import gui_action
+from jevduo.gui.goal_candidates import goal_candidates
+from jevduo.gui.interaction import GuiInteractionController
+from jevduo.memory.context import execution_context, planning_context
+from jevduo.memory.state import TaskMemory
+from jevduo.planning.goal_planner import goal_error
 
 from .conftest import build_space
 from .test_goal_execution import _space

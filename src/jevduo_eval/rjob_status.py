@@ -21,7 +21,7 @@ _STATUS_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 ]
 # rjob get 的任务计数字典（{'active': 0, 'failed': 0, ...}）含状态词字样，须先剔除再关键词匹配
 _COUNT_DICT_RE = re.compile(r"['\"]\w+['\"]\s*:\s*\d+")
-# 首选：状态行本体，如 "rjob tandem-x: Succeeded" / "replica tandem-x-abc: SUCCEED"
+# 首选：状态行本体，如 "rjob jevduo-x: Succeeded" / "replica jevduo-x-abc: SUCCEED"
 _STATUS_LINE_RE = re.compile(r"(?i)\b(?:rjob|replica)\s+\S+:\s*([a-z_]+)")
 
 

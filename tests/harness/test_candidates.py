@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tandem.gui.candidates import ActionCandidateBuilder
+from jevduo.gui.candidates import ActionCandidateBuilder
 
 from .conftest import A11Y_XML, build_targets
 
