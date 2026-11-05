@@ -11,15 +11,15 @@ from unittest.mock import Mock, patch
 import pytest
 from PIL import Image
 
-from tandem.config import SessionConfig
-from tandem.gui.candidates import ActionCandidate
-from tandem.memory.state import TaskMemory
-from tandem.models.jev import JevOmniPolicy
-from tandem.models.ranking import Ranking
-from tandem.models.slow import SlowModelClient
-from tandem.protocol.models import BrowserSnapshot
-from tandem.runtime.goal_stage import ObservationRequired
-from tandem.verification.goal_verifier import verify_goal
+from jevduo.config import SessionConfig
+from jevduo.gui.candidates import ActionCandidate
+from jevduo.memory.state import TaskMemory
+from jevduo.models.jev import JevOmniPolicy
+from jevduo.models.ranking import Ranking
+from jevduo.models.slow import SlowModelClient
+from jevduo.protocol.models import BrowserSnapshot
+from jevduo.runtime.goal_stage import ObservationRequired
+from jevduo.verification.goal_verifier import verify_goal
 
 from .conftest import build_space, build_targets, gui_receipt, make_observation
 from .test_goal_memory import session
@@ -68,7 +68,7 @@ def test_goal_passes_cdp_enriched_semantics_to_planner_and_selector(tmp_path):
 
 
 def test_joint_goal_choices_retain_main_endpoint_recovery(monkeypatch):
-    monkeypatch.setattr("tandem.models.jev.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("jevduo.models.jev.time.sleep", lambda seconds: None)
     targets = build_targets()
     space = build_space(targets)
     space.target_heads = {"click": space.target_heads["click"][:1]}
@@ -195,7 +195,7 @@ def test_exhausted_grounding_keeps_existing_legal_actions_available(tmp_path, mo
     client = Mock()
     s.components.stage_verifier = lambda *a, **kw: verify_goal(client, *a, **kw)
     now = [100.0]
-    monkeypatch.setattr("tandem.runtime.goal_stage.time.monotonic", lambda: now[0])
+    monkeypatch.setattr("jevduo.runtime.goal_stage.time.monotonic", lambda: now[0])
 
     def ground(*args):
         if budget == "elapsed":
@@ -292,7 +292,7 @@ def test_waiting_outside_grounder_does_not_consume_visual_recovery_time(tmp_path
     s = session()
     s.begin("Open the application", requirements())
     now = [100.0]
-    monkeypatch.setattr("tandem.runtime.goal_stage.time.monotonic", lambda: now[0])
+    monkeypatch.setattr("jevduo.runtime.goal_stage.time.monotonic", lambda: now[0])
     s.components.grounder = Mock(return_value=[_visual()])
     before = _shell_observation(tmp_path / "before")
     with pytest.raises(ObservationRequired):

@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from tandem_eval.rjob import (
+from jevduo_eval.rjob import (
     RjobClient,
     RjobError,
     build_job_spec,
@@ -46,7 +46,7 @@ def test_parse_status_real_captured_outputs():
 def test_submit_args_include_mount_and_worker_entrypoint():
     args = build_submit_args(config=CONFIG, run_id="r1")
     joined = " ".join(args)
-    assert "--name=tandem-r1" in joined
+    assert "--name=jevduo-r1" in joined
     assert "--charged-group=evobox_proxy" in joined
     assert "--private-machine=group" in joined
     assert "--mount=gpfs://gpfs2/share:/mnt/share" in joined
@@ -90,7 +90,7 @@ def test_build_job_spec_selects_models_by_name(tmp_path):
 
 
 def test_build_job_spec_rejects_unknown_model_name(tmp_path):
-    from tandem_eval.config_schema import ConfigError
+    from jevduo_eval.config_schema import ConfigError
 
     config = with_paths(CONFIG, deploy_root=str(tmp_path / "deploy"))
     with pytest.raises(ConfigError, match="可选"):
@@ -231,7 +231,7 @@ def test_fetch_artifacts_writes_platform_logs_into_run_root(tmp_path):
     assert (run_root / "platform.status.txt").read_text() == "status"
     assert (run_root / "platform.tail.log").read_text() == "logs"
     assert (run_root / "worker" / "dockerd.log").is_file()  # run 数据原样保留
-    assert job_name("r1") == "tandem-r1"
+    assert job_name("r1") == "jevduo-r1"
 
 
 def test_fetch_artifacts_tolerates_cli_crash(tmp_path):
@@ -256,7 +256,7 @@ def test_run_job_fetch_failure_never_skips_cleanup(tmp_path, monkeypatch):
     def exploding_fetch(*args, **kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr("tandem_eval.rjob.fetch_artifacts", exploding_fetch)
+    monkeypatch.setattr("jevduo_eval.rjob.fetch_artifacts", exploding_fetch)
     result = run_job(config=config,
                      repo_root=tmp_path, run_id="r3", spec_overrides={},
                      client=RjobClient(runner),
@@ -268,7 +268,7 @@ def test_run_job_fetch_failure_never_skips_cleanup(tmp_path, monkeypatch):
 
 
 def test_env_section_seeds_setup_cache_for_osw1():
-    from tandem_eval.rjob_spec import _env_section
+    from jevduo_eval.rjob_spec import _env_section
 
     section = _env_section("osworld1", CONFIG)
     assert section["root"] == "/shared/osw1"
@@ -278,6 +278,6 @@ def test_env_section_seeds_setup_cache_for_osw1():
 
 def test_rsync_never_deletes_job_specs():
     """job_specs 在部署副本里而非源仓库，必须排除出 rsync --delete（并发 run 互踩根因）。"""
-    from tandem_eval.rjob import RSYNC_EXCLUDES
+    from jevduo_eval.rjob import RSYNC_EXCLUDES
 
     assert "job_specs/" in RSYNC_EXCLUDES

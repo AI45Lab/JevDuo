@@ -8,17 +8,17 @@ from unittest.mock import Mock
 import pytest
 from PIL import Image
 
-from tandem.gui.candidates import ActionCandidate
-from tandem.gui.compile import gui_action
-from tandem.gui.goal_candidates import application_mismatch, document_frontier, input_frontier, modal_frontier
-from tandem.gui.grounding import ground_visual
-from tandem.gui.semantics import enrich_targets
-from tandem.memory.context import planning_context
-from tandem.memory.state import TaskMemory
-from tandem.models.ranking import Ranking
-from tandem.planning.goal_planner import goal_error, goal_requirements, plan_goal
-from tandem.runtime.goal_stage import _action_key, _target_effect, _visual_changed
-from tandem.verification.goal_verifier import result_error, verify_goal
+from jevduo.gui.candidates import ActionCandidate
+from jevduo.gui.compile import gui_action
+from jevduo.gui.goal_candidates import application_mismatch, document_frontier, input_frontier, modal_frontier
+from jevduo.gui.grounding import ground_visual
+from jevduo.gui.semantics import enrich_targets
+from jevduo.memory.context import planning_context
+from jevduo.memory.state import TaskMemory
+from jevduo.models.ranking import Ranking
+from jevduo.planning.goal_planner import goal_error, goal_requirements, plan_goal
+from jevduo.runtime.goal_stage import _action_key, _target_effect, _visual_changed
+from jevduo.verification.goal_verifier import result_error, verify_goal
 
 from .conftest import build_space, make_observation
 from .test_goal_execution import _space
@@ -53,7 +53,7 @@ def test_native_date_uses_observed_segments_and_checks_iso_value(order, suffix):
                        name="Departure date" if t.id == original.id else t.name) for t in targets]
     target = next(t for t in enrich_targets(targets, FORM, (1920, 1080), snapshot)
                   if t.name == "Departure date")
-    from tandem.gui.goal_candidates import goal_candidates
+    from jevduo.gui.goal_candidates import goal_candidates
 
     inputs = [{"label": "Travel date", "target_hint": "Departure date", "text": "2026-03-25",
                "input_mode": "replace"}]
@@ -272,7 +272,7 @@ def test_anonymous_shell_strip_is_not_renamed_to_activities():
       <label name="Activities" screencoord="(18,5)" size="(63,17)"/>
       <push_button screencoord="(62,33)" size="(8,883)"/>
       </application></desktop-frame>'''
-    from tandem.gui.targets import A11yTargetBuilder
+    from jevduo.gui.targets import A11yTargetBuilder
 
     raw = A11yTargetBuilder().build(tree, "t", 128, infer_button_labels=True)
     targets = enrich_targets(raw, tree, (1920, 1080))
@@ -326,7 +326,7 @@ def test_planner_method_or_unproven_policy_error_is_recoverable(tmp_path, constr
 
 
 def test_duplicate_buttons_keep_row_context_and_identity_after_layout_shift():
-    from tandem.gui.candidates import ActionCandidateBuilder
+    from jevduo.gui.candidates import ActionCandidateBuilder
 
     snapshot = {"elements": [{"index": index, "role": "push_button", "name": "Select",
         "nearby_text": row, "x": 100, "y": 100 * index, "width": 80, "height": 30,

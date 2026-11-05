@@ -6,10 +6,10 @@ from unittest.mock import Mock
 
 import pytest
 
-from tandem.gui.goal_candidates import _input_target, goal_candidates
-from tandem.gui.interaction import GuiInteractionController
-from tandem.gui.semantics import enrich_targets
-from tandem.memory.state import TaskMemory
+from jevduo.gui.goal_candidates import _input_target, goal_candidates
+from jevduo.gui.interaction import GuiInteractionController
+from jevduo.gui.semantics import enrich_targets
+from jevduo.memory.state import TaskMemory
 
 from .conftest import build_space
 from .test_goal_execution import _space
@@ -103,7 +103,7 @@ def test_returning_to_seen_controls_is_not_endless_new_content():
 
 
 def test_visual_dialog_name_variants_share_failure_and_grounding_budget():
-    from tandem.gui.candidates import ActionCandidate
+    from jevduo.gui.candidates import ActionCandidate
 
     controller, memory, _ = _controller()
     tree = '<desktop-frame foreground_class=\'["editorapp"]\' foreground_title="Document"/>'
@@ -188,7 +188,7 @@ def test_unresolved_scope_recovery_omits_future_edit_values_and_exit_conditions(
 def test_verify_navigation_cannot_reclaim_a_historical_save(tmp_path):
     from PIL import Image
 
-    from tandem.verification.goal_verifier import verify_goal
+    from jevduo.verification.goal_verifier import verify_goal
 
     _, memory, _ = _controller()
     path = tmp_path / "screen.png"
@@ -214,8 +214,8 @@ def test_verify_navigation_cannot_reclaim_a_historical_save(tmp_path):
 def test_invalid_verify_output_is_uncertain_not_task_success_or_api_failure(tmp_path):
     from PIL import Image
 
-    from tandem.models.slow import ModelResponseError
-    from tandem.verification.goal_verifier import verify_goal
+    from jevduo.models.slow import ModelResponseError
+    from jevduo.verification.goal_verifier import verify_goal
 
     _, memory, _ = _controller()
     path = tmp_path / "screen.png"
@@ -233,11 +233,11 @@ def test_invalid_verify_output_is_uncertain_not_task_success_or_api_failure(tmp_
 def test_missing_current_target_triggers_grounding_despite_other_controls(tmp_path):
     import pytest
 
-    from tandem.config import SessionConfig
-    from tandem.gui.candidates import ActionCandidate
-    from tandem.models.ranking import Ranking
-    from tandem.runtime.goal_stage import ObservationRequired
-    from tandem.runtime.session import TandemSession
+    from jevduo.config import SessionConfig
+    from jevduo.gui.candidates import ActionCandidate
+    from jevduo.models.ranking import Ranking
+    from jevduo.runtime.goal_stage import ObservationRequired
+    from jevduo.runtime.session import JevDuoSession
 
     from .conftest import make_components, make_observation
 
@@ -248,7 +248,7 @@ def test_missing_current_target_triggers_grounding_despite_other_controls(tmp_pa
         metadata={"visual_point": [20, 40]})])
     components.selector.rank = Mock(return_value=Ranking(
         components.grounder.return_value[0], [], [], 0, 0, 1, True))
-    session = TandemSession(components, config=SessionConfig(execution_mode="goal"))
+    session = JevDuoSession(components, config=SessionConfig(execution_mode="goal"))
     session.begin("Choose a visible option", requirements())
     session.goal.memory.start({**plan(), "inputs": [{"label": "Requested option", "text": "Option B",
          "target_hint": "Requested option", "kind": "choice", "input_mode": "replace"}]}, 0)
@@ -260,16 +260,16 @@ def test_missing_current_target_triggers_grounding_despite_other_controls(tmp_pa
 
 
 def test_invalid_planner_output_is_an_agent_stop_not_an_external_api_failure(tmp_path):
-    from tandem.config import SessionConfig
-    from tandem.models.slow import ModelResponseError
-    from tandem.runtime.session import TandemSession
+    from jevduo.config import SessionConfig
+    from jevduo.models.slow import ModelResponseError
+    from jevduo.runtime.session import JevDuoSession
 
     from .conftest import make_components, make_observation
 
     planner = Mock(side_effect=ModelResponseError("Unrepairable structured output"))
     components = make_components(planner, Mock(), Mock())
     components.memory_factory = TaskMemory
-    session = TandemSession(components, config=SessionConfig(execution_mode="goal"))
+    session = JevDuoSession(components, config=SessionConfig(execution_mode="goal"))
     session.begin("Edit", requirements())
     action = session.act(make_observation(tmp_path, 0))
     assert action.kind == "fail" and action.reason == "planner_output_invalid"

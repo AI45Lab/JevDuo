@@ -3,14 +3,14 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from tandem.config import SessionConfig
-from tandem.gui.candidates import ActionCandidateBuilder
-from tandem.gui.proposals import focused_candidates
-from tandem.gui.semantics import enrich_targets
-from tandem.gui.targets import A11yTargetBuilder
-from tandem.protocol.models import GuiAction
-from tandem.runtime.session import TandemSession
-from tandem.runtime.stages import StageExecution
+from jevduo.config import SessionConfig
+from jevduo.gui.candidates import ActionCandidateBuilder
+from jevduo.gui.proposals import focused_candidates
+from jevduo.gui.semantics import enrich_targets
+from jevduo.gui.targets import A11yTargetBuilder
+from jevduo.protocol.models import GuiAction
+from jevduo.runtime.session import JevDuoSession
+from jevduo.runtime.stages import StageExecution
 
 from .conftest import FixedSelector, ScriptedPlanner, ScriptedVerifier, make_components, make_observation
 
@@ -102,7 +102,7 @@ def test_unbound_stage_reaches_selector_instead_of_failing_before_jev(tmp_path):
     proposals = [{"operation": "click", "target_name": "Missing", "target_role": "link"}]
     planner = ScriptedPlanner([_plan_with(proposals)])
     selector = FixedSelector()
-    session = TandemSession(
+    session = JevDuoSession(
         make_components(planner, ScriptedVerifier([]), selector),
         config=SessionConfig(execution_mode="stage"),
     )
@@ -117,7 +117,7 @@ def test_bound_but_unexecutable_scroll_gets_keyboard_recovery(tmp_path):
     proposals = [{"operation": "scroll_down", "target_name": "File", "target_role": "menu"}]
     planner = ScriptedPlanner([_plan_with(proposals)])
     selector = FixedSelector()
-    session = TandemSession(
+    session = JevDuoSession(
         make_components(planner, ScriptedVerifier([]), selector),
         config=SessionConfig(execution_mode="stage"),
     )

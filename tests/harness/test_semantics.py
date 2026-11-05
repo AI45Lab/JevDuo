@@ -2,11 +2,11 @@
 
 import json
 
-from tandem.gui.candidates import ActionCandidateBuilder
-from tandem.gui.proposals import focused_candidates
-from tandem.gui.semantics import enrich_targets
-from tandem.gui.targets import A11yTargetBuilder
-from tandem.models.ranking import build_choice_requests
+from jevduo.gui.candidates import ActionCandidateBuilder
+from jevduo.gui.proposals import focused_candidates
+from jevduo.gui.semantics import enrich_targets
+from jevduo.gui.targets import A11yTargetBuilder
+from jevduo.models.ranking import build_choice_requests
 
 CHROME_XML = """<application name="Google Chrome" active="true"
  xmlns:cp="https://accessibility.ubuntu.example.org/ns/component"

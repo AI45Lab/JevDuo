@@ -25,7 +25,7 @@ assert _spec.loader is not None
 _spec.loader.exec_module(batch_summary)
 
 #: 不产生 UI 动作的赢家。真机路径下 grounder 是关闭的
-#: （`tandem_eval/entry.py` 显式传 `grounder=None`），因此 `visual_fallback`
+#: （`jevduo_eval/entry.py` 显式传 `grounder=None`），因此 `visual_fallback`
 #: 与 `return_to_planner` **都**编译不出动作，两者都是真空转。
 #: （2026-10-25 修正：旧口径只数 `return_to_planner`，把真实空转率低估了一半。）
 NOOP_OPERATIONS = ("return_to_planner", "visual_fallback")

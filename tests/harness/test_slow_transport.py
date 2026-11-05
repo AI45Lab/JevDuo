@@ -11,8 +11,8 @@ import urllib.request
 import pytest
 from PIL import Image
 
-from tandem.config import SessionConfig
-from tandem.models.slow import ModelResponseError, SlowModelClient
+from jevduo.config import SessionConfig
+from jevduo.models.slow import ModelResponseError, SlowModelClient
 
 
 class _Response:
@@ -41,7 +41,7 @@ def test_remote_disconnect_is_retried(tmp_path, monkeypatch):
         return _Response()
 
     monkeypatch.setattr(urllib.request, "urlopen", opener)
-    monkeypatch.setattr("tandem.models.slow.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("jevduo.models.slow.time.sleep", lambda seconds: None)
     client = SlowModelClient({"base_url": "http://slow"}, SessionConfig(), tmp_path / "audit.jsonl")
     value = client.json_request([{"role": "user", "content": "x"}], lambda value: True, role="plan_stage")
     assert value == {"done": True}
@@ -66,7 +66,7 @@ def test_api_envelope_failure_is_not_classified_as_invalid_model_content(
         return Response()
 
     monkeypatch.setattr(urllib.request, "urlopen", opener)
-    monkeypatch.setattr("tandem.models.slow.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("jevduo.models.slow.time.sleep", lambda seconds: None)
     client = SlowModelClient({"base_url": "http://synthetic"}, SessionConfig(), tmp_path / "audit.jsonl")
     with pytest.raises(ValueError) as raised:
         client.json_request([{"role": "user", "content": "plan"}], lambda value: True, role="plan_stage")
@@ -91,7 +91,7 @@ def test_truncated_goal_plan_requests_a_compact_repair_without_using_partial_out
         return Response()
 
     monkeypatch.setattr(urllib.request, "urlopen", opener)
-    monkeypatch.setattr("tandem.models.slow.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("jevduo.models.slow.time.sleep", lambda seconds: None)
     config = SessionConfig(execution_mode=mode, slow_reasoning_effort="max", slow_max_tokens=32768)
     client = SlowModelClient({"base_url": "http://synthetic"}, config, tmp_path / "audit.jsonl")
     value = client.json_request([{"role": "user", "content": "plan"}],
@@ -110,7 +110,7 @@ def test_task_deadline_bounds_api_timeout_and_stops_retry_before_worker_is_kille
         clock[0] += timeout
         raise TimeoutError("read timed out")
 
-    monkeypatch.setattr("tandem.models.slow.time.perf_counter", lambda: clock[0])
+    monkeypatch.setattr("jevduo.models.slow.time.perf_counter", lambda: clock[0])
     monkeypatch.setattr(urllib.request, "urlopen", opener)
     client = SlowModelClient({"base_url": "http://synthetic"}, SessionConfig(), tmp_path / "audit.jsonl")
     client.set_deadline(105.0)
@@ -189,7 +189,7 @@ def test_goal_rechecks_body_limit_after_json_repair(tmp_path, monkeypatch):
         return Response()
 
     monkeypatch.setattr(urllib.request, "urlopen", opener)
-    monkeypatch.setattr("tandem.models.slow.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("jevduo.models.slow.time.sleep", lambda seconds: None)
     client = SlowModelClient({"base_url": "http://synthetic"}, config, tmp_path / "audit.jsonl")
     messages = [{"role": "user", "content": "plan"}]
     with pytest.raises(ValueError, match="exceeds slow_max_request_bytes"):
@@ -201,7 +201,7 @@ def test_goal_rechecks_body_limit_after_json_repair(tmp_path, monkeypatch):
 
 @pytest.fixture
 def endpoint_client(tmp_path, monkeypatch):
-    monkeypatch.setattr("tandem.models.slow.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("jevduo.models.slow.time.sleep", lambda seconds: None)
     return SlowModelClient({
         "base_url": "http://gateway/v1/", "model": "MiniMax-M3.1-Flash",
         "api_key": "test-only-gateway-key",
@@ -327,7 +327,7 @@ def test_gateway_retries_honor_retry_after_and_remain_bounded(
                                      io.BytesIO(b'{"error":{"message":"busy"}}'))
 
     monkeypatch.setattr(urllib.request, "urlopen", opener)
-    monkeypatch.setattr("tandem.models.slow.time.sleep", waits.append)
+    monkeypatch.setattr("jevduo.models.slow.time.sleep", waits.append)
     with pytest.raises(RuntimeError, match=f"status={status}"):
         endpoint_client.json_request([{"role": "user", "content": "plan"}], lambda v: True,
                                      role="plan_stage")
@@ -346,7 +346,7 @@ def test_gateway_429_can_recover_on_last_attempt(endpoint_client, monkeypatch):
         return _Response()
 
     monkeypatch.setattr(urllib.request, "urlopen", opener)
-    monkeypatch.setattr("tandem.models.slow.time.sleep", waits.append)
+    monkeypatch.setattr("jevduo.models.slow.time.sleep", waits.append)
     assert endpoint_client.json_request([{"role": "user", "content": "plan"}], lambda v: True,
                                         role="plan_stage") == {"done": True}
     assert len(calls) == 3 and waits == [30, 30]

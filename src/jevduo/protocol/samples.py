@@ -1,5 +1,5 @@
 """golden 样例加载：samples/ 下每个 *.json 按 <category>_<name>.json 命名，
-category ∈ {action, observation, receipt}。tandem check 与 tests/protocol 共用。"""
+category ∈ {action, observation, receipt}。jevduo check 与 tests/protocol 共用。"""
 
 from __future__ import annotations
 

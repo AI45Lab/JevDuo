@@ -1,4 +1,4 @@
-"""TandemSession：planner_led 决策状态机（组件全 mock，场景级）。"""
+"""JevDuoSession：planner_led 决策状态机（组件全 mock，场景级）。"""
 
 from __future__ import annotations
 
@@ -6,9 +6,9 @@ import json
 
 import pytest
 
-from tandem.config import SessionConfig
-from tandem.protocol.models import CliAction, FailAction, FinishAction, GuiAction, WaitAction
-from tandem.runtime.session import TandemSession
+from jevduo.config import SessionConfig
+from jevduo.protocol.models import CliAction, FailAction, FinishAction, GuiAction, WaitAction
+from jevduo.runtime.session import JevDuoSession
 
 from .conftest import (
     FixedSelector,
@@ -47,7 +47,7 @@ def _session(plans, responses, selector=None):
     planner = ScriptedPlanner(list(plans))
     verifier = ScriptedVerifier(list(responses))
     return (
-        TandemSession(make_components(planner, verifier, selector or FixedSelector())),
+        JevDuoSession(make_components(planner, verifier, selector or FixedSelector())),
         planner,
         verifier,
     )
@@ -262,9 +262,9 @@ def test_cli_timeout_clamped_to_protocol_limit():
 
 def test_truncated_reasoning_raises_actionable_error(tmp_path, monkeypatch):
     """finish_reason=length（推理吃满 max_tokens、正文为空）必须报可定位的错误。"""
-    import tandem.models.slow as providers_module
-    from tandem.config import SessionConfig
-    from tandem.models.slow import SlowModelClient
+    import jevduo.models.slow as providers_module
+    from jevduo.config import SessionConfig
+    from jevduo.models.slow import SlowModelClient
 
     monkeypatch.setattr(providers_module.time, "sleep", lambda seconds: None)
 
@@ -307,8 +307,8 @@ def test_kimi_payload_controls_reasoning_and_tokens(tmp_path):
     import base64
     import urllib.request
 
-    from tandem.config import SessionConfig
-    from tandem.models.slow import SlowModelClient
+    from jevduo.config import SessionConfig
+    from jevduo.models.slow import SlowModelClient
 
     captured = {}
 
@@ -363,7 +363,7 @@ def test_begin_without_requirements_extracts_via_component():
     verifier = ScriptedVerifier([valid_verifier_response(task_status="completed")])
     components = make_components(planner, verifier, FixedSelector())
     components.requirements = requirements_fn
-    session = TandemSession(components)
+    session = JevDuoSession(components)
     session.begin("整理并保存", None)
     assert session.requirements == [{"id": "R1", "requirement": "保存文件", "output_path": None}]
     assert calls == ["整理并保存"]
@@ -375,8 +375,8 @@ def test_kimi_retries_escalate_reasoning_effort_on_empty_content(tmp_path):
     """空正文（思考通道吞掉全部输出）→ 重试自动升档 low→medium，不再原样重发。"""
     import urllib.request
 
-    from tandem.config import SessionConfig
-    from tandem.models.slow import SlowModelClient
+    from jevduo.config import SessionConfig
+    from jevduo.models.slow import SlowModelClient
 
     payloads = []
     responses = iter([
@@ -400,7 +400,7 @@ def test_kimi_retries_escalate_reasoning_effort_on_empty_content(tmp_path):
         def read(self):
             return json.dumps(next(responses)).encode()
 
-    import tandem.models.slow as providers_mod
+    import jevduo.models.slow as providers_mod
     providers_mod.time.sleep = lambda seconds: None
 
     def fake_urlopen(request, timeout=None):
@@ -422,7 +422,7 @@ def test_kimi_retries_escalate_reasoning_effort_on_empty_content(tmp_path):
 
 
 def test_extract_json_object_salvages_prose_wrapped_answers():
-    from tandem.models.slow import extract_json_object
+    from jevduo.models.slow import extract_json_object
 
     assert extract_json_object('```json\n{"done": true}\n```') == {"done": True}
     assert extract_json_object('Sure! Here is my plan:\n{"done": false, "route": "cli"}') == {
@@ -435,8 +435,8 @@ def test_kimi_accepts_prose_wrapped_json(tmp_path):
     """正文 = 围栏外有叙述 + 合法 JSON：不再 JSONDecodeError，直接采纳。"""
     import urllib.request
 
-    from tandem.config import SessionConfig
-    from tandem.models.slow import SlowModelClient
+    from jevduo.config import SessionConfig
+    from jevduo.models.slow import SlowModelClient
 
     class _Resp:
         status, headers = 200, {}

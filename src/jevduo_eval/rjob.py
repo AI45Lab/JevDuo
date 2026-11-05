@@ -157,7 +157,7 @@ def run_job(*, config: dict, repo_root: Path, run_id: str,
             sync: bool = True) -> dict:
     """一站式：sync → spec → submit → watch → fetch → cleanup。
 
-    唯一落盘位置 = log.results_root/<run_id>（= tandem/rjob_logs/<run_id>）：
+    唯一落盘位置 = log.results_root/<run_id>（= jevduo/rjob_logs/<run_id>）：
     worker 直接写 run 目录（adpc 挂载），平台日志由 fetch 补写进同一目录。
 
     **收尾默认删 rjob**（delete=True）：submit 之后的任何结局——成功、失败、

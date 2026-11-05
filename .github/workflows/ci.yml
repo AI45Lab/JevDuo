@@ -25,7 +25,7 @@ jobs:
       - name: Lint
         run: ruff check src tests demo
       - name: Protocol self-check
-        run: tandem check
+        run: jevduo check
       - name: Test
         run: |
           set -o pipefail

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# rjob worker 内入口：读取 job spec，进入 tandem_eval entry。
+# rjob worker 内入口：读取 job spec，进入 jevduo_eval entry。
 # - mock 基准：直接用系统 python3 跑（无需共享资源/docker）。
 # - osworld1/2/21：加载共享资源 env.sh（冻结 venv/评测工具/JEV），启动 dockerd 并拉取
 #   inner 镜像（VM 容器），然后用 OSWORLD_PYTHON 跑 entry（Pillow 等依赖已在冻结 venv 内）。
@@ -34,7 +34,7 @@ print(spec.get("benchmark", "mock"), spec["output_root"])' "$SPEC")
 mkdir -p "$OUTPUT_ROOT/worker"
 
 if [ "$BENCHMARK" = "mock" ]; then
-  python3 -m tandem_eval entry --spec "$SPEC" 2>&1 | tee "$OUTPUT_ROOT/worker/entry.log"
+  python3 -m jevduo_eval entry --spec "$SPEC" 2>&1 | tee "$OUTPUT_ROOT/worker/entry.log"
   exit "${PIPESTATUS[0]}"
 fi
 
@@ -77,7 +77,7 @@ else
 fi
 export no_proxy="$NO_PROXY"
 
-DOCKER_ROOT="$(mktemp -d /tmp/tandem-docker.XXXXXX)"
+DOCKER_ROOT="$(mktemp -d /tmp/jevduo-docker.XXXXXX)"
 dockerd --host=unix:///var/run/docker.sock \
   --data-root="$DOCKER_ROOT/data" --exec-root="$DOCKER_ROOT/exec" \
   --http-proxy="$PROXY" --https-proxy="$PROXY" --no-proxy="$NO_PROXY" \
@@ -104,5 +104,5 @@ fi
   tail -20 "$OUTPUT_ROOT/worker/deps-check.log" | tee -a "$OUTPUT_ROOT/worker/entry.log" >&2
   echo "共享 venv 依赖检查失败" | tee -a "$OUTPUT_ROOT/worker/entry.log" >&2; exit 3; }
 
-"$OSWORLD_PYTHON" -m tandem_eval entry --spec "$SPEC" 2>&1 | tee "$OUTPUT_ROOT/worker/entry.log"
+"$OSWORLD_PYTHON" -m jevduo_eval entry --spec "$SPEC" 2>&1 | tee "$OUTPUT_ROOT/worker/entry.log"
 exit "${PIPESTATUS[0]}"

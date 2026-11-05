@@ -124,7 +124,7 @@ fi
 
 env PYTHONPATH=src python3 - <<'PY'
 from pathlib import Path
-from tandem_eval.rjob import load_config, sync_repo
+from jevduo_eval.rjob import load_config, sync_repo
 
 config = load_config("infra/config.json")
 sync_repo(Path("."), Path(config["eval"]["deploy_root"]))
@@ -138,7 +138,7 @@ run_task() {
     local fast_args=()
     if [[ -n "$FAST_MODEL" ]]; then fast_args=(--fast-model "$FAST_MODEL"); fi
 
-    env PYTHONPATH=src python3 -m tandem_eval rjob run \
+    env PYTHONPATH=src python3 -m jevduo_eval rjob run \
         --run-id "$run_id" \
         --benchmark osworld21 \
         --tasks "$task" \

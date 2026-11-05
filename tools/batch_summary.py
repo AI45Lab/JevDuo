@@ -94,7 +94,7 @@ def _noop_rate(episode_dir: Path) -> float | None:
 
     口径说明：判空转看的是"动作有没有编译出来"（gui 事件里 `action` 为 null），
     而不是"winner 是不是回退项"。真机路径下 grounder 是关的
-    （`tandem_eval/entry.py` 显式传 `grounder=None`），因此 `visual_fallback`
+    （`jevduo_eval/entry.py` 显式传 `grounder=None`），因此 `visual_fallback`
     与 `return_to_planner` **同样编译不出动作**——两者都是真空转。
     （2026-10-25 修正：旧口径只数 `return_to_planner`，把 44% 的真实空转
     报成了 22%，低估了一倍。）

@@ -1,7 +1,7 @@
 """compile：胜出候选 + 目标 → 协议动作（声明式）。
 
 旧仓库 action_code 产出 pyautogui 代码字符串；协议化后 harness 输出声明式 GuiAction，
-pyautogui 代码生成移到 tandem_eval 的执行层（M2）。坐标计算逻辑保持与旧实现一致
+pyautogui 代码生成移到 jevduo_eval 的执行层（M2）。坐标计算逻辑保持与旧实现一致
 （中心点、slider 分数位置、SCROLL_UP/DOWN ±5 clicks）。"""
 
 from __future__ import annotations

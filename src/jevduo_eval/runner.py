@@ -1,4 +1,4 @@
-"""runner：任务主循环。驱动 TandemSession 与环境交换协议消息，落盘与评分。"""
+"""runner：任务主循环。驱动 JevDuoSession 与环境交换协议消息，落盘与评分。"""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
-from tandem.models.slow import TaskBudgetExceeded
-from tandem.protocol.models import Observation
-from tandem.runtime.goal_stage import ObservationRequired
-from tandem.runtime.session import TandemSession
+from jevduo.models.slow import TaskBudgetExceeded
+from jevduo.protocol.models import Observation
+from jevduo.runtime.goal_stage import ObservationRequired
+from jevduo.runtime.session import JevDuoSession
 
 from .env import budget_of
 from .manifest import TaskRef, write_resolved
@@ -20,7 +20,7 @@ from .scoring import episode_status, official_score
 TERMINAL_KINDS = {"finish", "fail"}
 
 
-def run_episode(env, session: TandemSession, recorder: EpisodeRecorder, task: dict,
+def run_episode(env, session: JevDuoSession, recorder: EpisodeRecorder, task: dict,
                 *, max_steps: int, max_wall_seconds: float,
                 extra_exports: list[str] | None = None, started_monotonic: float | None = None) -> dict:
     """单题循环：obs → session.act → env.execute → 回执灌回，终态导出交付物并评分。"""
@@ -112,7 +112,7 @@ def run_episode(env, session: TandemSession, recorder: EpisodeRecorder, task: di
     )
 
 
-def run(spec: dict, *, env, session: TandemSession, tasks: list[TaskRef],
+def run(spec: dict, *, env, session: JevDuoSession, tasks: list[TaskRef],
         run_root: Path, llm_tap=None) -> list[dict]:
     """逐题驱动；单题异常记 failed_unscored 后继续（failed_unscored 纪律）。"""
     run_root.mkdir(parents=True, exist_ok=True)

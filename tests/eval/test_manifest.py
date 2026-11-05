@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tandem_eval.manifest import OSWORLD21_TASK_IDS, TaskRef, load_index, resolve_manifest, write_resolved
+from jevduo_eval.manifest import OSWORLD21_TASK_IDS, TaskRef, load_index, resolve_manifest, write_resolved
 
 # OSW2.1 的 prepared/runtime 是指向 canonical 路径的软链层：worker 内可见（canonical 视角），
 # 开发机只有 user 视角的同一份 runtime。两处都没有时跳过该检查（例如 CI）。

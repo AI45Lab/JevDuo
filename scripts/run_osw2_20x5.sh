@@ -49,7 +49,7 @@ for i in $(seq 1 "$SHARDS"); do
     EXTRA+=(--no-sync)
   fi
   echo "[$(date '+%F %T')] 提交分片 $i/$SHARDS (run-id ${PREFIX}-s${i})"
-  tandem-eval rjob run \
+  jevduo-eval rjob run \
     --run-id "${PREFIX}-s${i}" \
     --benchmark "$BENCHMARK" \
     --limit "$LIMIT" --shard "$i/$SHARDS" \

@@ -1,4 +1,4 @@
-"""tandem CLI。M0 提供 check（协议样例自检）与 version；smoke/run 在后续里程碑加入。"""
+"""jevduo CLI。M0 提供 check（协议样例自检）与 version；smoke/run 在后续里程碑加入。"""
 
 from __future__ import annotations
 
@@ -41,8 +41,8 @@ def cmd_check() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="tandem", description="Tandem harness CLI")
-    parser.add_argument("--version", action="version", version=f"tandem {__version__}")
+    parser = argparse.ArgumentParser(prog="jevduo", description="JevDuo harness CLI")
+    parser.add_argument("--version", action="version", version=f"jevduo {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("check", help="校验协议 golden 样例")
     args = parser.parse_args(argv)

@@ -16,9 +16,9 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from tandem import __version__
-from tandem.protocol import PROTOCOL_VERSION
-from tandem.protocol.models import Action, Observation, Receipt
+from jevduo import __version__
+from jevduo.protocol import PROTOCOL_VERSION
+from jevduo.protocol.models import Action, Observation, Receipt
 
 _SECRET_PATTERNS = re.compile(r"(Bearer\s+)[^\s\"']+")
 

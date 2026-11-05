@@ -21,7 +21,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from tandem.protocol.models import (
+from jevduo.protocol.models import (
     AccessibilityTree,
     Action,
     BrowserSnapshot,

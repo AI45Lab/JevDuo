@@ -6,14 +6,14 @@ from unittest.mock import Mock
 import pytest
 from PIL import Image
 
-from tandem.gui.compile import gui_action
-from tandem.gui.goal_candidates import goal_candidates, input_frontier
-from tandem.gui.grounding import ground_visual
-from tandem.memory.context import planning_context
-from tandem.memory.state import TaskMemory
-from tandem.models.ranking import Ranking
-from tandem.runtime.goal_stage import ObservationRequired, _document_mismatch, _navigation_key, _target_effect
-from tandem.verification.goal_verifier import verify_goal
+from jevduo.gui.compile import gui_action
+from jevduo.gui.goal_candidates import goal_candidates, input_frontier
+from jevduo.gui.grounding import ground_visual
+from jevduo.memory.context import planning_context
+from jevduo.memory.state import TaskMemory
+from jevduo.models.ranking import Ranking
+from jevduo.runtime.goal_stage import ObservationRequired, _document_mismatch, _navigation_key, _target_effect
+from jevduo.verification.goal_verifier import verify_goal
 
 from .conftest import gui_receipt, make_observation
 from .test_goal_execution import _space

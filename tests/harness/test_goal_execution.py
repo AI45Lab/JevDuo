@@ -5,20 +5,20 @@ from unittest.mock import Mock
 
 import pytest
 
-from tandem.gui.compile import gui_action
-from tandem.gui.goal_candidates import foreground_tree, goal_candidates
-from tandem.gui.targets import A11yTargetBuilder
-from tandem.memory.context import planning_context
-from tandem.models.ranking import Ranking
-from tandem.planning.goal_planner import goal_error, plan_goal
-from tandem.runtime.goal_stage import (
+from jevduo.gui.compile import gui_action
+from jevduo.gui.goal_candidates import foreground_tree, goal_candidates
+from jevduo.gui.targets import A11yTargetBuilder
+from jevduo.memory.context import planning_context
+from jevduo.models.ranking import Ranking
+from jevduo.planning.goal_planner import goal_error, plan_goal
+from jevduo.runtime.goal_stage import (
     ObservationRequired,
     _action_key,
     _cycle_actions,
     _loop_state,
     _target_effect,
 )
-from tandem.verification.goal_verifier import result_error
+from jevduo.verification.goal_verifier import result_error
 
 from .conftest import A11Y_XML, build_space, build_targets, gui_receipt, make_observation
 from .test_goal_memory import fact, session

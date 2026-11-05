@@ -71,8 +71,8 @@
     }
   },
   "eval": {
-    "repo_root": "/mnt/shared-storage-user/adpc-share/chenxinquan/fastslow/tandem",
-    "deploy_root": "/mnt/shared-storage-user/adpc-share/chenxinquan/fastslow/tandem-deploy",
+    "repo_root": "/mnt/shared-storage-user/adpc-share/chenxinquan/fastslow/jevduo",
+    "deploy_root": "/mnt/shared-storage-user/adpc-share/chenxinquan/fastslow/jevduo-deploy",
     "mounts": [
       {
         "source": "gpfs://gpfs2/adpc-share",
@@ -129,7 +129,7 @@
     }
   },
   "log": {
-    "results_root": "/mnt/shared-storage-user/adpc-share/chenxinquan/fastslow/tandem/rjob_logs",
+    "results_root": "/mnt/shared-storage-user/adpc-share/chenxinquan/fastslow/jevduo/rjob_logs",
     "record": {
       "a11y_full": false
     }

@@ -8,18 +8,18 @@ from unittest.mock import Mock
 import pytest
 from PIL import Image, ImageDraw
 
-from tandem.components import build_default
-from tandem.config import SessionConfig
-from tandem.gui.candidates import ActionCandidate
-from tandem.gui.compile import gui_action
-from tandem.gui.goal_candidates import _input_target, application_mismatch, goal_candidates, input_frontier
-from tandem.gui.interaction import GuiInteractionController, visual_changed
-from tandem.memory.context import planning_context
-from tandem.memory.state import TaskMemory
-from tandem.models.ranking import Ranking
-from tandem.planning.goal_planner import goal_error
-from tandem.runtime.goal_stage import ObservationRequired, _action_key
-from tandem.verification.goal_verifier import result_error, verify_goal
+from jevduo.components import build_default
+from jevduo.config import SessionConfig
+from jevduo.gui.candidates import ActionCandidate
+from jevduo.gui.compile import gui_action
+from jevduo.gui.goal_candidates import _input_target, application_mismatch, goal_candidates, input_frontier
+from jevduo.gui.interaction import GuiInteractionController, visual_changed
+from jevduo.memory.context import planning_context
+from jevduo.memory.state import TaskMemory
+from jevduo.models.ranking import Ranking
+from jevduo.planning.goal_planner import goal_error
+from jevduo.runtime.goal_stage import ObservationRequired, _action_key
+from jevduo.verification.goal_verifier import result_error, verify_goal
 
 from .conftest import build_space, gui_receipt, make_observation
 from .test_goal_execution import _space

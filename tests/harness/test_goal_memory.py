@@ -5,17 +5,17 @@ from unittest.mock import Mock, patch
 import pytest
 from PIL import Image
 
-from tandem.config import SessionConfig
-from tandem.gui.candidates import ActionCandidate, ActionCandidateBuilder
-from tandem.gui.goal_candidates import foreground_tree, goal_candidates, scroll_point
-from tandem.gui.targets import A11yTargetBuilder
-from tandem.memory.context import planning_context
-from tandem.memory.state import TaskMemory
-from tandem.models.ranking import Ranking
-from tandem.protocol.models import GuiAction
-from tandem.runtime.goal_stage import ObservationRequired
-from tandem.runtime.session import TandemSession
-from tandem_eval.osworld import gui_code
+from jevduo.config import SessionConfig
+from jevduo.gui.candidates import ActionCandidate, ActionCandidateBuilder
+from jevduo.gui.goal_candidates import foreground_tree, goal_candidates, scroll_point
+from jevduo.gui.targets import A11yTargetBuilder
+from jevduo.memory.context import planning_context
+from jevduo.memory.state import TaskMemory
+from jevduo.models.ranking import Ranking
+from jevduo.protocol.models import GuiAction
+from jevduo.runtime.goal_stage import ObservationRequired
+from jevduo.runtime.session import JevDuoSession
+from jevduo_eval.osworld import gui_code
 
 from .conftest import FixedSelector, gui_receipt, make_components, make_observation
 from .test_goal_stage import plan, requirements, result
@@ -170,7 +170,7 @@ def session():
     components = make_components(lambda *a, **kw: plan(), lambda *a, **kw: None, FixedSelector())
     components.memory_factory = TaskMemory
     components.stage_verifier = lambda *a, **kw: result(unit_met=False, delivery_state="none")
-    return TandemSession(components, config=SessionConfig(execution_mode="goal"))
+    return JevDuoSession(components, config=SessionConfig(execution_mode="goal"))
 
 
 def test_no_effect_forces_grounding_and_masks_the_failed_candidate(tmp_path):
@@ -191,7 +191,7 @@ def test_no_effect_forces_grounding_and_masks_the_failed_candidate(tmp_path):
     s.components.grounder.assert_called_once()
 
     def rank(**kwargs):
-        from tandem.runtime.goal_stage import _action_key
+        from jevduo.runtime.goal_stage import _action_key
 
         candidates = kwargs["action_space"].candidates()
         assert grounded in candidates
@@ -256,7 +256,7 @@ def test_preparation_targets_one_unit_not_all_materials():
 def test_snapshot_ids_and_ancestry_are_not_a_new_ui_state():
     from dataclasses import replace
 
-    from tandem.runtime.goal_stage import _state_key
+    from jevduo.runtime.goal_stage import _state_key
 
     target = A11yTargetBuilder().build('''<frame active="true"><push-button name="Open"
         screencoord="(100,100)" size="(50,30)"/></frame>''', "one")[0]

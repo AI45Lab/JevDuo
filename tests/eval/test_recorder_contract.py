@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 
-from tandem.protocol.models import BrowserSnapshot, WaitAction
-from tandem_eval.recorder import (
+from jevduo.protocol.models import BrowserSnapshot, WaitAction
+from jevduo_eval.recorder import (
     EpisodeRecorder,
     write_code_version,
     write_heartbeat,
@@ -101,7 +101,7 @@ def test_heartbeat_and_code_version(tmp_path):
 
 def test_run_spec_masks_credentials_but_keeps_model_identity():
     """secrets 段整体脱敏；模型身份留在 secrets 之外——结果目录要能回答"这次谁在跑"。"""
-    from tandem_eval.entry import _mask_secrets
+    from jevduo_eval.entry import _mask_secrets
 
     spec = {
         "secrets": {
@@ -121,7 +121,7 @@ def test_run_spec_masks_credentials_but_keeps_model_identity():
 
 def test_episode_records_error_message_and_traceback(tmp_path):
     """异常题必须记下消息与栈尾：只记 exception_type 的话，事后无法判断炸在哪一步。"""
-    from tandem_eval.recorder import EpisodeRecorder
+    from jevduo_eval.recorder import EpisodeRecorder
 
     recorder = EpisodeRecorder(tmp_path / "ep", {"id": "016"})
     try:
@@ -139,7 +139,7 @@ def test_episode_records_error_message_and_traceback(tmp_path):
 
 
 def test_episode_error_redacts_secrets(tmp_path):
-    from tandem_eval.recorder import EpisodeRecorder
+    from jevduo_eval.recorder import EpisodeRecorder
 
     recorder = EpisodeRecorder(tmp_path / "ep", {"id": "x"})
     episode = recorder.finalize(

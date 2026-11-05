@@ -6,8 +6,8 @@ import urllib.request
 
 import pytest
 
-from tandem.config import SessionConfig
-from tandem.models.slow import SlowModelClient
+from jevduo.config import SessionConfig
+from jevduo.models.slow import SlowModelClient
 
 
 class _Response(io.BytesIO):
@@ -39,7 +39,7 @@ def test_minimax_http_200_temporary_error_recovers_with_same_request(
         return _Response(json.dumps(raw).encode())
 
     monkeypatch.setattr(urllib.request, "urlopen", opener)
-    monkeypatch.setattr("tandem.models.slow.time.sleep", waits.append)
+    monkeypatch.setattr("jevduo.models.slow.time.sleep", waits.append)
     assert client.json_request([{"role": "user", "content": "probe"}], lambda v: v == {"ok": True},
                                role="plan_stage") == {"ok": True}
     assert len(requests) == 2 and waits == [30]
@@ -58,7 +58,7 @@ def test_minimax_temporary_error_retries_remain_bounded(client, monkeypatch, cod
         return _Response(json.dumps({"base_resp": {"status_code": code, "status_msg": "busy"}}).encode())
 
     monkeypatch.setattr(urllib.request, "urlopen", opener)
-    monkeypatch.setattr("tandem.models.slow.time.sleep", waits.append)
+    monkeypatch.setattr("jevduo.models.slow.time.sleep", waits.append)
     with pytest.raises(RuntimeError, match=f"code={code}"):
         client.json_request([{"role": "user", "content": "probe"}], lambda v: True, role="plan_stage")
     assert len(requests) == 3 and waits == [30, 30]
@@ -82,7 +82,7 @@ def test_other_api_errors_do_not_gain_retries(client, monkeypatch, status, raw):
         return response
 
     monkeypatch.setattr(urllib.request, "urlopen", opener)
-    monkeypatch.setattr("tandem.models.slow.time.sleep", waits.append)
+    monkeypatch.setattr("jevduo.models.slow.time.sleep", waits.append)
     with pytest.raises(RuntimeError):
         client.json_request([{"role": "user", "content": "probe"}], lambda v: True, role="plan_stage")
     assert len(requests) == 1 and waits == []

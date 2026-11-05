@@ -21,7 +21,7 @@ OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
-from tandem.candidates import OPERATION_DESCRIPTIONS  # noqa: E402
+from jevduo.candidates import OPERATION_DESCRIPTIONS  # noqa: E402
 
 SA = Path("/mnt/shared-storage-user/evobox-share-gpfs2/xuyuanxun/shared_resources/sa_cua")
 # 排序服务宿主机能读的截图视角（harness 的 image_stage.read）

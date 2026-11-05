@@ -5,13 +5,13 @@ from dataclasses import replace
 
 import pytest
 
-from tandem.gui.candidates import ActionCandidateBuilder
-from tandem.gui.compile import gui_action
-from tandem.gui.field_binding import _input_target, matches_field
-from tandem.gui.goal_candidates import foreground_tree, goal_candidates, modal_frontier
-from tandem.gui.interaction import target_effect
-from tandem.gui.semantics import enrich_targets
-from tandem.gui.targets import A11yTargetBuilder
+from jevduo.gui.candidates import ActionCandidateBuilder
+from jevduo.gui.compile import gui_action
+from jevduo.gui.field_binding import _input_target, matches_field
+from jevduo.gui.goal_candidates import foreground_tree, goal_candidates, modal_frontier
+from jevduo.gui.interaction import target_effect
+from jevduo.gui.semantics import enrich_targets
+from jevduo.gui.targets import A11yTargetBuilder
 
 from .test_semantics import _named, _targets
 
