@@ -63,9 +63,12 @@ def target_effect(old, targets):
                     and old["target_semantic"] == t.semantic_key]
         if not intended and old.get("field_label"):
             intended = [t for t in targets if matches_field(old["field_label"], t.name)
-                        and t.role in {"entry", "text", "textbox", "spin_button", "searchbox"}]
+                        and t.role in {"entry", "text", "textbox", "spin_button", "searchbox",
+                                       "password_text"}]
         if intended:
             focus = intended
+        if len(focus) == 1 and focus[0].role == "password_text":
+            return "unknown"  # Login, not a dispatch or masked value, verifies this input.
         if len(focus) == 1 and (focus[0].value or old.get("field_label")):
             if old.get("field_label") and not matches_field(old["field_label"], focus[0].name):
                 return "not_met"

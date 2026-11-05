@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
+from collections import Counter
 from dataclasses import replace
+from statistics import median
 
-from .targets import UITarget
+from .targets import UITarget, _is_overlay, _local, _state
 
 _LABEL_ROLES = {"label", "static", "text"}
 _MEMORY_USAGE = re.compile(r"\s+-\s+Memory usage\s+-\s+[\d.]+\s+[KMG]B\b", re.I)
@@ -110,8 +112,9 @@ def _scope(target: UITarget, content_y: float) -> str:
 def _overlap(a: UITarget, b: UITarget) -> float:
     wide = min(a.x + a.width, b.x + b.width) - max(a.x, b.x)
     tall = min(a.y + a.height, b.y + b.height) - max(a.y, b.y)
-    smaller = min(a.width * a.height, b.width * b.height)
-    return wide * tall / smaller if wide > 0 and tall > 0 and smaller > 0 else 0.0
+    intersection = wide * tall if wide > 0 and tall > 0 else 0
+    union = a.width * a.height + b.width * b.height - intersection
+    return intersection / union if union > 0 else 0.0
 
 
 def _roles_compatible(a: str, b: str) -> bool:
@@ -123,6 +126,37 @@ def _roles_compatible(a: str, b: str) -> bool:
         {"table_cell", "grid_cell"},
     )
     return a == b or any(a in group and b in group for group in groups)
+
+
+def _aligned_snapshot(targets, snapshot):
+    """Return the snapshot and whether three independent controls verified its screen mapping."""
+    if not snapshot:
+        return snapshot, False
+    pairs = set()
+    for item in snapshot.get("elements", []):
+        matches = [t for t in targets if _norm(t.name) == _norm(item.get("name", ""))
+                   and _roles_compatible(t.role, item.get("role", ""))
+                   and t.source.startswith("a11y")
+                   and "chrome" in t.application.lower()
+                   and 0.8 <= t.width / max(1, item.get("width", 0)) <= 1.25
+                   and 0.8 <= t.height / max(1, item.get("height", 0)) <= 1.25]
+        if len(matches) == 1:
+            target = matches[0]
+            pairs.add(((target.x, target.y, target.width, target.height),
+                       (item["x"], item["y"], item["width"], item["height"])))
+    # DOM aliases are one physical anchor; ambiguous correspondences cannot calibrate a frame.
+    native_counts = Counter(native for native, dom in pairs)
+    dom_counts = Counter(dom for native, dom in pairs)
+    offsets = [(native[0] - dom[0], native[1] - dom[1]) for native, dom in pairs
+               if native_counts[native] == dom_counts[dom] == 1]
+    if len(offsets) < 3 or any(max(v) - min(v) > 4 for v in zip(*offsets, strict=True)):
+        return snapshot, False
+    dx, dy = (median(v) for v in zip(*offsets, strict=True))
+    aligned = {**snapshot, "elements": [{**i, "x": i["x"] + dx, "y": i["y"] + dy}
+                                       for i in snapshot["elements"]]}
+    if "screen_y" in snapshot.get("viewport", {}):
+        aligned["viewport"] = {**snapshot["viewport"], "screen_y": snapshot["viewport"]["screen_y"] + dy}
+    return aligned, True
 
 
 def _dom_target(item: dict, snapshot_id: str) -> UITarget | None:
@@ -151,7 +185,7 @@ def _dom_target(item: dict, snapshot_id: str) -> UITarget | None:
         width=width,
         height=height,
         semantic_key="",
-        parent_context=(),
+        parent_context=tuple(item.get("parent_context") or ()),
         source="dom",
         application="Google Chrome",
         description=str(item.get("description") or ""),
@@ -167,9 +201,8 @@ def _dom_target(item: dict, snapshot_id: str) -> UITarget | None:
 
 def _merge(base: UITarget, dom: UITarget) -> UITarget:
     use_dom_name = (
-        dom.label_source != "dom"
-        or base.label_source == "unresolved"
-        or len(dom.name) >= len(base.name)
+        base.label_source in {"unresolved", "synthetic"}
+        or not base.name
     )
     merged = replace(
         base,
@@ -183,6 +216,7 @@ def _merge(base: UITarget, dom: UITarget) -> UITarget:
         scope="web_content",
         label_source=dom.label_source,
         operations=dom.operations,
+        parent_context=dom.parent_context or base.parent_context,
         input_type=dom.input_type or base.input_type,
         date_order=dom.date_order or base.date_order,
     )
@@ -227,6 +261,29 @@ def unrepresented_window(root: ET.Element | None) -> str:
     return title if windows and title not in windows else ""
 
 
+def _native_input_owner(root):
+    if root is None:
+        return None
+    owners = []
+
+    def visit(node, web=False):
+        web = web or _local(node.tag) in {"document", "document_web", "web_document"}
+        if (not web and (_is_overlay(node) or _local(node.tag) == "frame" and _state(node, "modal") is True)
+                and _state(node, "visible") is not False
+                and _state(node, "showing") is not False and (
+                    _state(node, "active") is True
+                    or bool(root.get("foreground_title")) and node.get("name") == root.get("foreground_title")
+                    or not root.get("foreground_title") and _state(node, "modal") is True
+                    and _state(node, "showing") is True
+                    or any(_state(child, "focused") is True for child in node.iter()))):
+            owners.append(node)
+        for child in node:
+            visit(child, web)
+
+    visit(root)
+    return owners[-1] if owners else None
+
+
 def enrich_targets(
     targets: list[UITarget],
     accessibility_tree: str | None,
@@ -240,8 +297,16 @@ def enrich_targets(
         root = None
     if unrepresented_window(root):
         return []  # The existing visual fallback must locate this real input owner first.
+    owner = _native_input_owner(root)
+    if owner is not None:
+        bounds = {_bounds(node) for node in owner.iter()}
+        targets = [t for t in targets if (t.x, t.y, t.width, t.height) in bounds]
+    owner_scope = ""
+    if owner is not None:
+        owner_scope = "menu" if _local(owner.tag) in {"menu", "popup_menu"} else "dialog"
     labels, chrome_active = _a11y_context(root)
-    content_y = _content_y(targets, browser_snapshot)
+    browser_snapshot, dom_coordinates_verified = _aligned_snapshot(targets, browser_snapshot)
+    content_y = _content_y(targets, browser_snapshot if dom_coordinates_verified else None)
     enriched = []
     for target in targets:
         name, source = target.name, target.label_source
@@ -254,13 +319,14 @@ def enrich_targets(
             name, source = nearby, "a11y_nearby"
         if not name and target.focused:
             name, source = f"Focused {target.role.replace('_', ' ')}", "synthetic"
-        if not name:
+        # Keep unnamed native boxes for DOM labeling; discard any still unnamed after fusion.
+        if not name and not browser_snapshot:
             continue
         item = replace(
             target,
             name=name,
             nearby_text=nearby,
-            scope=_scope(target, content_y),
+            scope=owner_scope or _scope(target, content_y),
             label_source=source,
         )
         enriched.append(replace(item, semantic_key=_key(item)))
@@ -269,7 +335,7 @@ def enrich_targets(
         "chrome" in target.application.lower() or "chromium" in target.application.lower()
         for target in targets
     )
-    if browser_snapshot and (chrome_active or chrome_targets):
+    if owner is None and browser_snapshot and (chrome_active or chrome_targets):
         snapshot_id = targets[0].snapshot_id if targets else "dom"
         for raw in browser_snapshot.get("elements", []):
             dom = _dom_target(raw, snapshot_id)
@@ -279,14 +345,20 @@ def enrich_targets(
                 (index, _overlap(base, dom))
                 for index, base in enumerate(enriched)
                 if _roles_compatible(base.role, dom.role)
+                and (_norm(base.name) == _norm(dom.name)
+                     or not base.name
+                     or base.label_source in {"unresolved", "synthetic"})
             ]
-            best = max(compatible, key=lambda pair: pair[1], default=(None, 0.0))
-            if best[0] is not None and best[1] >= 0.5:
-                enriched[best[0]] = _merge(enriched[best[0]], dom)
-            else:
+            matches = [index for index, overlap in compatible if overlap >= 0.5]
+            if len(matches) == 1:
+                enriched[matches[0]] = _merge(enriched[matches[0]], dom)
+            elif dom_coordinates_verified:
+                # Unmatched DOM nodes stay in the raw snapshot until their screen mapping is verified.
                 enriched.append(dom)
     unique = {}
     for target in enriched:
+        if not target.name:
+            continue
         center_x = target.x + target.width / 2
         center_y = target.y + target.height / 2
         if not (0 <= center_x < screen_size[0] and 0 <= center_y < screen_size[1]):

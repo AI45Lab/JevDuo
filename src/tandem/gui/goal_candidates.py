@@ -8,88 +8,9 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from .candidates import ActionCandidate
+from .field_binding import _input_target, input_satisfied, launcher_input, matches_field
 from .focus import KEYS, input_and_menu_context
 from .targets import _attribute, _local, _pair, _state
-
-
-def matches_field(hint, label):
-    """Match an intended field to its observed label, not an arbitrary focused control."""
-    def words(value):
-        return set(re.findall(r"\w+", value.casefold())) - {"the", "a", "field", "required"}
-
-    observed = words(label)
-    intended = words(hint)
-    return (bool(observed) and (observed <= intended or len(intended) >= 2 and intended <= observed)
-            and not label.startswith(("Unnamed ", "Focused ")))
-
-
-def launcher_input(value):
-    """A launcher search is not a website's identically named Search field."""
-    return (value.get("scope") == "desktop_launcher"
-            or "desktop search" in value.get("target_hint", value["label"]).casefold())
-
-
-def _input_target(value, targets):
-    """Bind to one best observed field; spatial hints must not override its own label."""
-    scores = []
-    for target in targets:
-        choice = value.get("kind") == "choice" and target.role in {
-            "button", "push_button", "radio_button", "option", "list_item"}
-        editable = (target.role in {"textbox", "entry", "searchbox", "spin_button"}
-                    or launcher_input(value) and target.role == "text" and target.focused
-                    or "type_text" in target.operations or target.input_type == "select-one")
-        if not (editable or choice):
-            continue
-        if launcher_input(value) and target.application != "gnome-shell":
-            continue
-        if (target.role == "spin_button" and target.input_type != "date"
-                and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value["text"])):
-            continue  # A complete date is not a Day/Month/Year segment or an ordinary numeric spinner.
-        named = bool(target.name) and not target.name.startswith(("Unnamed ", "Focused "))
-        labels = [target.name] if named else [target.description]
-        if not named and len(target.nearby_text) <= 80 and "\n" not in target.nearby_text:
-            labels.append(target.nearby_text)
-        score = 0
-        if choice:
-            wanted = set(re.findall(r"\w+", value["text"].casefold()))
-            option_name = re.sub(r"\([^)]*\)", "", target.name.casefold())
-            observed = set(re.findall(r"\w+", option_name))
-            hint = set(re.findall(r"\w+", value.get("target_hint", value["label"]).casefold()))
-            if wanted and wanted <= observed <= wanted | hint:
-                score = 6  # Match a specific option, never a container holding the entire form.
-        for label in labels:
-            if not label or not editable:
-                continue
-            hint = value.get("target_hint", value["label"])
-            if not matches_field(hint, label):
-                continue  # Descriptive context words cannot override the explicit intended field.
-            ignored = {"brief", "required", "enter", "input", "field", "the", "a"}
-            if (set(re.findall(r"\w+", hint.casefold())) - ignored
-                    == set(re.findall(r"\w+", label.casefold())) - ignored):
-                score = max(score, 8)
-            elif matches_field(value["label"], label):
-                score = max(score, 4)
-            elif matches_field(hint, label):
-                score = max(score, 3)
-        if score:
-            scores.append((score, target))
-    best = max((score for score, _ in scores), default=0)
-    matching = [target for score, target in scores if score == best]
-    return matching[0] if len(matching) == 1 else None
-
-
-def input_satisfied(value, target):
-    """Chrome may omit a URL scheme in the displayed address, unlike ordinary text fields."""
-    text = value["text"]
-    if value.get("kind") == "choice" and target.role in {
-            "button", "push_button", "radio_button", "option", "list_item"}:
-        return target.checked is True or target.selected is True
-    if target.input_type == "select-one":
-        return target.value.strip().casefold() == text.strip().casefold()
-    if ("address" in target.name.casefold() and "://" not in target.value
-            and re.match(r"^(?:https?|file)://", text)):
-        text = text.split("://", 1)[1]
-    return target.value == text or value["input_mode"] == "insert" and text in target.value
 
 
 def input_frontier(space, targets, inputs):
@@ -226,6 +147,7 @@ def foreground_tree(raw_tree):
             elif app is not shell:
                 windows = [e for e in app.iter() if _local(e.tag) in {"frame", "dialog"}]
                 named = [e for e in windows if title and e.get("name") == title]
+                named = [e for e in named if _state(e, "active") is True] or named
                 if named:
                     active(app, False)
                     for window in windows:
@@ -391,10 +313,11 @@ def modal_frontier(space, targets, tree):
     root = ET.fromstring(tree or "<empty/>")
     dialogs = [n for n in root.iter() if _local(n.tag) in {"dialog", "alert"} and _live_dialog(n, root)]
     visual = next((c.metadata for c in space.candidates() if c.metadata.get("blocking_overlay")), {})
-    if not dialogs and not visual:
+    portal = portal_needs_grounding(tree)
+    if not dialogs and not visual and not portal:
         return {}
     dialog = dialogs[-1] if dialogs else None
-    name = dialog.get("name", "Dialog") if dialog is not None else visual["overlay_name"]
+    name = dialog.get("name", "Dialog") if dialog is not None else visual.get("overlay_name", portal)
     position = _pair(_attribute(dialog, "screencoord")) if dialog is not None else None
     size = _pair(_attribute(dialog, "size")) if dialog is not None else None
     bounds = [*position, *size] if position and size else visual.get("overlay_bounds")
@@ -426,7 +349,7 @@ def modal_frontier(space, targets, tree):
     space.controls = {k: c for k, c in space.controls.items()
                       if k in {"return_to_planner", "visual_fallback"}}
     return {"blocking_overlay": name, "overlay_bounds": bounds,
-            "overlay_kind": visual.get("overlay_kind", "unknown"),
+            "overlay_kind": visual.get("overlay_kind", "task_dialog" if portal else "unknown"),
             "next_intent": f"The active dialog {name!r} owns input; work inside its visible controls."}
 
 

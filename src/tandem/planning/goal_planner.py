@@ -78,6 +78,10 @@ to acquire only the missing values. Provide ALL exact text values from the instr
 For every text input, target_hint must identify its intended observed field (copy the visible label
 when available). For browser navigation use the observed address-bar label; for a document body or
 desktop launcher identify that specific editor/search field. Text is never interchangeable among fields.
+If navigation changes the form/channel/document, first delegate navigation with no future-page inputs.
+Plan those inputs after observing the destination. Never bind a future recipient's text to the current
+recipient's composer merely because it is visible. A completed download is not an opened document:
+open the downloaded artifact rather than clicking the same download link again.
 The choice model cannot generate free text. It can click, type provided inputs, use keyboard, scroll,
 wait, request stage verification, or return control. Missing data/new reasoning requires another stage.
 For CLI provide one bounded Bash command, current inputs and expected real results. Prefer actually

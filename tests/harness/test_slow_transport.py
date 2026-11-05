@@ -5,6 +5,7 @@ import http.client
 import io
 import json
 import random
+import urllib.error
 import urllib.request
 
 import pytest
@@ -196,3 +197,99 @@ def test_goal_rechecks_body_limit_after_json_repair(tmp_path, monkeypatch):
     assert len(requests) == 1
     assert len(requests[0].data) <= config.slow_max_request_bytes
     assert "NOTHING" in messages[-1]["content"]
+
+
+@pytest.fixture
+def pooled_client(tmp_path, monkeypatch):
+    credentials = tmp_path / "synthetic-credentials.json"
+    credentials.write_text(json.dumps({"kimi": [
+        {"id": f"synthetic-{i}", "priority": 1, "api_key": f"test-only-{i}"}
+        for i in range(3)
+    ]}))
+    monkeypatch.setattr("tandem.models.slow.time.sleep", lambda seconds: None)
+    return SlowModelClient({
+        "base_url": "https://api.kimi.com/coding/v1", "model": "synthetic",
+        "key_pool": {"provider": "kimi", "key_ids": [1, 2, 3],
+                     "credentials_file": str(credentials), "state_file": str(tmp_path / "state.json")},
+    }, SessionConfig(slow_reasoning_effort="low"), tmp_path / "audit.jsonl")
+
+
+@pytest.mark.parametrize("role", ["plan_stage", "verify_stage", "ground_visual"])
+@pytest.mark.parametrize("failure", [TimeoutError, http.client.RemoteDisconnected,
+                                     urllib.error.URLError, http.client.IncompleteRead])
+def test_transport_failure_switches_key_without_changing_reasoning_or_replaying_actions(
+        pooled_client, monkeypatch, role, failure):
+    requests = []
+
+    def opener(request, **kwargs):
+        requests.append(request)
+        if len(requests) == 1:
+            if failure is http.client.IncompleteRead:
+                raise failure(b"synthetic partial response")
+            raise failure("synthetic transport failure")
+        return _Response()
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    assert pooled_client.json_request([{"role": "user", "content": "plan"}], lambda v: True,
+                                      role=role) == {"done": True}
+    assert [r.get_header("Authorization") for r in requests] == ["Bearer test-only-0", "Bearer test-only-1"]
+    assert requests[0].data == requests[1].data
+    events = [json.loads(line) for line in pooled_client.audit_path.read_text().splitlines()]
+    changed = next(e for e in events if e["event"] == "key_changed")
+    assert (changed["key_id"], changed["next_key_id"]) == ("synthetic-0", "synthetic-1")
+    assert "test-only-" not in pooled_client.audit_path.read_text()
+    assert pooled_client.key_pool.select()["id"] != "synthetic-0"
+
+
+def test_temporary_server_error_switches_key(pooled_client, monkeypatch):
+    requests = []
+
+    class Unavailable(_Response):
+        status = 503
+
+        def read(self):
+            return b'{"error":{"message":"synthetic temporary outage"}}'
+
+    def opener(request, **kwargs):
+        requests.append(request)
+        return Unavailable() if len(requests) == 1 else _Response()
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    assert pooled_client.json_request([{"role": "user", "content": "plan"}], lambda v: True,
+                                      role="plan_stage") == {"done": True}
+    assert requests[0].get_header("Authorization") != requests[1].get_header("Authorization")
+
+
+@pytest.mark.parametrize("failure", [TimeoutError, http.client.IncompleteRead])
+def test_transport_key_rotation_is_bounded(pooled_client, monkeypatch, failure):
+    requests = []
+
+    def opener(request, **kwargs):
+        requests.append(request)
+        if failure is http.client.IncompleteRead:
+            raise failure(b"synthetic partial response")
+        raise TimeoutError("synthetic read timeout")
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    with pytest.raises(failure):
+        pooled_client.json_request([{"role": "user", "content": "plan"}], lambda v: True,
+                                   role="plan_stage")
+    assert len(requests) == len({r.get_header("Authorization") for r in requests}) == 3
+
+
+def test_invalid_json_does_not_cool_down_or_switch_key(pooled_client, monkeypatch):
+    requests = []
+
+    class Invalid(_Response):
+        def read(self):
+            return b'{"choices":[{"message":{"content":"not JSON"}}]}'
+
+    def opener(request, **kwargs):
+        requests.append(request)
+        return Invalid() if len(requests) == 1 else _Response()
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    assert pooled_client.json_request([{"role": "user", "content": "plan"}], lambda v: True,
+                                      role="plan_stage") == {"done": True}
+    assert requests[0].get_header("Authorization") == requests[1].get_header("Authorization")
+    assert "key_cooldown" not in pooled_client.audit_path.read_text()

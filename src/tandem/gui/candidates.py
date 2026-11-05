@@ -91,6 +91,8 @@ class ActionCandidateBuilder:
         context: str = "",
     ) -> ActionSpace:
         context_words = set(re.findall(r"[a-z0-9]+", context.lower()))
+        navigation_requested = bool(re.search(
+            r"\b(sidebar|side bar|navigation (menu|panel|bar))\b|侧栏|导航栏", context, re.I))
         hint_words = {
             word
             for item in action_inputs or []
@@ -100,16 +102,25 @@ class ActionCandidateBuilder:
             )
         }
 
-        def relevance(target: UITarget) -> tuple[int, int]:
+        def relevance(target: UITarget) -> tuple[int, float, int]:
             words = set(re.findall(r"[a-z0-9]+", target.name.lower()))
             contextual_words = set(
                 re.findall(r"[a-z0-9]+", " ".join(
                     (target.name, *target.parent_context, target.nearby_text)).lower())
             )
             return (
-                len(words & hint_words) * 4 + len(contextual_words & context_words),
+                int(navigation_requested and any(
+                    "navigation" in parent.lower() for parent in target.parent_context)),
+                len(words & hint_words) * 4
+                + len(words & context_words) / max(1, len(words)) * 8
+                + min(2, len(contextual_words & context_words)),
                 -targets.index(target),
             )
+
+        def passive_navigation_text(target: UITarget) -> bool:
+            return (navigation_requested and target.scope == "web_content"
+                    and target.role in {"text", "label", "static", "table_cell", "grid_cell"}
+                    and "click" not in target.operations)
 
         close_browser_requested = any(
             phrase in context.lower()
@@ -127,21 +138,23 @@ class ActionCandidateBuilder:
             (
                 target
                 for target in targets
-                if close_browser_requested
-                or not (
+                if not passive_navigation_text(target)
+                and (close_browser_requested or not (
                     target.name.lower() == "close"
                     and any("google chrome" in item.lower() for item in target.parent_context)
                     and (
                         len(target.parent_context) <= 2 or "memory usage" in target.parent_context[-1].lower()
                     )
-                )
+                ))
             ),
             key=relevance,
             reverse=True,
-        )[: min(max_candidates, 24)]
+        )[:max_candidates]
         editable_targets = [target for target in targets if target.role in EDITABLE_ROLES]
         double_targets = sorted(
-            [target for target in targets if target.role in DOUBLE_CLICK_ROLES], key=relevance, reverse=True
+            [target for target in targets if target.role in DOUBLE_CLICK_ROLES
+             and not passive_navigation_text(target)],
+            key=relevance, reverse=True
         )[:4]
 
         def candidates(operation: str, values: list[UITarget], description: str) -> list[ActionCandidate]:

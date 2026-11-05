@@ -49,7 +49,8 @@ def test_native_date_uses_observed_segments_and_checks_iso_value(order, suffix):
                  "input_type": "date", "date_order": order, "value": "", "label_source": "dom",
                  "x": original.x, "y": original.y, "width": original.width, "height": original.height,
                  "operations": ["click", "type_text"]}]}
-    targets = [replace(t, application="Google Chrome") for t in targets]
+    targets = [replace(t, application="Google Chrome",
+                       name="Departure date" if t.id == original.id else t.name) for t in targets]
     target = next(t for t in enrich_targets(targets, FORM, (1920, 1080), snapshot)
                   if t.name == "Departure date")
     from tandem.gui.goal_candidates import goal_candidates
@@ -330,7 +331,11 @@ def test_duplicate_buttons_keep_row_context_and_identity_after_layout_shift():
     snapshot = {"elements": [{"index": index, "role": "push_button", "name": "Select",
         "nearby_text": row, "x": 100, "y": 100 * index, "width": 80, "height": 30,
         "operations": ["click"]} for index, row in enumerate(["G8 09:00 North", "G14 11:00 South"], 1)]}
-    targets = enrich_targets([], None, (1920, 1080), snapshot)
+    base = _space(FORM)[0][0]
+    native = [replace(base, id=f"row-{e['index']}", application="Google Chrome", role=e["role"],
+                      name=e["name"], x=e["x"], y=e["y"], width=e["width"], height=e["height"])
+              for e in snapshot["elements"]]
+    targets = enrich_targets(native, None, (1920, 1080), snapshot)
     space = ActionCandidateBuilder().build(targets, context="G14")
     choices = space.target_heads["click"]
     assert "G14" in choices[0].description and "G8" in choices[1].description

@@ -11,6 +11,7 @@ import hashlib
 import http.client
 import json
 import os
+import re
 import socket
 import urllib.request
 
@@ -32,7 +33,8 @@ EXPRESSION = r"""
       [...(element.labels || [])].map(label => name(label, seen)).filter(Boolean).join(' ') ||
       (['button','submit','reset'].includes(element.type) ? element.value : '') ||
       element.getAttribute('alt') ||
-      (element.tagName === 'INPUT' ? '' : [...element.childNodes].map(node =>
+      (['INPUT','TEXTAREA'].includes(element.tagName) || element.isContentEditable ? '' :
+        [...element.childNodes].map(node =>
         node.nodeType === 3 ? node.textContent : node.nodeType === 1 ? name(node, seen) : '').join(' ')) ||
       element.getAttribute('title') || element.getAttribute('placeholder') || element.getAttribute('name'));
   };
@@ -40,8 +42,9 @@ EXPRESSION = r"""
     'gridcell','combobox','textbox','searchbox','spinbutton','slider']);
   const selector = 'a[href],button,input,textarea,select,summary,[contenteditable="true"],' +
     [...roles].map(role => '[role="' + role + '"]').join(',');
-  const clickable = element => element.tabIndex >= 0 || typeof element.onclick === 'function' ||
-    getComputedStyle(element).cursor === 'pointer';
+  const clickable = element => typeof element.onclick === 'function' ||
+    element.hasAttribute('onclick') || (typeof getEventListeners === 'function' &&
+      (getEventListeners(element).click || []).length > 0);
   const secretAutocomplete = new RegExp(
     '(^|\\s)(current-password|new-password|one-time-code|cc-number|' +
     'cc-csc|cc-exp|cc-exp-month|cc-exp-year)(\\s|$)');
@@ -133,6 +136,7 @@ EXPRESSION = r"""
     const editable = !element.readOnly && element.getAttribute('aria-readonly') !== 'true' &&
       (['textbox','searchbox','spinbutton'].includes(domRole) ||
        (domRole === 'combobox' && ['INPUT','TEXTAREA'].includes(element.tagName)));
+    const navigation = element.closest('nav,[role="navigation"]');
     const item = {
       index: elements.length + 1,
       role: roleNames[domRole] || domRole,
@@ -148,6 +152,7 @@ EXPRESSION = r"""
         .map(p => p.type) : [],
       x: originX + rect.left, y: originY + rect.top, width: rect.width, height: rect.height,
       scope: 'web_content', label_source: name(element) ? 'dom' : 'dom_nearby',
+      parent_context: navigation ? ['navigation', name(navigation) || 'Navigation'] : [],
       nearby_text: itemContext(element),
       operations: editable ? ['click','type_text'] : ['click'],
       source: 'dom'
@@ -160,7 +165,8 @@ EXPRESSION = r"""
     elements.push(item);
     if (elements.length >= 250) break;
   }
-  return {url:location.href, title:document.title, visibility:document.visibilityState, elements,
+  return {url:location.href, title:document.title, visibility:document.visibilityState,
+    focused:document.hasFocus(), elements,
     omitted:Math.max(0, rawCount - elements.length),
     viewport:{width:innerWidth,height:innerHeight,screen_x:originX,screen_y:originY,dpr:devicePixelRatio}};
 })()
@@ -225,7 +231,8 @@ def evaluate(port, page):
         if b' 101 ' not in response.split(b'\r\n', 1)[0]:
             raise OSError('CDP websocket handshake failed')
         send_frame(sock, json.dumps({'id':1, 'method':'Runtime.evaluate',
-          'params':{'expression':EXPRESSION, 'returnByValue':True, 'awaitPromise':True}}))
+          'params':{'expression':EXPRESSION, 'returnByValue':True, 'awaitPromise':True,
+                    'includeCommandLineAPI':True}}))
         chunks = None
         for _ in range(100):
             finished, opcode, payload = recv_frame(sock)
@@ -252,9 +259,37 @@ def evaluate(port, page):
         sock.close()
 
 
+def foreground_debug_port():
+    from Xlib.display import Display
+    display = Display()
+    try:
+        active = display.screen().root.get_full_property(display.intern_atom('_NET_ACTIVE_WINDOW'), 0)
+        if active is None or not active.value[0]:
+            raise OSError('No foreground X11 window')
+        window = display.create_resource_object('window', int(active.value[0]))
+        process = window.get_full_property(display.intern_atom('_NET_WM_PID'), 0)
+        if process is None:
+            raise OSError('Foreground window has no process identity')
+        with open(f'/proc/{int(process.value[0])}/cmdline', 'rb') as stream:
+            command = stream.read().decode('utf-8')
+        # Chromium can rewrite argv into one space-separated process title.
+        match = re.search(r'(?:^|[\s\x00])--remote-debugging-port(?:=|[\s\x00]+)([0-9]+)(?=$|[\s\x00])',
+                          command)
+        if match:
+            return int(match.group(1))
+        raise OSError('Foreground browser does not expose a debugging port')
+    finally:
+        display.close()
+
+
 def main():
     errors = []
-    for port in (1337, 9222):
+    try:
+        port = foreground_debug_port()
+    except Exception as error:
+        print(json.dumps({'error':f'foreground_cdp_unavailable:{type(error).__name__}:{str(error)[:160]}'}))
+        return
+    for port in (port,):
         try:
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             with opener.open(f'http://127.0.0.1:{port}/json/list', timeout=3) as response:
@@ -263,13 +298,11 @@ def main():
             snapshot = None
             for page in candidates:
                 candidate = evaluate(port, page)
-                if snapshot is None:
-                    snapshot = candidate
-                if candidate.get('visibility') == 'visible':
+                if candidate.get('visibility') == 'visible' and candidate.get('focused'):
                     snapshot = candidate
                     break
             if snapshot is None:
-                raise OSError('no CDP page target')
+                raise OSError('no focused CDP page target')
             print(json.dumps({'snapshot':snapshot, 'port':port}, ensure_ascii=False))
             break
         except Exception as error:

@@ -47,7 +47,8 @@ def test_goal_passes_cdp_enriched_semantics_to_planner_and_selector(tmp_path):
 
     def planner(*args, **kwargs):
         target = next(t for t in args[2] if t.name == "Receipt Date")
-        assert target.source == "dom" and target.scope == "web_content"
+        assert target.source == "a11y+dom" and target.scope == "web_content"
+        assert target.id.startswith("a11y:") and (target.x, target.y) == (250, 293)
         return {**plan(), "inputs": [{"label": "Receipt Date", "target_hint": "Receipt Date",
                                       "text": "11/12/2025", "input_mode": "replace"}]}
 

@@ -59,6 +59,14 @@ def test_action_code_cli_wait_and_terminals():
         gui_code(GuiAction("drag", {"x": 1}))
 
 
+@pytest.mark.parametrize("text", ["First line\nSecond line", "Unicode: 合成测试", "Column\tValue"])
+def test_multiline_and_unicode_use_bounded_clipboard_without_typing_enter(text):
+    code = gui_code(GuiAction("type", {"text": text, "input_mode": "replace"}))
+    assert "pyautogui.write" not in code
+    assert "xclip" in code and "timeout=10" in code
+    assert "DEVNULL" in code and "hotkey('ctrl','v')" in code
+
+
 def test_png_size_parses_ihdr():
     assert png_size(_png(1920, 1080)) == (1920, 1080)
 
