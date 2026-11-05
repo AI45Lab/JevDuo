@@ -75,7 +75,7 @@
 
 ## 一次决策的链路
 
-`TandemSession.act(observation)` 是唯一的决策入口，状态机语义（`runtime/session.py`）：
+`JevDuoSession.act(observation)` 是唯一的决策入口，状态机语义（`runtime/session.py`）：
 
 1. **读观察**：`Observation` 含截图、a11y 树和可选 CDP DOM 快照引用、预算、上一轮回执。
 2. **建目标**：a11y 树解析成 `UITarget`，`gui/semantics.py` 恢复邻近标签、
@@ -94,7 +94,7 @@
    结果带 `operation_margin`（两级置信度差）与 `latency_ms`。
 8. **编译动作**：`gui/compile.py` 把 winner + 目标编译成**声明式** `GuiAction`
    （kind / action_type / parameters / target_id），不做代码生成。
-9. **执行与验证**（tandem_eval 层）：环境执行后回传 `Receipt`；下一轮进入
+9. **执行与验证**（jevduo_eval 层）：环境执行后回传 `Receipt`；下一轮进入
    `runtime.episode.verify_pending`——用新观察独立核验上一步，更新 verified_focus、failed_toggles、
    以及**逐条需求的核验状态**（`requirement_checks`）。
 10. **停止条件**：步数/墙钟预算耗尽 → `FailAction`；连续 3 次无可执行动作 → `FailAction(no_action_limit)`。
@@ -130,7 +130,7 @@
 
 ## 消息层协议
 
-harness 与环境之间只走 JSON 消息（`src/tandem/protocol/`）：
+harness 与环境之间只走 JSON 消息（`src/jevduo/protocol/`）：
 
 - **Observation**（环境 → harness）：任务指令、步号、预算、截图引用、a11y 树引用、上一轮回执；
 - **Action**（harness → 环境）：`GuiAction` / `CliAction` / `WaitAction` / `FinishAction` / `FailAction`；
@@ -146,15 +146,15 @@ harness 与环境之间只走 JSON 消息（`src/tandem/protocol/`）：
 自检：
 
 ```bash
-tandem check      # 协议样例自检（CI 同样跑）
+jevduo check      # 协议样例自检（CI 同样跑）
 ```
 
 ## 仓库结构
 
 | 路径 | 定位 |
 |---|---|
-| `src/tandem/` | **仓库主体**：快慢双模 harness（决策状态机、规划/验证、候选与排序、协议层、组件装配） |
-| `src/tandem_eval/` | 测评薄适配层：worker 侧 6 文件（entry/env/runner/recorder/scoring/manifest）+ 开发机侧 `rjob.py` 生命周期客户端 |
+| `src/jevduo/` | **仓库主体**：快慢双模 harness（决策状态机、规划/验证、候选与排序、协议层、组件装配） |
+| `src/jevduo_eval/` | 测评薄适配层：worker 侧 6 文件（entry/env/runner/recorder/scoring/manifest）+ 开发机侧 `rjob.py` 生命周期客户端 |
 | `infra/` | 内部集群适配：唯一配置文件、worker 入口脚本（详见 [集群运行手册](docs/CLUSTER_RUNTIME.md)） |
 | `demo/` | 轨迹回放与对比站点：只读结果目录，不 import harness、不调模型、不碰 VM |
 | `tests/` | `protocol/` `harness/` `eval/` `demo/` 四组 |
@@ -171,22 +171,22 @@ tandem check      # 协议样例自检（CI 同样跑）
 pip install -e '.[dev]'
 
 # 三件套：lint + 单测 + 协议自检
-ruff check src tests && pytest && tandem check
+ruff check src tests && pytest && jevduo check
 ```
 
 把 harness 当库用：
 
 ```python
-from tandem.components import build_default
-from tandem.config import SessionConfig
-from tandem.runtime.session import TandemSession
+from jevduo.components import build_default
+from jevduo.config import SessionConfig
+from jevduo.runtime.session import JevDuoSession
 
 components = build_default(
     client=slow_client,                       # models.slow.SlowModelClient（慢模型客户端）
     endpoint="http://<排序服务>/rank",
     config=SessionConfig(fast_backend="jev"),
 )
-session = TandemSession(components)
+session = JevDuoSession(components)
 session.begin("把 FYP 答辩安排逐条加进日历", None)   # None → 慢模型抽取需求
 action = session.act(observation)                     # Observation → Action
 ```
@@ -194,7 +194,7 @@ action = session.act(observation)                     # Observation → Action
 在真实环境上跑一题（提交到内部集群）：
 
 ```bash
-tandem-eval rjob run --run-id <name> --benchmark osworld2 --tasks <task-id> \
+jevduo-eval rjob run --run-id <name> --benchmark osworld2 --tasks <task-id> \
   --repo . --config infra/config.json --poll 60 --timeout 3600
 ```
 
@@ -207,9 +207,23 @@ tandem-eval rjob run --run-id <name> --benchmark osworld2 --tasks <task-id> \
 
 完整参数表与运行细节见 [docs/CLUSTER_RUNTIME.md](docs/CLUSTER_RUNTIME.md)。
 
+### 从旧名称 tandem 升级
+
+项目已更名为 JevDuo：包名 `tandem` → `jevduo`，`tandem_eval` → `jevduo_eval`，命令 `tandem` / `tandem-eval` → `jevduo` / `jevduo-eval`，类 `TandemSession` → `JevDuoSession`。旧入口已移除，不保留别名。已有安装按下面三步升级：
+
+```bash
+pip uninstall -y tandem        # 卸载旧包（uv 环境：uv pip uninstall tandem）
+pip install -e '.[dev]'        # 以新名称重装
+jevduo check                   # 确认入口可用
+```
+
+- 自己的脚本里 `import tandem` / `from tandem_eval ...` 需改为 `jevduo` / `jevduo_eval`。
+- 环境变量 `TANDEM_*` 本次未改名，仍按原名使用。
+- rjob 任务名前缀由 `tandem-<run-id>` 变为 `jevduo-<run-id>`；开发机 `infra/config.json` 里的 `eval.repo_root` / `eval.deploy_root` 需按新目录同步，旧的部署副本确认无在跑任务后再清理。
+
 ## 会话配置
 
-`SessionConfig`（`src/tandem/config.py`，frozen dataclass，构造即校验）：
+`SessionConfig`（`src/jevduo/config.py`，frozen dataclass，构造即校验）：
 
 | 字段 | 默认 | 说明 |
 |---|---|---|

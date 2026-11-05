@@ -6,7 +6,7 @@
 
 ## 仓库定位
 
-主体是 **Tandem harness**（快慢双模 CUA，`src/tandem/`）；`src/tandem_eval/` 仅为适配集群 rjob 的测评薄适配层（worker 侧 6 文件 + 开发机侧 rjob.py / rjob_spec.py / rjob_status.py / config_schema.py）。
+主体是 **Tandem harness**（快慢双模 CUA，`src/jevduo/`）；`src/jevduo_eval/` 仅为适配集群 rjob 的测评薄适配层（worker 侧 6 文件 + 开发机侧 rjob.py / rjob_spec.py / rjob_status.py / config_schema.py）。
 
 ## 五条硬纪律（CI/评审强制）
 
@@ -16,7 +16,7 @@
 4. **一个 PR = 一个组件改动 + 单测 + smoke 结果链接**（真机 smoke 已可用：`--benchmark mock` 走 mock 链路；真实基准走 OSW1/OSW2）。
 5. **ruff + pytest + 契约测试三件套从第一天齐上**：本地提交前 `ruff check src tests && pytest` 必须绿。
 
-## 协议纪律（`src/tandem/protocol/`）
+## 协议纪律（`src/jevduo/protocol/`）
 
 - `schema/*.json` 是唯一真源；`validate.py` 是运行时强制者；`samples/*.json` 是 golden 样例。三者由 `tests/protocol/` 锚定，改动必须同步。
 - 任何字段增删/语义变化 = bump `protocol_version` 次版本号，并同步全部 golden 样例与 schema。
@@ -40,13 +40,13 @@
 ## 开发闭环
 
 ```
-改代码 → ruff check src tests → pytest →（若触碰协议）tandem check → PR（附单测 + smoke 链接）
+改代码 → ruff check src tests → pytest →（若触碰协议）jevduo check → PR（附单测 + smoke 链接）
 ```
 
-- `tandem check`：协议样例自检（CI 也跑）。
-- `tandem-eval rjob run …`：一站式提交（sync→spec→submit→watch→fetch→cleanup）。
+- `jevduo check`：协议样例自检（CI 也跑）。
+- `jevduo-eval rjob run …`：一站式提交（sync→spec→submit→watch→fetch→cleanup）。
   **收尾默认删 rjob**——成功/失败/超时/异常都删，不在集群上留残留；`--keep` 保留现场。
-- `tandem-eval entry --spec …`：worker 侧入口（infra/worker.sh 调用）。
+- `jevduo-eval entry --spec …`：worker 侧入口（infra/worker.sh 调用）。
 
 ## 共享资源纪律（worker 侧）
 
@@ -86,14 +86,14 @@
 ## 目录地图
 
 ```
-src/tandem/              harness 主体（组件、协议、CLI）
-src/tandem/runtime/      会话状态机、回执处理、阶段推进与停止条件
-src/tandem/planning/     单步规划与阶段规划
-src/tandem/gui/          A11y 目标、动作候选、聚焦剪枝与声明式动作编译
-src/tandem/models/       慢模型客户端、JEV/Kev 选择器与共用排序结构
-src/tandem/verification/ 需求抽取、模型验证与阶段规则验证
-src/tandem/protocol/     消息层协议：schema/ 真源、validate/ 校验、samples/ golden
-src/tandem_eval/         worker 侧 6 文件（entry/env/runner/recorder/scoring/manifest）
+src/jevduo/              harness 主体（组件、协议、CLI）
+src/jevduo/runtime/      会话状态机、回执处理、阶段推进与停止条件
+src/jevduo/planning/     单步规划与阶段规划
+src/jevduo/gui/          A11y 目标、动作候选、聚焦剪枝与声明式动作编译
+src/jevduo/models/       慢模型客户端、JEV/Kev 选择器与共用排序结构
+src/jevduo/verification/ 需求抽取、模型验证与阶段规则验证
+src/jevduo/protocol/     消息层协议：schema/ 真源、validate/ 校验、samples/ golden
+src/jevduo_eval/         worker 侧 6 文件（entry/env/runner/recorder/scoring/manifest）
                          + 开发机侧 rjob.py / rjob_spec.py / rjob_status.py 生命周期客户端
                          + config_schema.py（config.json 的校验与 API 选取）
 tests/                   protocol/ harness/ eval/ demo/ 四组
@@ -108,9 +108,9 @@ docs/                    RESULT_DIR_CONTRACT.md（eval↔demo 唯一接口）
                          CLUSTER_RUNTIME.md（内部集群运行手册：rjob/共享资源/已知坑）
 ```
 
-`src/tandem/` 根目录只保留包信息、CLI、`config.py` 和 `components.py`。
+`src/jevduo/` 根目录只保留包信息、CLI、`config.py` 和 `components.py`。
 组件继续经 `Components` / `build_default` 装配；不要在 runtime 中硬编码新的模型后端。
-真实执行、环境生命周期、评分与结果落盘仍归 `tandem_eval`。
+真实执行、环境生命周期、评分与结果落盘仍归 `jevduo_eval`。
 
 ## 结果目录纪律
 

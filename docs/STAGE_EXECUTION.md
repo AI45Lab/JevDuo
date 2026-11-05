@@ -2,7 +2,7 @@
 
 通过 `--execution-mode stage` 启用：慢模型规划阶段，JEV/Kev 连续选择 GUI 动作，CLI 执行计划中的命令；优先使用规则验证，证据不足时调用模型 Verify，失败或状态偏离时按需重规划，最终完成仍需独立验证。默认保留原有 `step` 模式。
 
-开发入口（相对 `src/tandem/`）：
+开发入口（相对 `src/jevduo/`）：
 
 - `planning/stage_planner.py`：阶段计划生成与响应校验。
 - `runtime/stages.py`：里程碑进度、当前目标重新绑定及重规划。
