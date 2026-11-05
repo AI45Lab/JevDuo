@@ -50,7 +50,7 @@ def test_a11y_recovers_nearby_labels_and_separates_browser_chrome():
     assert _named(targets, "Minimise").scope == "browser_chrome"
 
 
-def test_dom_enriches_matching_a11y_target_and_adds_dom_only_controls():
+def test_dom_enriches_a11y_semantics_without_admitting_uncalibrated_dom_only_controls():
     date = _named(_targets(), "Receipt Date")
     snapshot = {
         "viewport": {"screen_y": 112},
@@ -72,7 +72,7 @@ def test_dom_enriches_matching_a11y_target_and_adds_dom_only_controls():
     merged = _named(targets, "Receipt Date")
     assert merged.id == date.id and merged.source == "a11y+dom"
     assert merged.value == "11/12/2025" and merged.operations == ("click", "type_text")
-    assert _named(targets, "Upload receipt").source == "dom"
+    assert not any(t.name == "Upload receipt" for t in targets)
     click = next(c for c in _space(targets).target_heads["click"] if c.target_id == merged.id)
     assert click.source == "a11y+dom"
 

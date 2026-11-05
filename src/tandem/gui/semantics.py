@@ -129,13 +129,14 @@ def _roles_compatible(a: str, b: str) -> bool:
 
 
 def _aligned_snapshot(targets, snapshot):
-    """Correct a common frame offset only when three independent controls agree."""
+    """Return the snapshot and whether three independent controls verified its screen mapping."""
     if not snapshot:
-        return snapshot
+        return snapshot, False
     pairs = set()
     for item in snapshot.get("elements", []):
         matches = [t for t in targets if _norm(t.name) == _norm(item.get("name", ""))
                    and _roles_compatible(t.role, item.get("role", ""))
+                   and t.source.startswith("a11y")
                    and "chrome" in t.application.lower()
                    and 0.8 <= t.width / max(1, item.get("width", 0)) <= 1.25
                    and 0.8 <= t.height / max(1, item.get("height", 0)) <= 1.25]
@@ -149,12 +150,13 @@ def _aligned_snapshot(targets, snapshot):
     offsets = [(native[0] - dom[0], native[1] - dom[1]) for native, dom in pairs
                if native_counts[native] == dom_counts[dom] == 1]
     if len(offsets) < 3 or any(max(v) - min(v) > 4 for v in zip(*offsets, strict=True)):
-        return snapshot
+        return snapshot, False
     dx, dy = (median(v) for v in zip(*offsets, strict=True))
-    return {**snapshot, "elements": [{**i, "x": i["x"] + dx, "y": i["y"] + dy}
-                                    for i in snapshot["elements"]],
-            "viewport": {**snapshot.get("viewport", {}),
-                         "screen_y": snapshot.get("viewport", {}).get("screen_y", 0) + dy}}
+    aligned = {**snapshot, "elements": [{**i, "x": i["x"] + dx, "y": i["y"] + dy}
+                                       for i in snapshot["elements"]]}
+    if "screen_y" in snapshot.get("viewport", {}):
+        aligned["viewport"] = {**snapshot["viewport"], "screen_y": snapshot["viewport"]["screen_y"] + dy}
+    return aligned, True
 
 
 def _dom_target(item: dict, snapshot_id: str) -> UITarget | None:
@@ -303,8 +305,8 @@ def enrich_targets(
     if owner is not None:
         owner_scope = "menu" if _local(owner.tag) in {"menu", "popup_menu"} else "dialog"
     labels, chrome_active = _a11y_context(root)
-    browser_snapshot = _aligned_snapshot(targets, browser_snapshot)
-    content_y = _content_y(targets, browser_snapshot)
+    browser_snapshot, dom_coordinates_verified = _aligned_snapshot(targets, browser_snapshot)
+    content_y = _content_y(targets, browser_snapshot if dom_coordinates_verified else None)
     enriched = []
     for target in targets:
         name, source = target.name, target.label_source
@@ -317,7 +319,8 @@ def enrich_targets(
             name, source = nearby, "a11y_nearby"
         if not name and target.focused:
             name, source = f"Focused {target.role.replace('_', ' ')}", "synthetic"
-        if not name:
+        # Keep unnamed native boxes for DOM labeling; discard any still unnamed after fusion.
+        if not name and not browser_snapshot:
             continue
         item = replace(
             target,
@@ -343,15 +346,19 @@ def enrich_targets(
                 for index, base in enumerate(enriched)
                 if _roles_compatible(base.role, dom.role)
                 and (_norm(base.name) == _norm(dom.name)
+                     or not base.name
                      or base.label_source in {"unresolved", "synthetic"})
             ]
-            best = max(compatible, key=lambda pair: pair[1], default=(None, 0.0))
-            if best[0] is not None and best[1] >= 0.5:
-                enriched[best[0]] = _merge(enriched[best[0]], dom)
-            else:
+            matches = [index for index, overlap in compatible if overlap >= 0.5]
+            if len(matches) == 1:
+                enriched[matches[0]] = _merge(enriched[matches[0]], dom)
+            elif dom_coordinates_verified:
+                # Unmatched DOM nodes stay in the raw snapshot until their screen mapping is verified.
                 enriched.append(dom)
     unique = {}
     for target in enriched:
+        if not target.name:
+            continue
         center_x = target.x + target.width / 2
         center_y = target.y + target.height / 2
         if not (0 <= center_x < screen_size[0] and 0 <= center_y < screen_size[1]):

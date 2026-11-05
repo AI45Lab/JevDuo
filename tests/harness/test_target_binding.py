@@ -35,13 +35,15 @@ def test_structural_navigation_binding_survives_candidate_budget_and_dom_merge()
     base = _named(_targets(), "Save")
     body = [replace(base, id=str(i), name="Open Inventory using sidebar", x=300 + i)
             for i in range(30)]
+    body.append(replace(base, id="nav", name="Inventory", x=50, y=220, width=100, height=30))
     snapshot = {"elements": [{"index": 1, "role": "push_button", "name": "Inventory", "x": 50,
         "y": 220, "width": 100, "height": 30, "parent_context": ["navigation", "Workspace"],
         "operations": ["click"]}]}
     targets = enrich_targets(body, CHROME_XML, (1920, 1080), snapshot)
     space = ActionCandidateBuilder().build(targets, max_candidates=4,
                                            context="Open Inventory using the sidebar")
-    assert space.target_heads["click"][0].target_id == "dom:t8:1"
+    assert space.target_heads["click"][0].target_id == "nav"
+    assert _named(targets, "Inventory").source == "a11y+dom"
 
 
 @pytest.mark.parametrize("tag", ["dialog", "frame"])
@@ -70,6 +72,7 @@ def test_native_popup_menu_suspends_even_uncovered_web_dom_until_menu_closes():
     def tree(showing):
         return f'''<application name="Google Chrome" active="true">
           <frame name="Editor" active="true">
+            <push_button name="Delete row" screencoord="(700,500)" size="(100,30)"/>
             <menu name="Context" ispopup="true" active="true" showing="{showing}"
                 screencoord="(100,100)" size="(250,300)">
               <menu_item name="Back" showing="{showing}" screencoord="(110,110)" size="(200,30)"/>
@@ -89,20 +92,28 @@ def test_native_popup_menu_suspends_even_uncovered_web_dom_until_menu_closes():
 
 def test_retained_inactive_modal_does_not_suspend_the_current_page():
     xml = '''<desktop-frame foreground_title="Editor">
-      <application name="Google Chrome" active="true"><frame name="Editor" active="true"/>
+      <application name="Google Chrome" active="true"><frame name="Editor" active="true">
+        <push_button name="Save" screencoord="(700,500)" size="(100,30)"/></frame>
         <dialog name="Old picker" modal="true" active="false" showing="true"/>
       </application></desktop-frame>'''
     snapshot = {"elements": [{"index": 1, "role": "push_button", "name": "Save",
                               "x": 700, "y": 500, "width": 100, "height": 30}]}
-    assert [t.name for t in enrich_targets([], xml, (1920, 1080), snapshot)] == ["Save"]
+    raw = A11yTargetBuilder().build(xml, "t0", filter_occluded=True)
+    targets = enrich_targets(raw, xml, (1920, 1080), snapshot)
+    assert [t.name for t in targets] == ["Save"]
+    assert targets[0].source == "a11y+dom"
 
 
 def test_web_dialog_does_not_disable_its_browser_dom_controls():
     xml = '''<application name="Google Chrome" active="true">
       <frame name="Editor" active="true"><document_web name="Web editor">
-        <dialog name="Confirm replacement" modal="true" active="true"/>
+        <dialog name="Confirm replacement" modal="true" active="true">
+          <push_button name="Replace" screencoord="(700,500)" size="(100,30)"/>
+        </dialog>
       </document_web></frame></application>'''
     snapshot = {"elements": [{"index": 1, "role": "push_button", "name": "Replace",
                               "x": 700, "y": 500, "width": 100, "height": 30}]}
-    targets = enrich_targets([], xml, (1920, 1080), snapshot)
+    raw = A11yTargetBuilder().build(xml, "t0", filter_occluded=True)
+    targets = enrich_targets(raw, xml, (1920, 1080), snapshot)
     assert [t.name for t in targets] == ["Replace"]
+    assert targets[0].source == "a11y+dom"

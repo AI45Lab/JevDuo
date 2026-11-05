@@ -1,10 +1,12 @@
 """Synthetic observation-to-action regressions; no benchmark IDs or answers."""
 
+from copy import deepcopy
 from dataclasses import replace
 
 import pytest
 
 from tandem.gui.candidates import ActionCandidateBuilder
+from tandem.gui.compile import gui_action
 from tandem.gui.field_binding import _input_target, matches_field
 from tandem.gui.goal_candidates import foreground_tree, goal_candidates, modal_frontier
 from tandem.gui.interaction import target_effect
@@ -58,35 +60,113 @@ def test_page_container_cannot_rename_a_nested_button():
 
 
 @pytest.mark.parametrize("dx,dy", [(80, 0), (0, 25), (40, 0)])
-def test_same_named_controls_without_verified_alignment_remain_distinct(dx, dy):
+def test_unverified_dom_coordinates_do_not_create_duplicate_click_targets(dx, dy):
     base = replace(_named(_targets(), "Save"), name="Publish", x=500, y=400)
     snapshot = {"elements": [{"index": 1, "role": "push_button", "name": "Publish",
         "x": base.x + dx, "y": base.y + dy, "width": base.width, "height": base.height,
         "operations": ["click"]}]}
     targets = enrich_targets([base], None, (1920, 1080), snapshot)
-    assert [(t.x, t.y, t.source) for t in targets] == [
-        (500, 400, "a11y"), (500 + dx, 400 + dy, "dom"),
-    ]
+    assert [(t.x, t.y, t.source) for t in targets] == [(500, 400, "a11y")]
     space = ActionCandidateBuilder().build(targets, action_inputs=[])
-    assert {c.target_id for c in space.target_heads["click"]} == {t.id for t in targets}
+    assert {c.target_id for c in space.target_heads["click"]} == {base.id}
+    assert "visual_fallback" in space.controls
 
 
-@pytest.mark.parametrize("anchor_count,expected_y", [(2, 425), (3, 400)])
-def test_only_three_unique_anchors_correct_dom_only_control_coordinates(anchor_count, expected_y):
+@pytest.mark.parametrize("anchor_count,offset", [(2, 25), (3, 0), (3, 25)])
+def test_only_three_unique_anchors_admit_dom_only_control_coordinates(anchor_count, offset):
     base = _named(_targets(), "Save")
     anchors = [replace(base, id=str(i), name=f"Anchor {i}", x=200, y=150 + 60 * i)
                for i in range(anchor_count)]
-    elements = [{"index": i, "role": t.role, "name": t.name, "x": t.x, "y": t.y + 25,
+    elements = [{"index": i, "role": t.role, "name": t.name, "x": t.x, "y": t.y + offset,
                  "width": t.width, "height": t.height} for i, t in enumerate(anchors)]
     elements.append({"index": 4, "role": "push_button", "name": "New action", "x": 600,
                      "y": 425, "width": 100, "height": 30})
-    targets = enrich_targets(anchors, None, (1920, 1080), {"elements": elements})
-    assert _named(targets, "New action").y == expected_y
+    snapshot = {"elements": elements}
+    original = deepcopy(snapshot)
+    targets = enrich_targets(anchors, None, (1920, 1080), snapshot)
+    assert snapshot == original  # Raw DOM evidence is retained, not overwritten by calibration.
     if anchor_count == 3:
+        assert _named(targets, "New action").y == 425 - offset
         assert len(targets) == 4
         assert [(t.id, t.y, t.source) for t in targets[:3]] == [
             (t.id, t.y, "a11y+dom") for t in anchors
         ]
+        candidate = next(c for c in ActionCandidateBuilder().build(targets).target_heads["click"]
+                         if c.target_id == _named(targets, "New action").id)
+        action = gui_action(candidate, _named(targets, "New action"))
+        assert action.parameters == {"x": 650, "y": 440 - offset}
+    else:
+        assert [t.id for t in targets] == [t.id for t in anchors]
+
+
+def test_dom_nodes_cannot_validate_their_own_coordinate_mapping():
+    base = _named(_targets(), "Save")
+    dom = [replace(base, id=str(i), name=f"Control {i}", source="dom", y=150 + 60 * i)
+           for i in range(3)]
+    elements = [{"index": i, "role": t.role, "name": t.name, "x": t.x, "y": t.y,
+                 "width": t.width, "height": t.height} for i, t in enumerate(dom)]
+    elements.append({"index": 4, "role": "push_button", "name": "New action", "x": 600,
+                     "y": 425, "width": 100, "height": 30})
+    targets = enrich_targets(dom, None, (1920, 1080), {"elements": elements})
+    assert not any(t.name == "New action" for t in targets)
+
+
+def test_alignment_without_viewport_origin_does_not_reclassify_browser_chrome():
+    base = _named(_targets(), "Save")
+    anchors = [replace(base, id=str(i), name=f"Anchor {i}", y=150 + 60 * i) for i in range(3)]
+    shell = replace(base, id="shell", name="Window menu", y=20)
+    elements = [{"index": i, "role": t.role, "name": t.name, "x": t.x, "y": t.y + 25,
+                 "width": t.width, "height": t.height} for i, t in enumerate(anchors)]
+    targets = enrich_targets([*anchors, shell], None, (1920, 1080), {"elements": elements})
+    assert _named(targets, "Window menu").scope == "browser_chrome"
+
+
+def test_a_single_local_dom_match_keeps_a11y_coordinates_and_dom_semantics():
+    base = replace(_named(_targets(), "Save"), name="Publish", x=500, y=400)
+    snapshot = {"elements": [{"index": 1, "role": base.role, "name": base.name,
+        "x": 501, "y": 401, "width": base.width, "height": base.height,
+        "parent_context": ["navigation", "Workspace"], "operations": ["click"]}]}
+    targets = enrich_targets([base], None, (1920, 1080), snapshot)
+    assert len(targets) == 1 and targets[0].source == "a11y+dom"
+    assert (targets[0].x, targets[0].y) == (500, 400)
+    assert targets[0].parent_context == ("navigation", "Workspace")
+
+
+def test_ambiguous_local_dom_match_does_not_overwrite_an_arbitrary_a11y_control():
+    base = replace(_named(_targets(), "Save"), name="Publish", x=500, y=400)
+    other = replace(base, id="a11y:other")
+    snapshot = {"elements": [{"index": 1, "role": base.role, "name": base.name,
+        "x": 500, "y": 400, "width": base.width, "height": base.height,
+        "parent_context": ["navigation", "Workspace"]}]}
+    targets = enrich_targets([base, other], None, (1920, 1080), snapshot)
+    assert all(t.source == "a11y" and t.parent_context == base.parent_context for t in targets)
+
+
+@pytest.mark.parametrize("role", ["push_button", "entry", "table_cell"])
+def test_no_a11y_anchors_means_no_dom_coordinate_actions(role):
+    snapshot = {"elements": [{"index": 1, "role": role, "name": "Control", "x": 500,
+        "y": 425, "width": 80, "height": 30, "operations": ["click", "type_text"]}]}
+    targets = enrich_targets([], None, (1920, 1080), snapshot)
+    space = ActionCandidateBuilder().build(targets)
+    assert not targets
+    assert not any(c.target_id for c in space.candidates())
+    assert "visual_fallback" in space.controls
+
+
+def test_distinct_same_named_a11y_controls_are_never_removed_by_dom_coordinate_gate():
+    base = replace(_named(_targets(), "Save"), name="Publish", x=500, y=400)
+    adjacent = replace(base, id="a11y:adjacent", x=580)
+    snapshot = {"elements": [{"index": 1, "role": base.role, "name": base.name,
+        "x": 500, "y": 425, "width": base.width, "height": base.height}]}
+    targets = enrich_targets([base, adjacent], None, (1920, 1080), snapshot)
+    assert [(t.id, t.x, t.y) for t in targets] == [(base.id, 500, 400), (adjacent.id, 580, 400)]
+
+
+def test_unnamed_native_control_without_local_dom_match_remains_non_actionable():
+    base = replace(_named(_targets(), "Save"), name="", label_source="unresolved", x=500, y=400)
+    snapshot = {"elements": [{"index": 1, "role": base.role, "name": "Publish",
+        "x": 500, "y": 425, "width": base.width, "height": base.height}]}
+    assert not enrich_targets([base], None, (1920, 1080), snapshot)
 
 
 @pytest.mark.parametrize("alias_kind", ["dom_duplicate", "dom_nested", "native_duplicate"])
@@ -101,7 +181,7 @@ def test_aliases_of_one_physical_control_cannot_calibrate_the_page(alias_kind):
     elements.append({"index": 4, "role": "push_button", "name": "New action", "x": 600,
                      "y": 425, "width": 100, "height": 30})
     targets = enrich_targets(anchors, None, (1920, 1080), {"elements": elements})
-    assert _named(targets, "New action").y == 425
+    assert not any(t.source == "dom" for t in targets)
 
 
 def test_ambiguous_anchor_does_not_contribute_to_frame_alignment():
@@ -116,7 +196,7 @@ def test_ambiguous_anchor_does_not_contribute_to_frame_alignment():
          "y": 425, "width": 100, "height": 30},
     ])
     targets = enrich_targets(anchors, None, (1920, 1080), {"elements": elements})
-    assert _named(targets, "New action").y == 425
+    assert not any(t.source == "dom" for t in targets)
 
 
 def test_ambiguous_same_title_windows_do_not_activate_background_frame():
