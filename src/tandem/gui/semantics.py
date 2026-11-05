@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
+from collections import Counter
 from dataclasses import replace
 from statistics import median
 
@@ -131,7 +132,7 @@ def _aligned_snapshot(targets, snapshot):
     """Correct a common frame offset only when three independent controls agree."""
     if not snapshot:
         return snapshot
-    offsets = []
+    pairs = set()
     for item in snapshot.get("elements", []):
         matches = [t for t in targets if _norm(t.name) == _norm(item.get("name", ""))
                    and _roles_compatible(t.role, item.get("role", ""))
@@ -139,7 +140,14 @@ def _aligned_snapshot(targets, snapshot):
                    and 0.8 <= t.width / max(1, item.get("width", 0)) <= 1.25
                    and 0.8 <= t.height / max(1, item.get("height", 0)) <= 1.25]
         if len(matches) == 1:
-            offsets.append((matches[0].x - item["x"], matches[0].y - item["y"]))
+            target = matches[0]
+            pairs.add(((target.x, target.y, target.width, target.height),
+                       (item["x"], item["y"], item["width"], item["height"])))
+    # DOM aliases are one physical anchor; ambiguous correspondences cannot calibrate a frame.
+    native_counts = Counter(native for native, dom in pairs)
+    dom_counts = Counter(dom for native, dom in pairs)
+    offsets = [(native[0] - dom[0], native[1] - dom[1]) for native, dom in pairs
+               if native_counts[native] == dom_counts[dom] == 1]
     if len(offsets) < 3 or any(max(v) - min(v) > 4 for v in zip(*offsets, strict=True)):
         return snapshot
     dx, dy = (median(v) for v in zip(*offsets, strict=True))
@@ -337,15 +345,6 @@ def enrich_targets(
                 and (_norm(base.name) == _norm(dom.name)
                      or base.label_source in {"unresolved", "synthetic"})
             ]
-            same_label = [index for index, base in enumerate(enriched)
-                          if _roles_compatible(base.role, dom.role) and _norm(base.name) == _norm(dom.name)
-                          and abs(base.x - dom.x) <= max(base.width, dom.width)
-                          and abs(base.y - dom.y) <= max(base.height, dom.height)
-                          and 0.5 <= base.width / dom.width <= 2
-                          and 0.5 <= base.height / dom.height <= 2]
-            if len(same_label) == 1:
-                enriched[same_label[0]] = _merge(enriched[same_label[0]], dom)
-                continue
             best = max(compatible, key=lambda pair: pair[1], default=(None, 0.0))
             if best[0] is not None and best[1] >= 0.5:
                 enriched[best[0]] = _merge(enriched[best[0]], dom)

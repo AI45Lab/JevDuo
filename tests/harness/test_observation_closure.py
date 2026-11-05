@@ -57,25 +57,66 @@ def test_page_container_cannot_rename_a_nested_button():
     assert next(t for t in targets if t.id == base.id).source == "a11y"
 
 
-def test_same_named_button_retains_native_coordinates_despite_frame_offset():
+@pytest.mark.parametrize("dx,dy", [(80, 0), (0, 25), (40, 0)])
+def test_same_named_controls_without_verified_alignment_remain_distinct(dx, dy):
     base = replace(_named(_targets(), "Save"), name="Publish", x=500, y=400)
     snapshot = {"elements": [{"index": 1, "role": "push_button", "name": "Publish",
-        "x": 500, "y": 425, "width": base.width, "height": base.height, "operations": ["click"]}]}
+        "x": base.x + dx, "y": base.y + dy, "width": base.width, "height": base.height,
+        "operations": ["click"]}]}
     targets = enrich_targets([base], None, (1920, 1080), snapshot)
-    assert len(targets) == 1
-    assert targets[0].y == 400 and targets[0].source == "a11y+dom"
+    assert [(t.x, t.y, t.source) for t in targets] == [
+        (500, 400, "a11y"), (500 + dx, 400 + dy, "dom"),
+    ]
+    space = ActionCandidateBuilder().build(targets, action_inputs=[])
+    assert {c.target_id for c in space.target_heads["click"]} == {t.id for t in targets}
 
 
-def test_three_unique_anchors_correct_dom_only_control_coordinates():
+@pytest.mark.parametrize("anchor_count,expected_y", [(2, 425), (3, 400)])
+def test_only_three_unique_anchors_correct_dom_only_control_coordinates(anchor_count, expected_y):
     base = _named(_targets(), "Save")
     anchors = [replace(base, id=str(i), name=f"Anchor {i}", x=200, y=150 + 60 * i)
-               for i in range(3)]
+               for i in range(anchor_count)]
     elements = [{"index": i, "role": t.role, "name": t.name, "x": t.x, "y": t.y + 25,
                  "width": t.width, "height": t.height} for i, t in enumerate(anchors)]
     elements.append({"index": 4, "role": "push_button", "name": "New action", "x": 600,
                      "y": 425, "width": 100, "height": 30})
     targets = enrich_targets(anchors, None, (1920, 1080), {"elements": elements})
-    assert _named(targets, "New action").y == 400
+    assert _named(targets, "New action").y == expected_y
+    if anchor_count == 3:
+        assert len(targets) == 4
+        assert [(t.id, t.y, t.source) for t in targets[:3]] == [
+            (t.id, t.y, "a11y+dom") for t in anchors
+        ]
+
+
+@pytest.mark.parametrize("alias_kind", ["dom_duplicate", "dom_nested", "native_duplicate"])
+def test_aliases_of_one_physical_control_cannot_calibrate_the_page(alias_kind):
+    base = _named(_targets(), "Save")
+    anchors = ([replace(base, id=str(i), name=f"Alias {i}") for i in range(3)]
+               if alias_kind == "native_duplicate" else [base])
+    elements = [{"index": i, "role": base.role, "name": anchors[i].name if len(anchors) == 3 else base.name,
+                 "x": base.x, "y": base.y + 25,
+                 "width": base.width + (i if alias_kind == "dom_nested" else 0), "height": base.height}
+                for i in range(3)]
+    elements.append({"index": 4, "role": "push_button", "name": "New action", "x": 600,
+                     "y": 425, "width": 100, "height": 30})
+    targets = enrich_targets(anchors, None, (1920, 1080), {"elements": elements})
+    assert _named(targets, "New action").y == 425
+
+
+def test_ambiguous_anchor_does_not_contribute_to_frame_alignment():
+    base = _named(_targets(), "Save")
+    anchors = [replace(base, id=str(i), name=f"Anchor {i}", x=200, y=150 + 60 * i)
+               for i in range(3)]
+    elements = [{"index": i, "role": t.role, "name": t.name, "x": t.x, "y": t.y + 25,
+                 "width": t.width, "height": t.height} for i, t in enumerate(anchors)]
+    elements.extend([
+        {**elements[0], "index": 3, "y": anchors[0].y + 27},
+        {"index": 4, "role": "push_button", "name": "New action", "x": 600,
+         "y": 425, "width": 100, "height": 30},
+    ])
+    targets = enrich_targets(anchors, None, (1920, 1080), {"elements": elements})
+    assert _named(targets, "New action").y == 425
 
 
 def test_ambiguous_same_title_windows_do_not_activate_background_frame():
