@@ -10,7 +10,6 @@ TASKS=""
 CONCURRENCY=4
 SLOW_MODEL="kimi-k3"
 FAST_MODEL=""
-SLOW_KEY_IDS="1,2,3,4"
 MAX_STEPS=500
 MAX_WALL=14400
 EXECUTION_MODE=stage
@@ -22,7 +21,7 @@ usage() {
 Usage:
   bash scripts/run_experiment.sh \
     --experiment NAME --tasks ID1,ID2,... [--concurrency N] \
-    [--slow-model NAME] [--fast-model NAME] [--slow-key-ids 1,2,3,4] \
+    [--slow-model NAME] [--fast-model NAME] \
     [--execution-mode step|stage|goal] [--stage-max-actions N] \
     [--max-steps N] [--max-wall SECONDS] [--dry-run]
 
@@ -38,7 +37,6 @@ while [[ $# -gt 0 ]]; do
         --concurrency) CONCURRENCY="$2"; shift 2 ;;
         --slow-model) SLOW_MODEL="$2"; shift 2 ;;
         --fast-model) FAST_MODEL="$2"; shift 2 ;;
-        --slow-key-ids) SLOW_KEY_IDS="$2"; shift 2 ;;
         --max-steps) MAX_STEPS="$2"; shift 2 ;;
         --max-wall) MAX_WALL="$2"; shift 2 ;;
         --execution-mode) EXECUTION_MODE="$2"; shift 2 ;;
@@ -87,7 +85,7 @@ import sys
 print(json.loads(Path(sys.argv[1]).read_text())["log"]["results_root"])
 PY
 )
-export STAGING EXPERIMENT DRIVER_DIR TASKS CONCURRENCY SLOW_MODEL SLOW_KEY_IDS MAX_STEPS MAX_WALL
+export STAGING EXPERIMENT DRIVER_DIR TASKS CONCURRENCY SLOW_MODEL MAX_STEPS MAX_WALL
 export EXECUTION_MODE STAGE_MAX_ACTIONS FAST_MODEL
 python3 - <<'PY'
 import json
@@ -103,7 +101,6 @@ args = {
     "concurrency": int(os.environ["CONCURRENCY"]),
     "slow_model": os.environ["SLOW_MODEL"],
     "fast_model": os.environ["FAST_MODEL"] or None,
-    "slow_key_ids": [int(item) for item in os.environ["SLOW_KEY_IDS"].split(",")],
     "max_steps": int(os.environ["MAX_STEPS"]),
     "max_wall_seconds": float(os.environ["MAX_WALL"]),
     "execution_mode": os.environ["EXECUTION_MODE"],
@@ -149,7 +146,6 @@ run_task() {
         --stage-max-actions "$STAGE_MAX_ACTIONS" \
         --slow-model "$SLOW_MODEL" \
         "${fast_args[@]}" \
-        --slow-key-ids "$SLOW_KEY_IDS" \
         --max-steps "$MAX_STEPS" \
         --max-wall "$MAX_WALL" \
         --poll 60 \

@@ -17,7 +17,6 @@ def test_dry_run_creates_manifest_and_batch_log(tmp_path):
             "--tasks", "024,029",
             "--concurrency", "12",
             "--slow-model", "kimi-k3",
-            "--slow-key-ids", "1,2,3,4",
             "--max-steps", "500",
             "--max-wall", "14400",
             "--dry-run",
@@ -33,7 +32,6 @@ def test_dry_run_creates_manifest_and_batch_log(tmp_path):
     assert manifest["tasks"] == ["024", "029"]
     assert manifest["concurrency"] == 12
     assert manifest["slow_model"] == "kimi-k3"
-    assert manifest["slow_key_ids"] == [1, 2, 3, 4]
     assert manifest["max_steps"] == 500
     assert manifest["max_wall_seconds"] == 14400.0
     assert manifest["watch_timeout_seconds"] == 15000.0

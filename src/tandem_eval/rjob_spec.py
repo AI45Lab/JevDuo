@@ -20,8 +20,6 @@ import os
 import subprocess
 from pathlib import Path
 
-from tandem.models.key_pool import validate_key_ids
-
 from .config_schema import select_api
 
 
@@ -79,8 +77,6 @@ def _secrets_section(benchmark: str, config: dict, slow_api: dict, fast_api: dic
         },
         "registry": config["eval"].get("registry"),
     }
-    if not slow_api.get("api_key") and slow_api.get("key_pool"):
-        secrets["slow_model"]["key_pool"] = dict(slow_api["key_pool"])
     if benchmark == "osworld21":
         section = config["eval"]["benchmarks"][benchmark]
         environment = {}
@@ -167,14 +163,6 @@ def build_job_spec(*, config: dict, run_id: str, repo_root: Path,
     requested = dict(overrides.pop("models", {}) or {})
     slow_name, slow_api = select_api(config, "slow_model", requested.get("slow"))
     fast_name, fast_api = select_api(config, "fast_model", requested.get("fast"))
-    key_ids = overrides.pop("slow_key_ids", None)
-    if key_ids is not None:
-        validate_key_ids(key_ids)
-        if key_ids and (slow_api.get("api_key") or not slow_api.get("key_pool")):
-            raise ValueError("slow_key_ids requires key_pool without a manual api_key")
-        if slow_api.get("key_pool"):
-            slow_api["key_pool"] = {**slow_api["key_pool"], "key_ids": key_ids}
-
     inner_image = config["eval"]["inner_image"]
     if benchmark == "osworld21":
         # OSW2.1 用发布清单固定的运行镜像（digest），不覆盖 latest，也不复用 OSW2 的镜像

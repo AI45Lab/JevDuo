@@ -41,8 +41,6 @@ def main(argv: list[str] | None = None) -> int:
                          help="阶段内动作数上限，达到后请求剩余工作的重规划")
     run_cmd.add_argument("--slow-model", default=None, metavar="NAME",
                          help="慢模型（大脑）API 名：config 的 harness.slow_model.apis 里选；默认取 default")
-    run_cmd.add_argument("--slow-key-ids", default=None, metavar="1,2,3",
-                         help="号池 key 编号；多个编号按 worker 均分，未指定则取配置")
     run_cmd.add_argument("--fast-model", default=None, metavar="NAME",
                          help="快模型（小脑）API 名：config 的 harness.fast_model.apis 里选；默认取 default")
     run_cmd.add_argument("--slow-max-tokens", type=int, default=None,
@@ -78,14 +76,6 @@ def main(argv: list[str] | None = None) -> int:
     config = load_config(args.config)
     if args.rjob_command == "run":
         overrides: dict = {"benchmark": args.benchmark}
-        if args.slow_key_ids is not None:
-            try:
-                overrides["slow_key_ids"] = (
-                    [int(item.strip()) for item in args.slow_key_ids.split(",")]
-                    if args.slow_key_ids.strip() else []
-                )
-            except ValueError:
-                parser.error("--slow-key-ids 需填写正整数编号，多个编号用逗号分隔")
         manifest: dict = {}
         if args.tasks:
             manifest["tasks"] = [item.strip() for item in args.tasks.split(",") if item.strip()]

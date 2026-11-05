@@ -7,12 +7,6 @@
           "base_url": "https://api.minimax.cn/v1",
           "api_key": "",
           "model": "MiniMax-M3.1-Flash",
-          "key_pool": {
-            "provider": "minimax",
-            "key_ids": [],
-            "credentials_file": "/mnt/shared-storage-gpfs2/evobox-share-gpfs2/xuyuanxun/secrets/tandem_api_pool/credentials.json",
-            "state_file": "/mnt/shared-storage-gpfs2/evobox-share-gpfs2/xuyuanxun/secrets/tandem_api_pool/state.json"
-          },
           "max_tokens": 16384,
           "timeout_seconds": 180,
           "reasoning_effort": "max",
@@ -22,12 +16,6 @@
           "base_url": "https://api.kimi.com/coding/v1",
           "api_key": "",
           "model": "k3.1-pro",
-          "key_pool": {
-            "provider": "kimi",
-            "key_ids": [],
-            "credentials_file": "/mnt/shared-storage-gpfs2/evobox-share-gpfs2/xuyuanxun/secrets/tandem_api_pool/credentials.json",
-            "state_file": "/mnt/shared-storage-gpfs2/evobox-share-gpfs2/xuyuanxun/secrets/tandem_api_pool/state.json"
-          },
           "max_tokens": 16384,
           "timeout_seconds": 120,
           "reasoning_effort": null,

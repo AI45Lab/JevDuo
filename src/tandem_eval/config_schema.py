@@ -20,8 +20,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-from tandem.models.key_pool import POOL_BASE_URLS, validate_key_ids
-
 #: 必填路径（点号路径，逐段下钻；None / 空串 / 空列表视为缺失）
 REQUIRED_PATHS = (
     "harness.slow_model.default",
@@ -123,28 +121,8 @@ def _validate_slow_models(config: dict) -> list[str]:
         base_url = api.get("base_url")
         if isinstance(base_url, str) and base_url.strip() and not base_url.startswith("http"):
             problems.append(f"harness.slow_model.apis.{name}.base_url（应为 http(s) 地址）")
-        pool = api.get("key_pool")
-        if isinstance(pool, dict):
-            try:
-                validate_key_ids(pool.get("key_ids", []))
-            except ValueError:
-                problems.append(f"harness.slow_model.apis.{name}.key_pool.key_ids（应为不重复的正整数列表）")
-            if api.get("api_key") and pool.get("key_ids"):
-                problems.append(f"harness.slow_model.apis.{name}（api_key 与 key_ids 不能同时指定）")
-        if _is_missing(api.get("api_key")):
-            prefix = f"harness.slow_model.apis.{name}.key_pool"
-            if not isinstance(pool, dict):
-                problems.append(f"harness.slow_model.apis.{name}.api_key / .key_pool（至少给一个）")
-            else:
-                provider = pool.get("provider")
-                if provider not in POOL_BASE_URLS:
-                    problems.append(f"{prefix}.provider（应为 minimax / kimi）")
-                elif not isinstance(base_url, str) or base_url.rstrip("/") != POOL_BASE_URLS[provider]:
-                    problems.append(f"{prefix}.provider 与官方 base_url 不匹配")
-                for key in ("credentials_file", "state_file"):
-                    path = pool.get(key)
-                    if not isinstance(path, str) or not path.startswith("/"):
-                        problems.append(f"{prefix}.{key}（必须是绝对路径）")
+        if not isinstance(api.get("api_key", ""), str):
+            problems.append(f"harness.slow_model.apis.{name}.api_key（应为字符串）")
         # 思考强度必须落在 harness 认识的档位里，否则 SessionConfig 会在运行期才报错
         effort = api.get("reasoning_effort")
         if effort is not None and effort not in REASONING_EFFORTS:

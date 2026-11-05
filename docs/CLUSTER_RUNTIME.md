@@ -324,7 +324,7 @@ worker 侧各段日志：
 每次实验必须指定唯一名称（小写字母、数字、连字符），所有结果归档到
 `rjob_logs/<experiment>/`：
 
-- `manifest.json`：tasks、并发、模型、key_ids、预算、watch timeout、git describe；
+- `manifest.json`：tasks、并发、模型、预算、watch timeout、git describe；
 - `batch.log`：批次输出；
 - `drivers/<task>.driver.log`：单个 rjob 生命周期日志；
 - `<experiment>-<task>/`：worker、模型调用、轨迹、截图和评分结果。
