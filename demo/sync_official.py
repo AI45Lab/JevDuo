@@ -38,7 +38,7 @@ SAI_REPO = "https://huggingface.co/datasets/simular-ai/sai-osworld-v21-reference
 SAI_INDEX_URL = f"{SAI_REPO}/index.jsonl"
 SAI_SCORECARD_URL = f"{SAI_REPO}/scorecard/ref-scorecard.json"
 
-USER_AGENT = "tandem-demo-sync/0.1 (+offline snapshot refresh)"
+USER_AGENT = "jevduo-demo-sync/0.1 (+offline snapshot refresh)"
 
 
 def fetch(url: str, *, timeout: int = 120) -> bytes:

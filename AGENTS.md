@@ -1,4 +1,4 @@
-# AGENTS.md — Tandem 开发纪律
+# AGENTS.md — JevDuo 开发纪律
 
 本文件是协作与代码合入的硬约束。此前那份仓库外的重构总计划已删除，
 改为 **human in the loop 的开发与重构**：改动前先与维护者确认形态与取舍，
@@ -6,7 +6,7 @@
 
 ## 仓库定位
 
-主体是 **Tandem harness**（快慢双模 CUA，`src/jevduo/`）；`src/jevduo_eval/` 仅为适配集群 rjob 的测评薄适配层（worker 侧 6 文件 + 开发机侧 rjob.py / rjob_spec.py / rjob_status.py / config_schema.py）。
+主体是 **JevDuo harness**（快慢双模 CUA，`src/jevduo/`）；`src/jevduo_eval/` 仅为适配集群 rjob 的测评薄适配层（worker 侧 6 文件 + 开发机侧 rjob.py / rjob_spec.py / rjob_status.py / config_schema.py）。
 
 ## 五条硬纪律（CI/评审强制）
 

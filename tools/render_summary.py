@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 _PAGE = """<!doctype html><html lang="zh"><meta charset="utf-8">
-<title>Tandem run {run_id}</title>
+<title>JevDuo run {run_id}</title>
 <style>
 body{{font-family:system-ui,sans-serif;margin:2rem;color:#1a1a1a}}
 table{{border-collapse:collapse;width:100%}}
@@ -18,7 +18,7 @@ th{{background:#f5f5f5}}
 .scored{{color:#0a7d32}}.failed_unscored{{color:#c0392b}}
 h1{{font-size:1.2rem}} code{{background:#f4f4f4;padding:0 .3rem}}
 </style>
-<h1>Tandem run <code>{run_id}</code></h1>
+<h1>JevDuo run <code>{run_id}</code></h1>
 <p>benchmark: <b>{benchmark}</b> · total {total} · scored {scored} ·
 failed_unscored {failed_unscored} · average {average}</p>
 <table><tr><th>task</th><th>score</th><th>status</th><th>stop_reason</th><th>steps</th></tr>

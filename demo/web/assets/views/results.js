@@ -123,7 +123,7 @@
     }
 
     var rows = [
-      row("Tandem", "MiniMax-M3.1-Flash + JEV", "v2.1", 500,
+      row("JevDuo", "MiniMax-M3.1-Flash + JEV", "v2.1", 500,
         (ours.binary_rate_attempted || 0) * 100, (ours.partial_over_dataset || 0) * 100,
         ours.usd_per_task, true)
     ];

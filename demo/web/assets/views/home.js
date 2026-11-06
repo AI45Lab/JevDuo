@@ -10,7 +10,7 @@
   /* ------------------------------------------------------------ 1. 简介 */
   function intro() {
     return TD.el("section", { class: "intro" }, [
-      TD.el("p", { class: "eyebrow", text: "TANDEM · 快慢双模 CUA HARNESS" }),
+      TD.el("p", { class: "eyebrow", text: "JEVDUO · 快慢双模 CUA HARNESS" }),
       TD.el("h1", { class: "intro-title", text: "一个大脑，一个小脑，一起操作电脑" }),
       TD.el("p", { class: "intro-lede", html:
         "慢模型负责拆解、规划与纠错；快模型负责在候选空间里挑选动作。" +

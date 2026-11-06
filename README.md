@@ -1,10 +1,10 @@
-# Tandem
+# JevDuo
 
 **面向 Computer Use 场景的快慢双模 CUA harness。**
 
 慢模型负责**理解与规划**——读长指令、读屏幕、读无障碍树，产出「下一步该做什么」的意图；
 快模型（JEV / Kev 这类 System One 决策模型）负责**选择**——在一个已被裁剪过的候选动作空间里，
-一次前向就挑出具体动作。Tandem 把这两级拼成一条可评测、可回放、可对比的决策闭环。
+一次前向就挑出具体动作。JevDuo 把这两级拼成一条可评测、可回放、可对比的决策闭环。
 
 ```
   观察 Observation
@@ -218,7 +218,7 @@ jevduo check                   # 确认入口可用
 ```
 
 - 自己的脚本里 `import tandem` / `from tandem_eval ...` 需改为 `jevduo` / `jevduo_eval`。
-- 环境变量 `TANDEM_*` 本次未改名，仍按原名使用。
+- 环境变量 `TANDEM_EXPERIMENT_ROOT` / `TANDEM_CONFIG_FILE` 改名为 `JEVDUO_EXPERIMENT_ROOT` / `JEVDUO_CONFIG_FILE`；旧名作为过渡仍可用（stderr 提示弃用），后续版本移除。
 - rjob 任务名前缀由 `tandem-<run-id>` 变为 `jevduo-<run-id>`；开发机 `infra/config.json` 里的 `eval.repo_root` / `eval.deploy_root` 需按新目录同步，旧的部署副本确认无在跑任务后再清理。
 
 ## 会话配置

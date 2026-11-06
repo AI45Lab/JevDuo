@@ -1,6 +1,6 @@
 # 内部集群运行手册
 
-本文覆盖 **Tandem 在内部集群（adpc / evobox）上的运行方式**：配置、run 生命周期、
+本文覆盖 **JevDuo 在内部集群（adpc / evobox）上的运行方式**：配置、run 生命周期、
 worker 入口、共享资源与已知坑。
 
 产品定位与架构说明见根目录 [README.md](../README.md)；结果目录字段级定义见
@@ -233,7 +233,7 @@ OSW2.1 走**独立环境**（独立 runtime / VM / 资产 / venv / env.sh），�
   清单不等于环境验收报告；API、VM或评分异常仍记为 `failed_unscored`。
 - **共享环境**：通用VM为 `vm/unified-20261022-complete.qcow2`，经 `prepared/runtime`
   接入环境准备适配。依赖缓存、网站DNS/证书和控制器传输适配在共享环境侧维护，
-  不改变Tandem规划、候选、验证或评分逻辑。worker只读基盘与冻结venv，每题使用隔离VM。
+  不改变JevDuo规划、候选、验证或评分逻辑。worker只读基盘与冻结venv，每题使用隔离VM。
 - **网站与权限**：从环境侧 `services/web/endpoint.json` 与 `services/gitlab/endpoint.json`
   发现内网地址，不依赖开发机的localhost。使用者需有共享盘、内网和镜像仓库权限；
   026、041通过配置模板中的 `gitlab.private_token_file` 读取共享测试管理员token。
@@ -332,3 +332,7 @@ worker 侧各段日志：
 脚本只同步一次代码，然后按指定并发提交。worker 的 adpc 挂载只读时，结果先落
 evobox 暂存，单题完成后立即 rsync 到实验目录。`--dry-run` 只生成 manifest 和 batch log，
 不提交 rjob。
+
+可选环境变量：`JEVDUO_EXPERIMENT_ROOT` 覆盖实验根目录（默认 `rjob_logs/`），
+`JEVDUO_CONFIG_FILE` 覆盖配置文件（默认 `infra/config.json`）。改名前的 `TANDEM_EXPERIMENT_ROOT` /
+`TANDEM_CONFIG_FILE` 作为过渡仍可用，会在 stderr 提示弃用，后续版本移除。

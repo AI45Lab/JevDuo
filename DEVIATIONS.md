@@ -1,5 +1,8 @@
 # 与旧仓库（SA-CUAharness，冻结于 main@bc290e3）的已知行为差异
 
+> 命名说明：项目已由 Tandem 更名为 JevDuo。下文历史条目中的 `tandem` / `tandem_eval` / `src/tandem/`
+> 即现在的 `jevduo` / `jevduo_eval` / `src/jevduo/`，条目正文保持原样。
+
 人工验收与代码评审对照本清单。按计划 §3.1 有意排除的项标注【计划内】，接口移植中的取舍标注【重构】。
 
 ## M1（planner_led 主路径移植）
