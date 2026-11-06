@@ -1,4 +1,4 @@
-/* Tandem demo 工作台 · 应用内核（无框架、无构建、离线可开）
+/* JevDuo demo 工作台 · 应用内核（无框架、无构建、离线可开）
  *
  * 纪律：
  * - 不引入任何外部资源（CDN 只作为可选增强，主链路零外链）；
@@ -74,7 +74,7 @@ window.TD = (function () {
     if (!view) {
       // 未知路由：回退到首页，但留一条痕迹（别静默吞掉）
       if (typeof console !== "undefined" && console.warn) {
-        console.warn("[tandem-demo] 未知视图：" + current.view + "，回退到首页");
+        console.warn("[jevduo-demo] 未知视图：" + current.view + "，回退到首页");
       }
       view = views.home;
     }

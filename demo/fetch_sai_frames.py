@@ -37,7 +37,7 @@ from demo.frames import Image  # noqa: E402
 
 CACHE_DIR = REPO_ROOT / "demo" / ".cache" / "sai_frames"
 SAI_REPO = "https://huggingface.co/datasets/simular-ai/sai-osworld-v21-reference-runs/resolve/main"
-USER_AGENT = "tandem-demo/0.1 (+frame fetch for trajectory comparison)"
+USER_AGENT = "jevduo-demo/0.1 (+frame fetch for trajectory comparison)"
 
 FRAME_WIDTH = 960
 FRAME_QUALITY = 72

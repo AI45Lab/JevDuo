@@ -1,7 +1,7 @@
 /* 轨迹浏览：三栏工作台（页面骨架）
  *
  * 左：任务卡（首帧预览 + 域 + 得分 + 步数）
- * 中：Tandem 与 Sai 两边独立回放，**花费与用时按步骤累计**
+ * 中：JevDuo 与 Sai 两边独立回放，**花费与用时按步骤累计**
  * 右：Task Instruction、模型底座、评测（得分 / 步数 / 逐条要求）
  *
  * 播放器本身在 browser_player.js（TD.browserPlayer）——拆开是为了让这个文件
@@ -89,7 +89,7 @@
       ]));
       var duo = TD.el("div", { class: "duo" }, [
         TD.browserPlayer.player({
-          title: "Tandem",
+          title: "JevDuo",
           who: "MiniMax-M3.1-Flash + JEV",
           score: episode && episode.score !== null ? "得分 " + episode.score.toFixed(4) : "",
           items: episode ? TD.browserPlayer.ourItems(episode) : []
@@ -116,7 +116,7 @@
 
       var scoreBox = TD.el("div", { class: "score-box" }, [
         TD.el("div", { class: "score-big", text: row.ours === null ? "—" : (row.ours * 100).toFixed(2) + "%" }),
-        TD.el("div", { class: "score-sub", text: "Tandem · " + ((episode && episode.steps) || 0) + " 步" }),
+        TD.el("div", { class: "score-sub", text: "JevDuo · " + ((episode && episode.steps) || 0) + " 步" }),
         TD.el("div", { class: "score-sub", text: "Sai · " + (row.sai_best === null || row.sai_best === undefined ? "—" : (row.sai_best * 100).toFixed(2) + "%") })
       ]);
       right.appendChild(scoreBox);

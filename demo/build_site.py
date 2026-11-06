@@ -187,7 +187,7 @@ def build_episodes(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="构建 Tandem demo 单页工作台")
+    parser = argparse.ArgumentParser(description="构建 JevDuo demo 单页工作台")
     parser.add_argument("--runs-root", type=Path, action="append", default=None,
                         help="结果目录根，可给多次（默认：合并基线清单里的批次）")
     parser.add_argument("--out", type=Path, default=REPO_ROOT / "demo" / "site")
