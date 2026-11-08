@@ -28,6 +28,10 @@ class Vm:
 
     def _bootstrap(self) -> None:
         root = str(self.task_root)
+        # 基础镜像里的旧 desktop_env（/opt/osworld-v2）会顶掉共享 runtime 的版本：
+        # 旧版 SetupController.execute 没有 check 参数，task setup 会直接报
+        # "unexpected keyword argument 'check'"。这里把不该出现的路径与已加载模块清掉。
+        self._pin_desktop_env()
         if root not in sys.path:
             sys.path.insert(0, root)
         if self.asset_root is not None:
@@ -36,6 +40,35 @@ class Vm:
 
             os.environ["OSWORLD_FILE_BASE_URL"] = str(self.asset_root)
         self.env = None
+
+    def _pin_desktop_env(self) -> None:
+        """保证 desktop_env 从 task_root 加载，清掉其它位置的同名包。
+
+        sys.path 里的空串（或 "."）表示当前目录，同样可能藏着旧副本；镜像的
+        WORKDIR 就是 /opt/osworld-v2，必须按解析后的真实路径判断。
+        """
+        root = self.task_root
+        kept = []
+        for entry in sys.path:
+            base = Path(entry or ".").resolve()
+            if (base / "desktop_env").is_dir() and not base.is_relative_to(root):
+                continue
+            kept.append(entry)
+        sys.path[:] = kept
+        for name in [item for item in sys.modules if item == "desktop_env" or item.startswith("desktop_env.")]:
+            module = sys.modules[name]
+            origin = getattr(module, "__file__", "") or ""
+            if origin and not Path(origin).is_relative_to(root):
+                del sys.modules[name]
+
+    def _check_desktop_env(self) -> None:
+        """导入后断言：desktop_env 必须来自 task_root，否则后续错误极难定位。"""
+        module = sys.modules.get("desktop_env")
+        origin = getattr(module, "__file__", "") or ""
+        if origin and not Path(origin).is_relative_to(self.task_root):
+            raise RuntimeError(
+                f"desktop_env 从 {origin} 加载，而不是 {self.task_root}；"
+                "环境里有旧副本抢先，setup 会报 'unexpected keyword argument check'")
 
     @property
     def vm_ip(self) -> str:
@@ -74,6 +107,8 @@ class Vm:
 
         os.chdir(self.task_root)
         from desktop_env.desktop_env import DesktopEnv
+
+        self._check_desktop_env()
 
         self.env = DesktopEnv(
             provider_name="docker",

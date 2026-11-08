@@ -109,12 +109,16 @@ def run_one(config: dict, *, run_id: str, job_id: int, tasks: list[str], api_nam
 
 
 def _is_running(client: rjob.Client, name: str) -> bool:
-    """同名 rjob 是否仍在跑（running/unknown 都当在跑，宁可接管也不覆盖）。"""
+    """同名 rjob 是否确实在跑。
+
+    只有解析出明确的 running 才算「在跑」：rjob get 对不存在的 job 会返回空输出
+    并退出 0，解析结果是 unknown；若把 unknown 当在跑，新 run-id 会被误判为接管，
+    然后一直等下去。
+    """
     try:
-        status = rjob.parse_status(client.get(name))
+        return rjob.parse_status(client.get(name)) == "running"
     except rjob.RjobError:
         return False
-    return status not in rjob.TERMINAL_STATES
 
 
 def _write_job(job_dir: Path, record: dict) -> None:

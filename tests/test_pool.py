@@ -164,5 +164,28 @@ class ResumeTest(unittest.TestCase):
             self.assertEqual(pool._resume_state(root, args), (set(), []))
 
 
+class AdoptTest(unittest.TestCase):
+    """接管判断：只有明确 running 才接管；不存在的 job 解析为 unknown，必须重新提交。"""
+
+    class _Client:
+        def __init__(self, output: str):
+            self._output = output
+
+        def get(self, name: str) -> str:
+            return self._output
+
+    def test_running_is_adopted(self):
+        self.assertTrue(pool._is_running(self._Client("rjob jevduo-x: Running"), "jevduo-x"))
+
+    def test_unknown_is_not_adopted(self):
+        # rjob get 对不存在的 job 返回空输出且退出 0
+        self.assertFalse(pool._is_running(self._Client(""), "jevduo-x"))
+
+    def test_terminal_is_not_adopted(self):
+        for word in ("Succeeded", "Failed", "Stopped"):
+            self.assertFalse(pool._is_running(
+                self._Client(f"rjob jevduo-x: {word}"), "jevduo-x"))
+
+
 if __name__ == "__main__":
     unittest.main()
