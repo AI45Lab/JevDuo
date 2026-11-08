@@ -1,0 +1,93 @@
+host: 127.0.0.1
+port: 8765
+db_path: logs/controller.sqlite
+blob_dir: logs/controller_blobs
+offline_after_seconds: 30
+command_timeout_seconds: 60
+security:
+  token: ""
+  device_token: "change-me-device-token"
+  submitter_token: "change-me-submitter-token"
+  insecure_dev_no_auth: false
+  allowed_device_ids: []
+  allowed_capabilities:
+    - desktop.input
+    - desktop.screenshot
+    - desktop.window
+    - a11y.tree
+    - browser.page
+  allowed_tools:
+    - device.echo
+    - capture_desktop_screenshot
+    - capture_window_screenshot
+    - note
+    - screenshot
+    - double_click
+    - drag
+    - move
+    - scroll
+    - click
+    - type
+    - keypress
+    - wait
+    - get_desktop_app_target_info
+    - get_accessibility_capabilities
+    - capture_accessibility_tree
+    - web.web_note
+    - web.web_open
+    - web.web_snapshot
+    - web.web_click_ref
+    - web.web_hover_ref
+    - web.web_fill_ref
+    - web.web_select_option_ref
+    - web.web_check_ref
+    - web.web_uncheck_ref
+    - web.web_drag_ref
+    - web.web_click_point
+    - web.web_double_click_point
+    - web.web_drag_point
+    - web.web_type_text
+    - web.web_press
+    - web.web_scroll
+    - web.web_get_text
+    - web.web_get_url
+    - web.web_wait
+    - web.web_screenshot
+    - web.web_list_tabs
+    - web.web_new_tab
+    - web.web_close_tab
+    - web.web_focus_tab
+    - web.web_close_session
+    - web.web_agent_snapshot
+    - web.web_agent_get_url
+    - web.web_agent_get_box
+    - web.web_agent_get_boxes
+    - web.web_agent_get_ref_states
+    - web.web_agent_viewport
+    - web.web_agent_backend_open
+    - web.web_agent_backend_click_ref
+    - web.web_agent_backend_hover_ref
+    - web.web_agent_backend_fill_ref
+    - web.web_agent_backend_select_option_ref
+    - web.web_agent_backend_check_ref
+    - web.web_agent_backend_uncheck_ref
+    - web.web_agent_backend_drag_ref
+    - web.web_agent_backend_click_point
+    - web.web_agent_backend_double_click_point
+    - web.web_agent_backend_drag_point
+    - web.web_agent_backend_type_text
+    - web.web_agent_backend_press
+    - web.web_agent_backend_scroll
+    - web.web_agent_backend_get_text
+    - web.web_agent_backend_get_url
+    - web.web_agent_backend_wait
+    - web.web_agent_backend_screenshot
+    - web.web_agent_backend_list_tabs
+    - web.web_agent_backend_new_tab
+    - web.web_agent_backend_close_tab
+    - web.web_agent_backend_focus_tab
+  # Must be larger than max_inline_artifact_bytes because screenshots and
+  # other binary artifacts expand when base64 encoded inside websocket JSON.
+  max_envelope_bytes: 32000000
+  max_task_metadata_bytes: 1000000
+  max_inline_artifact_bytes: 4000000

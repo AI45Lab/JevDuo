@@ -1,0 +1,25 @@
+[project]
+name = "northcua-protocol"
+version = "0.2.0"
+description = "NorthCUA remote harness protocol models"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+dependencies = [
+  "pydantic>=2.7",
+]
+
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["northcua_protocol", "northcua_protocol.*"]
+where = ["../.."]
+
+[project.urls]
+Repository = "https://github.com/beipo-ai/NorthCUA"
+Documentation = "https://github.com/beipo-ai/NorthCUA/blob/main/docs/README.md"
+Issues = "https://github.com/beipo-ai/NorthCUA/issues"
+Changelog = "https://github.com/beipo-ai/NorthCUA/blob/main/CHANGELOG.md"

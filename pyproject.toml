@@ -1,0 +1,137 @@
+[project]
+name = "northcua"
+version = "0.2.0"
+description = "NorthCUA Harness for desktop and web agents"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+dependencies = [
+  "northcua-protocol==0.2.0",
+  "northcua-runtime-shared==0.2.0",
+  "pydantic>=2.7",
+  "pyyaml>=6.0",
+  "jinja2>=3.1",
+  "Pillow>=13.0",
+  "fastmcp>=4.1,<5",
+  "mcp>=2,<3",
+  "pyautogui>=0.9.54",
+  "mss>=9.0.1",
+  "pywinctl>=0.4.1",
+  "playwright>=1.52",
+  "requests>=2.31",
+  "websockets>=12.0",
+  "psutil>=6.0",
+]
+
+[project.optional-dependencies]
+local = [
+  "nexau @ git+https://github.com/hzhua/nexau.git@28511d9f0362191a6c378fd441b2be55309a9e32",
+  # This NexAU revision imports event types removed by ag-ui-protocol 1.0.
+  "ag-ui-protocol==0.1.17",
+]
+device = ["northcua-device==0.2.0"]
+viewer = ["streamlit>=1.66.1"]
+e2b = [
+  "e2b>=2.62.0",
+  "e2b-desktop>=2.7.2",
+  "python-dotenv>=1.0",
+]
+dev = [
+  "build>=1.2",
+  "pyright>=1.1",
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24.0",
+  "ruff>=0.11",
+]
+
+[project.scripts]
+northcua = "northcua.entrypoint:main"
+northcua-web-viewer = "northcua.agents.web.trace_viewer.launcher:main"
+northcua-transport-report = "northcua.diagnostics.transport:main"
+northcua-controller-tcp-proxy = "northcua.transport.tcp_proxy:main"
+
+[project.entry-points."northcua.runtime_shared.desktop_bridges"]
+root_desktop_mcp = "northcua.runtime.mcp.shared_bridge_plugin:register"
+
+[project.entry-points."northcua.controller.runners"]
+agentkit = "northcua_controller_plugins.desktop:register_controller_runner"
+
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["northcua", "northcua.*", "northcua_controller_plugins", "northcua_controller_plugins.*"]
+where = ["."]
+
+[tool.setuptools.package-data]
+"northcua.resources.config" = ["*.yaml"]
+"northcua.agents.desktop.prompt" = ["templates/*.j2", "templates/*.yaml"]
+"northcua.agents.desktop.evaluation" = ["templates/*.j2"]
+"northcua.agents.web.prompt" = ["templates/*.j2"]
+"northcua.agentinfra.context.summary" = ["templates/*.j2"]
+"northcua.experiments.cases.catalog.data" = ["*.yaml"]
+
+# uv 0.13.6 correctly evaluates Darwin platform_release markers in PyObjC.
+[tool.uv]
+required-version = ">=0.13.6"
+
+[tool.uv.sources]
+northcua-device = { path = "packages/northcua-device", editable = true }
+nexau = { git = "https://github.com/hzhua/nexau.git", rev = "28511d9f0362191a6c378fd441b2be55309a9e32" }
+northcua-protocol = { path = "packages/northcua-protocol", editable = true }
+northcua-runtime-shared = { path = "packages/northcua-runtime-shared", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = ["integration: real browser or process integration", "native: interactive native desktop smoke"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["northcua", "scripts", "tests"]
+exclude = [
+  ".git",
+  ".mypy_cache",
+  ".pytest_cache",
+  ".venv",
+  "build",
+  "dist",
+  "logs",
+  "packages",
+  "test-logs",
+]
+
+[tool.ruff.lint]
+# Keep CI blocking on fatal correctness first. The broader E/F/I/UP/B set is
+# intentionally deferred until the legacy baseline is paid down.
+select = ["E9", "F63", "F7", "F82"]
+ignore = []
+
+[tool.pyright]
+# CI checks the public wire contract and persistent-memory boundary.
+# Broader runtime scopes can be checked explicitly while their typing is tightened.
+include = ["northcua_protocol", "northcua/agentkernel/working_memory.py"]
+exclude = [
+  ".git",
+  ".mypy_cache",
+  ".pytest_cache",
+  ".venv",
+  "build",
+  "dist",
+  "logs",
+  "packages",
+  "test-logs",
+  "tests",
+]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"
+reportMissingTypeStubs = "none"
+
+[project.urls]
+Repository = "https://github.com/beipo-ai/NorthCUA"
+Documentation = "https://github.com/beipo-ai/NorthCUA/blob/main/docs/README.md"
+Issues = "https://github.com/beipo-ai/NorthCUA/issues"
+Changelog = "https://github.com/beipo-ai/NorthCUA/blob/main/CHANGELOG.md"

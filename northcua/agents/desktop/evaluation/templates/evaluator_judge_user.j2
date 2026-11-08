@@ -1,0 +1,25 @@
+Session request:
+{{ session_request }}
+
+Current round request:
+{{ round_request }}
+
+Phase:
+{{ phase_name }}
+
+Criteria:
+{{ criteria | tojson(indent=2) }}
+
+Step summaries:
+{{ step_summaries | tojson(indent=2) }}
+
+Trace grounding hint:
+{{ trace_grounding_hint | tojson(indent=2) }}
+
+Deterministic tool checks:
+{{ tool_checks | tojson(indent=2) }}
+
+Evidence manifest:
+{{ evidence_manifest | tojson(indent=2) }}
+
+In artifact-aware phase, the attached images correspond to image refs from the evidence manifest in the same order they appear there.

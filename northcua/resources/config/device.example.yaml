@@ -1,0 +1,44 @@
+server_url: ws://127.0.0.1:8765
+token: "change-me-device-token"
+device_id: local-device
+display_name: Local Device Worker
+platform: macos
+max_sessions: 1
+max_gui_sessions: 1
+# Workers that operate the same physical desktop/display must share this value.
+# Leave blank to derive a stable local host/display resource id.
+gui_resource_id: ""
+max_concurrent_commands: 1
+supports_parallel_sessions: false
+requires_foreground_focus: true
+allowed_tools:
+  - device.echo
+  - capture_desktop_screenshot
+  - capture_window_screenshot
+  - note
+  - screenshot
+  - double_click
+  - drag
+  - move
+  - scroll
+  - click
+  - type
+  - keypress
+  - wait
+  - get_desktop_app_target_info
+  - get_accessibility_capabilities
+  - capture_accessibility_tree
+allowed_capabilities:
+  - desktop.input
+  - desktop.screenshot
+  - desktop.window
+  - a11y.tree
+agentkit_agent_kinds: []
+heartbeat_interval_seconds: 30
+# Local device_runtime.jsonl remains full; this only reduces upstream
+# controller websocket telemetry volume.
+telemetry_stream_mode: terminal_sampled
+telemetry_sample_rate: 0.02
+telemetry_always_events: []
+insecure_dev_no_auth: false
+log_dir: logs/device
