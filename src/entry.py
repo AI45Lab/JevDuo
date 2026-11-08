@@ -70,6 +70,7 @@ def run_task(vm: Vm, spec: dict, task: dict, job_root: Path) -> dict:
             status=scoring.episode_status(scored=score is not None, exception=None),
             steps=int(info.get("step_count") or 0), model=model["name"],
             seconds=time.perf_counter() - started,
+            failure_reason=recorder.evaluation_failure_reason(raw),
         )
     except BaseException as error:
         return recorder.finalize(

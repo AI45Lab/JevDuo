@@ -122,9 +122,25 @@ def _compact_step(record: dict, limit: int = 2000) -> dict:
     }
 
 
+def evaluation_failure_reason(raw: Any) -> str:
+    """评分器自己给出的失败原因（如 replay_failed / melt_not_found）。
+
+    任务 055 的回放校验依赖 VM 里的 melt（MLT 渲染器），缺失时评分器直接判 0，
+    这不是 agent 没做对。把它记进结果，避免与真实失败混为一谈。
+    """
+    if isinstance(raw, dict):
+        reason = raw.get("failure_reason")
+        if reason:
+            return str(reason)
+        replay = raw.get("replay_validation")
+        if isinstance(replay, dict) and replay.get("reason"):
+            return f"replay:{replay['reason']}"
+    return ""
+
+
 def finalize(directory: Path, *, task_id: str, stop_reason: str, score: float | None,
              status: str, steps: int, exception: BaseException | None = None,
-             model: str = "", seconds: float = 0.0) -> dict:
+             model: str = "", seconds: float = 0.0, failure_reason: str = "") -> dict:
     record = {
         "task_id": task_id,
         "stop_reason": stop_reason,
@@ -135,6 +151,8 @@ def finalize(directory: Path, *, task_id: str, stop_reason: str, score: float | 
         "seconds": round(seconds, 3),
         "finished_at": time.time(),
     }
+    if failure_reason:
+        record["evaluation_failure_reason"] = failure_reason
     if exception is not None:
         record["exception"] = {
             "type": type(exception).__name__,
@@ -191,14 +209,15 @@ def merge_episodes(run_root: Path, episodes: list[dict]) -> dict:
         "episodes": episodes,
     }
     _write_json(run_root / "summary.json", merged)
-    lines = ["task_id,status,score,steps,seconds,stop_reason,model"]
+    lines = ["task_id,status,score,steps,seconds,stop_reason,model,failure_reason"]
     for item in episodes:
         score = item.get("score")
         lines.append(",".join(str(value) for value in (
             # 0.0 是合法分数，不能当成空值
             item["task_id"], item["status"], "" if score is None else score,
             item.get("steps", ""), item.get("seconds", ""),
-            item.get("stop_reason", ""), item.get("model", ""))))
+            item.get("stop_reason", ""), item.get("model", ""),
+            item.get("evaluation_failure_reason", ""))))
     (run_root / "summary.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return merged
 

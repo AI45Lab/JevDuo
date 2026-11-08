@@ -15,6 +15,7 @@ import pool  # noqa: E402
 import recorder  # noqa: E402
 import rjob  # noqa: E402
 import settings  # noqa: E402
+import task_run  # noqa: E402
 
 
 class ChunkTest(unittest.TestCase):
@@ -185,6 +186,79 @@ class AdoptTest(unittest.TestCase):
         for word in ("Succeeded", "Failed", "Stopped"):
             self.assertFalse(pool._is_running(
                 self._Client(f"rjob jevduo-x: {word}"), "jevduo-x"))
+
+
+class ToolPairRepairTest(unittest.TestCase):
+    """出站前的 tool 回执补齐：位置必须紧跟所属 assistant 轮次。
+
+    真网关已验证：补齐后紧跟轮次 → 200；追加到列表末尾 → 400。
+    """
+
+    @staticmethod
+    def _shapes(messages):
+        out = []
+        for message in messages:
+            role = message.get("role")
+            if role == "assistant":
+                out.append(("assistant", tuple(c["id"] for c in message.get("tool_calls") or [])))
+            elif role == "tool":
+                out.append(("tool", message.get("tool_call_id")))
+            else:
+                out.append((role, None))
+        return out
+
+    def test_missing_result_inserted_after_turn(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "tool_calls": [{"id": "a"}, {"id": "b"}]},
+            {"role": "tool", "tool_call_id": "a", "content": "ok"},
+            {"role": "user", "content": "continue"},
+        ]
+        fixed, count = task_run._repair_tool_pairs(messages)
+        self.assertEqual(count, 1)
+        self.assertEqual(self._shapes(fixed), [
+            ("user", None), ("assistant", ("a", "b")),
+            ("tool", "a"), ("tool", "b"), ("user", None)])
+
+    def test_whole_turn_missing(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "tool_calls": [{"id": "x"}, {"id": "y"}]},
+            {"role": "user", "content": "continue"},
+        ]
+        fixed, count = task_run._repair_tool_pairs(messages)
+        self.assertEqual(count, 2)
+        self.assertEqual(self._shapes(fixed), [
+            ("user", None), ("assistant", ("x", "y")),
+            ("tool", "x"), ("tool", "y"), ("user", None)])
+
+    def test_complete_history_untouched(self):
+        messages = [{"role": "assistant", "tool_calls": [{"id": "z"}]},
+                    {"role": "tool", "tool_call_id": "z"}]
+        fixed, count = task_run._repair_tool_pairs(messages)
+        self.assertEqual(count, 0)
+        self.assertIs(fixed, messages)
+
+    def test_idempotent(self):
+        messages = [{"role": "assistant", "tool_calls": [{"id": "q"}]},
+                    {"role": "user", "content": "next"}]
+        fixed, _ = task_run._repair_tool_pairs(messages)
+        _, count = task_run._repair_tool_pairs(fixed)
+        self.assertEqual(count, 0)
+
+
+class EvaluationReasonTest(unittest.TestCase):
+    def test_replay_failure_surfaces(self):
+        raw = {"score": 0.0, "failure_reason": "replay_failed",
+               "replay_validation": {"passed": False, "reason": "melt_not_found"}}
+        self.assertEqual(recorder.evaluation_failure_reason(raw), "replay_failed")
+
+    def test_nested_reason_fallback(self):
+        raw = {"score": 0.0, "replay_validation": {"reason": "missing_mlt"}}
+        self.assertEqual(recorder.evaluation_failure_reason(raw), "replay:missing_mlt")
+
+    def test_plain_score_has_no_reason(self):
+        self.assertEqual(recorder.evaluation_failure_reason(0.5), "")
 
 
 if __name__ == "__main__":
