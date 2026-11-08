@@ -175,8 +175,10 @@ def merge_summaries(run_root: Path, job_summaries: list[dict]) -> dict:
     _write_json(run_root / "summary.json", merged)
     lines = ["task_id,status,score,steps,seconds,stop_reason,model"]
     for item in episodes:
+        score = item.get("score")
         lines.append(",".join(str(value) for value in (
-            item["task_id"], item["status"], item.get("score") or "",
+            # 0.0 是合法分数，不能当成空值
+            item["task_id"], item["status"], "" if score is None else score,
             item.get("steps", ""), item.get("seconds", ""),
             item.get("stop_reason", ""), item.get("model", ""))))
     (run_root / "summary.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")

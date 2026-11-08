@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 CONFIG="$ROOT/config.yaml"; RUN_ID=""; TASKS=""; LIMIT=""
-SHARD=""; JOBS=""; PER_JOB=""; MODEL=""; KEEP=0
+SHARD=""; JOBS=""; PER_JOB=""; MODEL=""; MAX_STEPS=""; MAX_WALL=""; KEEP=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -15,6 +15,8 @@ while [ $# -gt 0 ]; do
     --jobs)    JOBS="$2";    shift 2 ;;
     --per-job) PER_JOB="$2"; shift 2 ;;
     --model)   MODEL="$2";   shift 2 ;;
+    --max-steps) MAX_STEPS="$2"; shift 2 ;;
+    --max-wall)  MAX_WALL="$2";  shift 2 ;;
     --config)  CONFIG="$2";  shift 2 ;;
     --keep)    KEEP=1; shift ;;
     -h|--help) sed -n '2p' "$0"; exit 0 ;;
@@ -35,7 +37,9 @@ ARGS=(--config "$CONFIG" --run-id "$RUN_ID")
 [ -n "$SHARD" ]   && ARGS+=(--shard "$SHARD")
 [ -n "$JOBS" ]    && ARGS+=(--jobs "$JOBS")
 [ -n "$PER_JOB" ] && ARGS+=(--per-job "$PER_JOB")
-[ -n "$MODEL" ]   && ARGS+=(--model "$MODEL")
+[ -n "$MODEL" ]     && ARGS+=(--model "$MODEL")
+[ -n "$MAX_STEPS" ] && ARGS+=(--max-steps "$MAX_STEPS")
+[ -n "$MAX_WALL" ]  && ARGS+=(--max-wall "$MAX_WALL")
 [ -f "$ROOT/.env.local" ] && set -a && . "$ROOT/.env.local" && set +a
 
 exec "$ROOT/venv/bin/python" -m pool "${ARGS[@]}" --keep "$KEEP" 2>&1 | tee "$LOG_DIR/submit.log"

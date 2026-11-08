@@ -106,10 +106,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--jobs", type=int, default=None, help="覆盖 pool.max_parallel")
     parser.add_argument("--per-job", type=int, default=None, help="覆盖 pool.tasks_per_job")
     parser.add_argument("--model", default=None)
+    parser.add_argument("--max-steps", type=int, default=None, help="覆盖 harness.max_steps")
+    parser.add_argument("--max-wall", type=float, default=None, help="单题墙钟上限（秒）")
     parser.add_argument("--keep", type=int, default=0)
     args = parser.parse_args(argv)
 
     config = settings.load(args.config)
+    # 命令行覆盖只作用于本次 run 的内存副本，不改配置文件
+    if args.max_steps:
+        config["harness"]["max_steps"] = int(args.max_steps)
+    if args.max_wall:
+        config["harness"]["max_wall_seconds"] = float(args.max_wall)
     run_root = ROOT / config["project"]["run_root"] / args.run_id
     api_name, api = settings.select_model(config, args.model)
     tasks = settings.resolve_tasks(config, tasks=args.tasks, limit=args.limit, shard=args.shard)
