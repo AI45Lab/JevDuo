@@ -11,6 +11,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+import pool  # noqa: E402
+import recorder  # noqa: E402
 import rjob  # noqa: E402
 import settings  # noqa: E402
 
@@ -90,6 +92,76 @@ class RjobStatusTest(unittest.TestCase):
 
     def test_unknown(self):
         self.assertEqual(rjob.parse_status("weird output"), "unknown")
+
+
+def _episode(run_root: Path, job: str, task: str, *, status: str = "scored",
+             score=None, finished_at: float = 1.0) -> None:
+    directory = run_root / "jobs" / job / "episodes" / task
+    directory.mkdir(parents=True, exist_ok=True)
+    record = {"task_id": task, "status": status, "score": score,
+              "steps": 1, "seconds": 1.0, "stop_reason": "done", "model": "m",
+              "finished_at": finished_at}
+    (directory / "episode.json").write_text(json.dumps(record), encoding="utf-8")
+
+
+class ResumeTest(unittest.TestCase):
+    """续跑：以磁盘 episode.json 为准，不依赖 entry 写的 job summary。"""
+
+    def test_collect_and_merge_from_disk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _episode(root, "job-00", "001", score=1.0)
+            _episode(root, "job-01", "002", status="failed_unscored", score=None)
+            episodes = recorder.collect_episodes(root)
+            self.assertEqual([item["task_id"] for item in episodes], ["001", "002"])
+            merged = recorder.merge_episodes(root, episodes)
+            self.assertEqual((merged["total"], merged["scored"], merged["failed_unscored"]), (2, 1, 1))
+            self.assertEqual(merged["score_mean"], 1.0)
+
+    def test_latest_record_wins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _episode(root, "job-00", "003", status="failed_unscored", finished_at=1.0)
+            _episode(root, "job-01", "003", status="scored", score=0.5, finished_at=2.0)
+            episodes = recorder.collect_episodes(root)
+            self.assertEqual(len(episodes), 1)
+            self.assertEqual(episodes[0]["status"], "scored")
+
+    def test_csv_keeps_zero_score(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _episode(root, "job-00", "004", score=0.0)
+            recorder.merge_episodes(root, recorder.collect_episodes(root))
+            self.assertIn("004,scored,0.0", (root / "summary.csv").read_text(encoding="utf-8"))
+
+    def test_skip_scored_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _episode(root, "job-00", "005", score=1.0)
+            _episode(root, "job-00", "006", status="failed_unscored")
+            args = type("A", (), {"resume": 1, "retry_failed": 0})()
+            done, retry = pool._resume_state(root, args)
+            # 默认：跑过的题都算完成，包括上次未评分的（避免反复重试环境问题）
+            self.assertEqual(done, {"005", "006"})
+            self.assertEqual(retry, [])
+
+    def test_retry_failed_reruns_them(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _episode(root, "job-00", "005", score=1.0)
+            _episode(root, "job-00", "006", status="failed_unscored")
+            args = type("A", (), {"resume": 1, "retry_failed": 1})()
+            done, retry = pool._resume_state(root, args)
+            # 只跳过已评分的，未评分的进重跑队列
+            self.assertEqual(done, {"005"})
+            self.assertEqual(retry, ["006"])
+
+    def test_resume_disabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _episode(root, "job-00", "007", score=1.0)
+            args = type("A", (), {"resume": 0, "retry_failed": 0})()
+            self.assertEqual(pool._resume_state(root, args), (set(), []))
 
 
 if __name__ == "__main__":

@@ -159,11 +159,29 @@ def write_job_summary(job_root: Path, episodes: list[dict]) -> None:
     _write_json(job_root / "summary.json", summary)
 
 
-def merge_summaries(run_root: Path, job_summaries: list[dict]) -> dict:
-    episodes: list[dict] = []
-    for summary in job_summaries:
-        episodes.extend(summary.get("episodes", []))
-    episodes.sort(key=lambda item: item["task_id"])
+def collect_episodes(run_root: Path) -> list[dict]:
+    """从磁盘扫描已落盘的题（不依赖 entry 写的 job summary）。
+
+    续跑与汇总都以 episode.json 为准：进程被杀、job 被删，只要题跑完过就有记录。
+    同一题出现多次时取 finished_at 最新的那次。
+    """
+    latest: dict[str, dict] = {}
+    for path in sorted((run_root / "jobs").glob("*/episodes/*/episode.json")):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        task_id = str(record.get("task_id") or path.parent.name)
+        record.setdefault("task_id", task_id)
+        previous = latest.get(task_id)
+        if previous is None or (record.get("finished_at") or 0) >= (previous.get("finished_at") or 0):
+            latest[task_id] = record
+    return sorted(latest.values(), key=lambda item: item["task_id"])
+
+
+def merge_episodes(run_root: Path, episodes: list[dict]) -> dict:
+    """把 episode 记录合并成 run 级 summary.json / summary.csv。"""
+    episodes = sorted(episodes, key=lambda item: item["task_id"])
     scored = [item for item in episodes if item["status"] == "scored"]
     merged = {
         "total": len(episodes),
@@ -183,3 +201,10 @@ def merge_summaries(run_root: Path, job_summaries: list[dict]) -> dict:
             item.get("stop_reason", ""), item.get("model", ""))))
     (run_root / "summary.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return merged
+
+
+def merge_summaries(run_root: Path, job_summaries: list[dict]) -> dict:
+    episodes: list[dict] = []
+    for summary in job_summaries:
+        episodes.extend(summary.get("episodes", []))
+    return merge_episodes(run_root, episodes)
