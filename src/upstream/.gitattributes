@@ -1,0 +1,4 @@
+# Preserve the supplied upstream license bytes and formatting.
+docs/assets/brand/GUST-FONT-LICENSE.txt -text -whitespace
+docs/assets/brand/LPPL-1.3c.txt -text -whitespace
+docs/assets/brand/northcua-mark.svg -text

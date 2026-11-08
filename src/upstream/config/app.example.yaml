@@ -1,0 +1,44 @@
+# See docs/getting-started.md. Set NORTHCUA_MODEL and OPENAI_API_KEY.
+agent_config_path: agent.example.yaml
+web_agent_config_path: agent.web.example.yaml
+artifacts:
+  root_dir: logs
+websocket:
+  host: 127.0.0.1
+  port: 8765
+  runtime_mode: local
+execution:
+  max_agent_iterations_per_round: 30
+  enable_langfuse_tracer: false
+context_management:
+  mode: 'off'
+evaluation:
+  enabled: false
+  max_steps: 12
+  force_finalizer_after_steps: 8
+  round_timeout_seconds: 300
+  fail_open: true
+  tools:
+    allow_client_live_probe: false
+desktop:
+  backend: native
+  primary_screen_only: true
+  coordinate_policy:
+    # For models emitting 0..1000 screenshot-relative positions, use normalized_1000.
+    # See docs/configuration.md#desktop-coordinates.
+    input_space: image_pixels
+    # Optional edge clamping, including normalized positions of 1000:
+    # clamp_to_bounds: true
+observation:
+  a11y:
+    enabled: false
+web:
+  max_steps: 30
+  headed: false
+  allow_localhost_urls: true
+  allow_private_network_urls: false
+prompt:
+  history_window_rounds: 20
+  screenshot_window_images: 3
+  include_initial_observation_image: true
+  include_subsequent_observation_images: true

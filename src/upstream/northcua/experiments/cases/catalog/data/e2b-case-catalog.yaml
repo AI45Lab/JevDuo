@@ -1,0 +1,33 @@
+templates:
+- profile_id: desktop
+  alias: northcua-desktop
+  provider: e2b
+  base_template: desktop
+  desktop: true
+  resources:
+    cpu_count: 4
+    memory_mb: 8192
+    timeout_seconds: 900
+  resolution:
+  - 1280
+  - 900
+  device_python: /opt/northcua/venv/bin/python
+  installed_apps: []
+  required_binaries:
+  - python
+  - northcua-device
+  - xdotool
+  - scrot
+  - wmctrl
+  required_capabilities:
+  - desktop.screenshot
+  - desktop.input
+  - desktop.window
+- profile_id: web
+  alias: northcua-web
+  provider: e2b
+  desktop: false
+  device_python: /opt/northcua/venv/bin/python
+  required_capabilities:
+  - browser.page
+apps: []

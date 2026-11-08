@@ -1,0 +1,19 @@
+# See docs/getting-started.md. Set NORTHCUA_MODEL and OPENAI_API_KEY.
+name: NorthCUAWeb
+llm_config:
+  model: ${env.NORTHCUA_MODEL}
+  base_url: https://api.openai.com/v1
+  api_key: ${env.OPENAI_API_KEY}
+  api_type: openai_chat_completion
+  max_tokens: 4096
+  max_context_tokens: 128000
+  max_retries: 3
+  timeout: 120
+max_iterations: 1
+mcp_servers:
+- name: WebAgentProbeExecutor
+  model_visible: false
+  type: in-memory
+- name: WebAgentActionExecutor
+  model_visible: true
+  type: in-memory

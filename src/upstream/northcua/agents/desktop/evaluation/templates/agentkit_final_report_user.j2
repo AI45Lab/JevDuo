@@ -1,0 +1,15 @@
+Evaluate this desktop round. Use the compact, path-free bundle as a starting point, then actively inspect targeted evidence before final_report whenever the selected evidence does not directly prove every requested subtask.
+
+Recommended tool use:
+- Use query_artifacts to find relevant screenshots, a11y snapshots, runtime events, and terminal verification refs beyond the compact summary.
+- Use read_step or read_trace to inspect the specific steps where the agent claims progress, verifies results, reports infeasibility, or may have diverged. Avoid all/full/debug bundle reads unless a compact tool result is missing a field that is necessary for judgment.
+- Use query_tool_results and query_runtime_events to confirm what commands/actions actually ran and what they returned.
+- Use query_a11y_snapshot or compare_images when UI state or visual before/after differences matter.
+- Use read-only live probes such as client_bash_readonly, client_screenshot, or gui_inspect when available to verify final sandbox/application/file state. This is especially important for files, folders, PDFs, documents, spreadsheets, presentations, archives, browser settings/data, application settings, and infeasibility claims.
+
+Do not accept the agent's narration as proof. Treat assistant text as a hypothesis and verify it against screenshots, artifacts, tool results, and live probes. If the evidence cannot confirm the final state, be explicit and choose partial, failure, or uncertain rather than guessing success.
+
+Current round request:
+{{ round_request }}
+
+{{ payload_json }}

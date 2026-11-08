@@ -1,0 +1,40 @@
+[project]
+name = "northcua-device"
+version = "0.2.0"
+description = "NorthCUA standalone device worker"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+dependencies = [
+  "northcua==0.2.0",
+  "northcua-protocol==0.2.0",
+  "northcua-runtime-shared==0.2.0",
+  "pydantic>=2.7",
+  "pyyaml>=6.0",
+  "Pillow>=13.0",
+  "fastmcp>=4.1,<5",
+  "mcp>=2,<3",
+  "pyautogui>=0.9.54",
+  "mss>=9.0.1",
+  "pywinctl>=0.4.1",
+  "playwright>=1.52",
+  "websockets>=12.0",
+]
+
+[project.scripts]
+northcua-device = "northcua_device.cli:main"
+
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["northcua_device", "northcua_device.*"]
+where = ["../.."]
+
+[project.urls]
+Repository = "https://github.com/beipo-ai/NorthCUA"
+Documentation = "https://github.com/beipo-ai/NorthCUA/blob/main/docs/README.md"
+Issues = "https://github.com/beipo-ai/NorthCUA/issues"
+Changelog = "https://github.com/beipo-ai/NorthCUA/blob/main/CHANGELOG.md"

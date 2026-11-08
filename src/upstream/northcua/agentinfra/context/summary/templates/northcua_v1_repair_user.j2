@@ -1,0 +1,9 @@
+The previous response was invalid. Return only a corrected, strictly shorter JSON object.
+Validation error: {{ context.validation_error }}
+Hard rendered checkpoint limit: {{ context.maximum_canonical_characters }} Unicode characters.
+Hard JSON limit: {{ context.maximum_json_characters }} Unicode characters.
+
+Do not make any item longer and do not add new facts. Remove duplicate or lower-priority items first. Optional arrays
+may be empty. `source_segment_ids` is optional; omit it when the checkpoint is near either hard limit. Keep only the
+shortest facts required to continue the task. If the limit is still tight, keep only the single highest-priority fact.
+Use an empty goal when the source has no explicit goal. Return JSON only, without Markdown or explanation.

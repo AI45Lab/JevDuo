@@ -1,0 +1,5 @@
+version: 2.0
+
+system_template: computer_using_agent_system.j2
+persistent_user_template: computer_using_agent_persistent_user.j2
+observation_user_template: computer_using_agent_observation_user.j2

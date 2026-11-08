@@ -1,0 +1,11 @@
+{% if variant == "initial_state" -%}
+Attached image evidence {{ evidence_id }}: {{ label }}. This is the earliest available screenshot after case setup; use it to understand the starting UI/environment, not as final-state proof.
+{% elif variant == "terminal_verification" -%}
+Attached image evidence {{ evidence_id }}: {{ label }}. This is a terminal verification screenshot captured after the round stopped; use it as the final-state view of the application.
+{% elif variant == "overlay" -%}
+Attached image evidence {{ evidence_id }}: {{ label }}. This is an overlay screenshot; visual markers such as cursor trails, click rings, or target highlights explain the agent action and are not part of the app UI.
+{% elif variant == "raw" -%}
+Attached image evidence {{ evidence_id }}: {{ label }}. This is a raw screenshot without action overlay markers.
+{% else -%}
+Attached image evidence {{ evidence_id }}: {{ label }}
+{% endif -%}

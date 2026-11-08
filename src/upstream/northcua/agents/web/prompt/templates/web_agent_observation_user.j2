@@ -1,0 +1,23 @@
+{{ observation_heading }}:
+- title: {{ page_title }}
+- url: {{ page_url }}
+{% if observation_id %}
+- observation_id: {{ observation_id }}
+{% endif %}
+- settled: {{ settled }}{{ " (" ~ settle_reason ~ ")" if settle_reason else "" }}
+- screenshot: {{ screenshot_kind }}; image_attached={{ screenshot_image_attached }}{{ "; image_omitted_reason=" ~ screenshot_image_omitted_reason if screenshot_image_omitted_reason else "" }}
+{% if screenshot_marks %}
+- SoM marks are numeric refs: use the visible number exactly with ref tools.
+{% endif %}
+
+{% if screenshot_kind == "set_of_mark" %}Actionable refs{% else %}Observation refs{% endif %} ({{ ref_count }}):
+{% if refs %}
+{% for ref in refs %}
+- {{ ref.get("ref", "") }} {{ ref.get("role") or "element" }}{{ ' "' ~ (ref.get("label") or ref.get("name") or ref.get("text") or "") ~ '"' if (ref.get("label") or ref.get("name") or ref.get("text") or "") else "" }}{{ " " ~ ref.get("state") if ref.get("state") else "" }}
+{% endfor %}
+{% if screenshot_marks_omitted_count %}
+- omitted candidates: {{ screenshot_marks_omitted_count }}{% if screenshot_marks_truncated %} (truncated){% endif %}
+{% endif %}
+{% else %}
+- (none)
+{% endif %}

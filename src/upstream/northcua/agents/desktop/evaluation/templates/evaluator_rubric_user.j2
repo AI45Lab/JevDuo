@@ -1,0 +1,22 @@
+Session request:
+{{ session_request }}
+
+Current round request:
+{{ round_request }}
+
+Prior round summaries:
+{{ prior_round_summaries | tojson(indent=2) }}
+
+Return JSON with this schema:
+{
+  "criteria": [
+    {
+      "id": "criterion_1",
+      "name": "Short Name",
+      "description": "Specific condition to verify for this round",
+      "weight": 1.0,
+      "applicable": true,
+      "activation_condition": ""
+    }
+  ]
+}
