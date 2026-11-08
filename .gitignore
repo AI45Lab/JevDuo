@@ -21,7 +21,6 @@ demo/.cache/
 runs/
 venv/
 python/
-src/upstream/
 job_specs/
 
 # 本地密钥（不进仓库）
