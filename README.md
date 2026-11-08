@@ -3,16 +3,14 @@
 在 OSWorld 2.1 上用上游 CUA harness 跑 agent 测评，通过内部集群的 `rjob` 提交任务。
 本分支是**测评工程分支**，与 `main`（JevDuo harness 本体）相互独立，不 merge、不 rebase。
 
-被测 agent 来自 `src/upstream/`（上游源码快照，不入库），本工程只负责：
+被测 agent 来自 `src/upstream/`（以 **git subtree** 方式入库的上游精简树，见
+[上游源码](#上游源码subtree)），本工程只负责：
 切题 → 渲染 job spec → 并发提交 rjob → 起 VM → 跑 agent → 官方评分 → 落盘汇总。
 
 ## 快速开始
 
 ```bash
-# 1. 同步上游源码快照（只做一次，或换上游版本时）
-bash scripts/sync_upstream.sh
-
-# 2. 建 venv（解释器装在共享盘，worker 内可见）
+# 1. 建 venv（解释器装在共享盘，worker 内可见）
 bash scripts/setup_env.sh
 
 # 3. 填密钥（不进仓库，权限 600）
@@ -38,7 +36,6 @@ bash scripts/run.sh --run-id jv-osw21-a --shard 1/6 --jobs 6 --per-job 18
 |---|---|
 | `config.yaml` | **唯一配置**：模型、harness 行为、并发、集群、基准、日志；不含密钥 |
 | `scripts/run.sh` | 唯一运行入口（开发机） |
-| `scripts/sync_upstream.sh` | 同步上游源码到 `src/upstream/` |
 | `scripts/setup_env.sh` | 重建 agent venv（解释器装共享盘 + 路径断言） |
 | `infra/worker.sh` | rjob worker 入口：共享 env、dockerd、拉镜像、进 `entry` |
 | `src/settings.py` | 读 config.yaml、切题、渲染 job spec（开发机侧，需要 PyYAML） |
@@ -117,6 +114,34 @@ runs/<run_id>/
 ```
 
 同轮验证到：镜像拉取、dockerd、VM setup、agent 子进程、官方评分、产物落盘全链路。
+
+## 上游源码（subtree）
+
+`src/upstream/` 以 `git subtree` 方式入库，内容是上游仓库的**精简树**（去掉 `docs/`、`tests/`、
+`examples/`、CI，仅保留运行必需部分）：
+
+| 项 | 值 |
+|---|---|
+| 上游仓库 | `https://github.com/beipo-ai/NorthCUA` |
+| 导入基线 commit | `7069e43446c21184f493681ef1eddffa3aeff871` |
+| 保留内容 | `northcua`、`northcua_protocol`、`northcua_runtime_shared`、`northcua_controller_plugins`、`northcua_device`、`packages`、`config`、`skills`、`pyproject.toml`、`uv.lock`、`LICENSE`、`NOTICE`、`THIRD_PARTY_NOTICES.md` |
+| 入库体积 | 压缩后约 2 MB（工作区展开约 97 MB） |
+
+跟随上游升级（在新的精简分支上做，再 pull 进 subtree）：
+
+```bash
+# 1. 取上游新版本并精简
+git clone --shared <上游仓库> /tmp/ncua-trim
+cd /tmp/ncua-trim && git checkout -b trimmed <新 commit>
+git rm -r --cached docs tests examples .github
+git commit -m "trim upstream"
+
+# 2. 回到本仓库拉进子树
+cd <JevDuo>
+git subtree pull --prefix=src/upstream /tmp/ncua-trim trimmed --squash
+```
+
+升级后若 `uv.lock` 变化，重跑 `bash scripts/setup_env.sh`。
 
 ## 已知坑
 

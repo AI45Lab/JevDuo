@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UPSTREAM="$ROOT/src/upstream"
 VENV="$ROOT/venv"
 
-[ -f "$UPSTREAM/pyproject.toml" ] || { echo "缺少 $UPSTREAM/pyproject.toml，先跑 scripts/sync_upstream.sh" >&2; exit 2; }
+[ -f "$UPSTREAM/pyproject.toml" ] || { echo "缺少 $UPSTREAM/pyproject.toml（src/upstream 应由 git subtree 提供）" >&2; exit 2; }
 
 # 上游 uv.lock 要求 uv>=0.13.6；系统 uv 常偏旧，按候选顺序挑第一个满足的。
 UV_REQUIRED=0.13.6
