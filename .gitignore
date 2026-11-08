@@ -16,3 +16,13 @@ demo/site/
 *.log
 infra/config.json
 demo/.cache/
+
+# JevDuo 集群测评产物与中间态（master）
+runs/
+venv/
+python/
+src/upstream/
+job_specs/
+
+# 本地密钥（不进仓库）
+.env.local

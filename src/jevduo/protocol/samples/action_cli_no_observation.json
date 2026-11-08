@@ -1,6 +1,0 @@
-{
-  "kind": "cli",
-  "command": "cp /home/user/notes.txt /home/user/backup.txt",
-  "timeout_s": 120,
-  "want_observation": "none"
-}

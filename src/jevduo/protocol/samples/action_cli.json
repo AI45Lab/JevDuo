@@ -1,6 +1,0 @@
-{
-  "kind": "cli",
-  "command": "ls -la /home/user/Desktop",
-  "timeout_s": 30,
-  "want_observation": "screenshot"
-}

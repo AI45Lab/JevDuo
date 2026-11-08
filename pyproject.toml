@@ -3,42 +3,26 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "jevduo"
+name = "jevduo-cluster"
 version = "0.1.0"
-description = "JevDuo：快慢双模 CUA harness（主体）+ jevduo_eval 集群测评薄适配层"
-requires-python = ">=3.10"
-# 截图处理使用仓库白名单内的 Pillow。
-dependencies = ["Pillow"]
+description = "JevDuo 集群测评：OSWorld 2.1 × 上游 CUA harness（rjob 链路）"
+requires-python = ">=3.12"
+# 开发机侧（pool/settings）序列化配置；worker 侧不依赖本包
+dependencies = ["PyYAML>=6.0"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "ruff>=0.4"]
 
-[project.scripts]
-jevduo = "jevduo.__main__:main"
-jevduo-eval = "jevduo_eval.__main__:main"
-
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.setuptools.package-data]
-jevduo = ["protocol/schema/*.json", "protocol/samples/*.json"]
-
 [tool.ruff]
 line-length = 110
-target-version = "py310"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.per-file-ignores]
-# 以下模块包含从旧仓库逐字移植的 LLM prompt 字符串（行为冻结，不重排换行）。
-"src/jevduo/planning/planner.py" = ["E501"]
-"src/jevduo/verification/verifier.py" = ["E501"]
-"src/jevduo/gui/candidates.py" = ["E501"]
-"src/jevduo/gui/proposals.py" = ["E501"]
-# demo/render.py、demo/pages.py 含整段 HTML 模板（行宽由模板结构决定，不硬拆）。
-"demo/render.py" = ["E501"]
-"demo/pages.py" = ["E501"]
+"src/upstream/**" = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]

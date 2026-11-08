@@ -1,0 +1,112 @@
+# JevDuo 集群测评唯一配置。密钥只从环境变量读，本文件可提交。
+
+project:
+  run_root: runs     # 产物根，相对仓库根
+  repo_root: /mnt/shared-storage-user/adpc-share/chenxinquan/fastslow/JevDuo
+
+# ------------------------------------------------------------------ 上游模型
+models:
+  default: k3.1-pro
+  apis:
+    k3.1-pro:
+      base_url: http://100.103.152.177:8080/v1
+      model: k3.1-pro
+      api_key_env: JEVDUO_KIMI_API_KEY
+      max_tokens: 65536
+      max_retries: 3
+      timeout_seconds: 600
+      stream: false
+      reasoning_effort: null
+      direct_api: true
+    MiniMax-M3.1-Flash:
+      base_url: http://100.103.152.177:8080/v1
+      model: MiniMax-M3.1-Flash
+      api_key_env: JEVDUO_MINIMAX_API_KEY
+      max_tokens: 65536
+      max_retries: 3
+      timeout_seconds: 600
+      stream: false
+      reasoning_effort: max
+      direct_api: true
+
+# ------------------------------------------------------------------ harness 行为
+harness:
+  name: jevduo
+  max_steps: 100
+  max_wall_seconds: 3600
+  execution:
+    no_tool_call_attempts: 1
+    model_response_recovery: true
+  context_management:
+    mode: off
+  evaluation:
+    enabled: false           # 只用 OSWorld 官方评分
+  observation:
+    a11y_enabled: false
+    primary_screen_only: true
+  prompt:
+    history_window_rounds: 100
+    screenshot_window_images: 3
+    include_initial_observation_image: true
+    include_subsequent_observation_images: true
+  coordinate:
+    input_space: image_pixels      # 模型输出 0-1000 时改 normalized_1000
+    clamp_to_bounds: true
+  desktop:
+    backend: osworld
+    command_timeout_seconds: 300
+    screenshot_timeout_seconds: 30
+    retry_times: 3
+    retry_interval_seconds: 3
+
+# ------------------------------------------------------------------ 并发
+pool:
+  max_parallel: 6      # 同时运行的 rjob 数
+  tasks_per_job: 18    # 每个 rjob 串行处理的题数
+  retries: 1           # failed_unscored 重排队次数
+
+# ------------------------------------------------------------------ 集群
+cluster:
+  charged_group: evobox_proxy
+  private_machine: true
+  cpu: 4
+  memory: 16384        # MB
+  gpu: 0
+  image: registry.h.pjlab.org.cn/ailab-evobox-evobox_cpu/weavebench:osworld-v2-rjob-openclaw-kimi-tasks-uploadfix-20260701
+  mounts:
+    - {source: "gpfs://gpfs2/adpc-share",         target: "/mnt/shared-storage-user/adpc-share"}
+    - {source: "gpfs://gpfs2/evobox-share-gpfs2", target: "/mnt/shared-storage-gpfs2/evobox-share-gpfs2"}
+  registry_auth:
+    registry.h.pjlab.org.cn:
+      auth_env: JEVDUO_REGISTRY_AUTH
+  poll_seconds: 60
+  keep_job: false      # 跑完默认 stop + delete
+
+# ------------------------------------------------------------------ 基准
+benchmark:
+  name: osworld21
+  task_root:  /mnt/shared-storage-gpfs2/evobox-share-gpfs2/xuyuanxun/shared_resources/sa_cua/osworld21/prepared/runtime
+  vm:         /mnt/shared-storage-gpfs2/evobox-share-gpfs2/xuyuanxun/shared_resources/sa_cua/osworld21/vm/unified-20261022-complete.qcow2
+  asset_root: /mnt/shared-storage-gpfs2/evobox-share-gpfs2/xuyuanxun/shared_resources/sa_cua/osworld21/assets
+  shared_env: /mnt/shared-storage-gpfs2/evobox-share-gpfs2/xuyuanxun/shared_resources/sa_cua/osworld21/prepared/env.sh
+  inner_image: registry.h.pjlab.org.cn/ailab-evobox-evobox_cpu/weavebench@sha256:0e6497a9295647cf05bf2b2af522fdd79bdeba2737595259cab310a3bcf6baa9
+  proxy: http://100.100.135.73:3128
+  no_proxy: ""
+  startup_wait_seconds: 30
+  gitlab_token_file: /mnt/shared-storage-gpfs2/evobox-share-gpfs2/xuyuanxun/shared_resources/sa_cua/osworld21/shared_credentials/gitlab-test-admin.token
+  judge:
+    provider: openai_compatible
+    base_url: ""
+    api_key_env: JEVDUO_JUDGE_API_KEY
+    model: ""
+  user_simulator:
+    provider: openai_compatible
+    base_url: ""
+    api_key_env: JEVDUO_USERSIM_API_KEY
+    model: ""
+
+# ------------------------------------------------------------------ 日志
+log:
+  screenshots: true
+  llm_calls: true
+  keep_obs_stage: false

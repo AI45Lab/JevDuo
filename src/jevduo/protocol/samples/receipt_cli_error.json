@@ -1,8 +1,0 @@
-{
-  "returncode": 1,
-  "stdout": "",
-  "stderr": "bash: foo: command not found",
-  "kind": "cli",
-  "acknowledged": true,
-  "full_output_ref": "artifacts/step_05_cli_full.txt"
-}

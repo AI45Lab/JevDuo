@@ -1,7 +1,0 @@
-{
-  "kind": "gui",
-  "action_type": "scroll",
-  "parameters": { "x": 768, "y": 412, "dx": 0, "dy": -320 },
-  "target_id": null,
-  "description": "向下滚动文件列表"
-}

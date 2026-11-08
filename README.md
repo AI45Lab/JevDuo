@@ -1,342 +1,134 @@
-# JevDuo
+# JevDuo · 集群测评（master 分支）
 
-**面向 Computer Use 场景的快慢双模 CUA harness。**
+在 OSWorld 2.1 上用上游 CUA harness 跑 agent 测评，通过内部集群的 `rjob` 提交任务。
+本分支是**测评工程分支**，与 `main`（JevDuo harness 本体）相互独立，不 merge、不 rebase。
 
-慢模型负责**理解与规划**——读长指令、读屏幕、读无障碍树，产出「下一步该做什么」的意图；
-快模型（JEV / Kev 这类 System One 决策模型）负责**选择**——在一个已被裁剪过的候选动作空间里，
-一次前向就挑出具体动作。JevDuo 把这两级拼成一条可评测、可回放、可对比的决策闭环。
-
-```
-  观察 Observation
-  截图 · a11y 树 · 可选 CDP DOM 快照 · 预算 · 上一步回执
-        │
-        ▼
-┌─────────────────────────────────────────────┐
-│慢模型 planner（大脑）    ← 理解与规划       │
-│  current_goal / expected_observation        │
-│  route / action_proposals / done            │
-└─────────────────────────────────────────────┘
-        │
-        │  意图：提案（操作哪个元素、做什么操作）
-        ▼
-  候选动作空间（按提案聚焦 + 历史剪枝后）
-  每个候选自带：操作 · 目标 · 坐标 · 上下文
-        │
-        ▼
-┌─────────────────────────────────────────────┐
-│快模型排序（System One：JEV / Kev）  ← 选择  │
-│  两阶段：operation → action                 │
-│  winner · operation_margin · latency_ms     │
-└─────────────────────────────────────────────┘
-        │
-        │  winner
-        ▼
-  编译 → 声明式动作（kind / action_type / parameters）
-        │
-        ▼
-  执行（GUI 或 CLI）
-        │
-        │  Receipt：returncode / stdout / stderr
-        ▼
-┌─────────────────────────────────────────────┐
-│慢模型 verifier（大脑）    ← 独立验证        │
-│  outcome · state_changed · evidence         │
-│  逐条需求核验 requirement_checks            │
-└─────────────────────────────────────────────┘
-        │
-        └───► 回到「观察」，直到完成 / 预算耗尽
-```
-
-> 内部集群（rjob 提交、OSWorld 真机评测、共享资源）的运行方式不在本文，
-> 见 [docs/CLUSTER_RUNTIME.md](docs/CLUSTER_RUNTIME.md)。
-
-## 快慢双模：分工与边界
-
-|  | 慢模型（大脑） | 快模型（小脑） |
-|---|---|---|
-| 角色 | 需求抽取 / 一步规划 / 独立验证 | 在候选空间里排序选择 |
-| 实现 | `planning/planner.py`、`verification/verifier.py`、`models/slow.py`（`SlowModelClient`，OpenAI 兼容方言） | `models/jev.py`（JEV）、`models/kev.py`（Kev） |
-| 当前默认 | `minimax-m3.1-flash`（可切 `kimi-k3`） | `jev`（可切 `kev`） |
-| 输入 | 指令 + 截图 + a11y 树 + 历史动作 + 需求清单 | 当前目标 + 候选动作（自带上下文描述）+ 截图（仅 JEV 需要） |
-| 输出 | 结构化 plan：当前目标 / 预期观察 / 路由 / 动作提案 | 排序结果：winner + operation/action 两级分数 + margin + 延迟 |
-| 代价 | 每步一次 LLM 调用，慢且贵 | 单次 HTTP 前向，快且便宜 |
-| **不做什么** | 不直接指定点击哪个像素 | **不做全局规划**，不理解任务全貌 |
-
-**关键设计**：快模型拿到的候选集合已经被裁剪过两道——
-
-1. **慢模型的提案聚焦**（`gui.proposals.focused_candidates`）：planner 给出要操作的元素与操作类型，
-   候选空间据此收敛；
-2. **历史剪枝**（`gui.focus.prune_stalled`）：连续两步对同一动作都没有引起状态变化，就把该动作
-   从候选空间剔除，避免原地打转；上一步已判定达成（achieved）的操作也不再重复提议。
-
-剩下的每个候选都带语义描述（角色、名称、坐标、上下文）。这让一个体量很小的 System One 模型
-也能在真实桌面任务上做出可用选择，而每一步的全局理解仍然完整地交给慢模型。
-排序服务不可用时按 `URLError` 退避重试（45s × 3），不会静默降级。
-
-## 一次决策的链路
-
-`JevDuoSession.act(observation)` 是唯一的决策入口，状态机语义（`runtime/session.py`）：
-
-1. **读观察**：`Observation` 含截图、a11y 树和可选 CDP DOM 快照引用、预算、上一轮回执。
-2. **建目标**：a11y 树解析成 `UITarget`，`gui/semantics.py` 恢复邻近标签、
-   分离浏览器外壳与网页内容，并合并 a11y/DOM 元素。
-3. **慢模型规划**：`planning.planner.plan_step` 产出 plan——`current_goal`、`expected_observation`、
-   `route`（gui/cli）、`action_proposals`、`task_status`、`done`。
-4. **终态分支**：planner 声称完成 → `handle_done`：若需求带 `output_path`，先发一条 CLI
-   存在性探针（`done_probe`）核对交付物文件是否真的存在，探针通过后才进入终态裁决
-   （`terminal_decision`）；未通过则回到规划重来。
-5. **CLI 路由**：`route == "cli"` → 直接下发 `CliAction`（bash -lc，cwd=/home/user，1 条 CLI 计 1 步）。
-6. **建候选空间**：`gui/candidates.py` 由目标展开动作，再经 `focused_candidates`
-   按慢模型提案和元素 scope 聚焦，经 `prune_stalled` 剪枝；网页提案不会补入浏览器外壳候选。
-   全部提案无法唯一绑定时，使用当前 scope 内的有限恢复候选和 `RETURN_TO_PLANNER`，
-   不在调用快模型前直接计为 no_action。
-7. **快模型排序**：两阶段——先选 **operation**（点击还是输入），再在胜出 operation 内选 **action**（具体哪个目标）。
-   结果带 `operation_margin`（两级置信度差）与 `latency_ms`。
-8. **编译动作**：`gui/compile.py` 把 winner + 目标编译成**声明式** `GuiAction`
-   （kind / action_type / parameters / target_id），不做代码生成。
-9. **执行与验证**（jevduo_eval 层）：环境执行后回传 `Receipt`；下一轮进入
-   `runtime.episode.verify_pending`——用新观察独立核验上一步，更新 verified_focus、failed_toggles、
-   以及**逐条需求的核验状态**（`requirement_checks`）。
-10. **停止条件**：步数/墙钟预算耗尽 → `FailAction`；连续 3 次无可执行动作 → `FailAction(no_action_limit)`。
-
-`session.events` 记录每一步的 planner 计划、候选集、排序细节、动作与验证裁决，
-落盘后即 `events.jsonl`——demo 与分析的唯一数据来源。
-
-## 两条执行路由
-
-| 路由 | 触发 | 产物 | 备注 |
-|---|---|---|---|
-| **gui** | planner 提案指向界面元素 | `GuiAction`（声明式） | 主路径；由快模型在候选空间里选择 |
-| **cli** | planner 判断 GUI 绕路，直接用 shell | `CliAction`（命令 + 超时） | `allow_cli` / `route_policy` 可关；与 GUI 共用步数预算 |
-
-## 组件装配
-
-`components.py` 定义依赖注入边界——十个字段，没有插件框架、没有隐藏分发：
-
-| 字段 | 职责 | 默认实现 |
-|---|---|---|
-| `planner` | 单步或阶段规划 | `planning.planner.plan_step` / `planning.stage_planner.plan_stage` |
-| `verifier` | 独立验证 | `verification.verifier.verify_observation` |
-| `requirements` | 需求抽取 | `verification.verifier.task_requirements` |
-| `selector` | 排序后端 | `models.jev.JevOmniPolicy` / `models.kev.KevPolicy` |
-| `target_builder` | a11y 树 → 目标 | `gui.targets.A11yTargetBuilder` |
-| `semantic_enricher` | a11y/DOM → 共享语义元素表 | `gui.semantics.enrich_targets` |
-| `candidate_builder` | 目标 → 动作候选 | `gui.candidates.ActionCandidateBuilder` |
-| `focus_candidates` | 提案聚焦 + 剪枝 | `gui.proposals.focused_candidates` |
-| `compile_gui` | winner → 声明式动作 | `gui.compile.gui_action` |
-| `grounder` | 视觉兜底 | **None**（按重构计划延后，session 侧判空跳过） |
-
-换排序后端、换 LLM、换候选策略都只改这里，不碰状态机。
-
-## 消息层协议
-
-harness 与环境之间只走 JSON 消息（`src/jevduo/protocol/`）：
-
-- **Observation**（环境 → harness）：任务指令、步号、预算、截图引用、a11y 树引用、上一轮回执；
-- **Action**（harness → 环境）：`GuiAction` / `CliAction` / `WaitAction` / `FinishAction` / `FailAction`；
-- **Receipt**（环境 → harness）：returncode、stdout、stderr、kind。
-
-约束（MCP-ready，从第一天生效）：
-
-- `schema/*.json` 是**唯一真源**，`validate.py` 是运行时强制者，`samples/*.json` 是 golden 样例；
-- 消息必须是纯 JSON——二进制一律文件引用（path + sha256），禁止 Python 对象泄漏；
-- 校验器严格：未知字段、bool 冒充 int、枚举越界一律拒绝；
-- 任何字段增删或语义变化 = bump `protocol_version` 次版本号，并同步 schema 与全部 golden 样例。
-
-自检：
-
-```bash
-jevduo check      # 协议样例自检（CI 同样跑）
-```
-
-## 仓库结构
-
-| 路径 | 定位 |
-|---|---|
-| `src/jevduo/` | **仓库主体**：快慢双模 harness（决策状态机、规划/验证、候选与排序、协议层、组件装配） |
-| `src/jevduo_eval/` | 测评薄适配层：worker 侧 6 文件（entry/env/runner/recorder/scoring/manifest）+ 开发机侧 `rjob.py` 生命周期客户端 |
-| `infra/` | 内部集群适配：唯一配置文件、worker 入口脚本（详见 [集群运行手册](docs/CLUSTER_RUNTIME.md)） |
-| `demo/` | 轨迹回放与对比站点：只读结果目录，不 import harness、不调模型、不碰 VM |
-| `tests/` | `protocol/` `harness/` `eval/` `demo/` 四组 |
-| `docs/` | 结果目录契约、集群运行手册 |
-
-边界规则：harness ↔ eval 只走消息层协议；eval ↔ demo 只读结果目录；
-仓库 ↔ 共享资源只读、零新增依赖。
+被测 agent 来自 `src/upstream/`（上游源码快照，不入库），本工程只负责：
+切题 → 渲染 job spec → 并发提交 rjob → 起 VM → 跑 agent → 官方评分 → 落盘汇总。
 
 ## 快速开始
 
 ```bash
-# 安装（Python ≥ 3.10；harness 本身零第三方依赖，只用标准库）
-# dev 额外装 pytest + ruff；Pillow 是白名单内唯一第三方依赖，仅 demo 构建期用
-pip install -e '.[dev]'
+# 1. 同步上游源码快照（只做一次，或换上游版本时）
+bash scripts/sync_upstream.sh
 
-# 三件套：lint + 单测 + 协议自检
-ruff check src tests && pytest && jevduo check
+# 2. 建 venv（解释器装在共享盘，worker 内可见）
+bash scripts/setup_env.sh
+
+# 3. 填密钥（不进仓库，权限 600）
+cat > .env.local <<'EOF'
+export JEVDUO_KIMI_API_KEY='...'
+export JEVDUO_MINIMAX_API_KEY='...'
+export JEVDUO_REGISTRY_AUTH='base64(user:pass)'
+EOF
+chmod 600 .env.local
+
+# 4. 跑单题冒烟
+bash scripts/run.sh --run-id jv-smoke-001 --tasks 001 --jobs 1 --per-job 1
+
+# 5. 跑分片 / 全量
+bash scripts/run.sh --run-id jv-osw21-a --shard 1/6 --jobs 6 --per-job 18
 ```
 
-把 harness 当库用：
+`run.sh` 是唯一入口，会自动加载 `.env.local`。
 
-```python
-from jevduo.components import build_default
-from jevduo.config import SessionConfig
-from jevduo.runtime.session import JevDuoSession
+## 目录
 
-components = build_default(
-    client=slow_client,                       # models.slow.SlowModelClient（慢模型客户端）
-    endpoint="http://<排序服务>/rank",
-    config=SessionConfig(fast_backend="jev"),
-)
-session = JevDuoSession(components)
-session.begin("把 FYP 答辩安排逐条加进日历", None)   # None → 慢模型抽取需求
-action = session.act(observation)                     # Observation → Action
-```
-
-在真实环境上跑一题（提交到内部集群）：
-
-```bash
-jevduo-eval rjob run --run-id <name> --benchmark osworld2 --tasks <task-id> \
-  --repo . --config infra/config.json --poll 60 --timeout 3600
-```
-
-换大脑 / 换小脑只改启动参数：`infra/config.json` 里登记多套 API（`harness.slow_model.apis` /
-`harness.fast_model.apis`），运行时用 `--slow-model <名字> --fast-model <名字>` 挑，
-用来比较"不同大脑 × 不同小脑"的性能差距。
-
-跑完**自动删除 rjob**——无论成功、失败、超时还是中途异常，都不在集群上留残留；
-要保留现场（事后查 `rjob logs`）加 `--keep`。
-
-完整参数表与运行细节见 [docs/CLUSTER_RUNTIME.md](docs/CLUSTER_RUNTIME.md)。
-
-### 从旧名称 tandem 升级
-
-项目已更名为 JevDuo：包名 `tandem` → `jevduo`，`tandem_eval` → `jevduo_eval`，命令 `tandem` / `tandem-eval` → `jevduo` / `jevduo-eval`，类 `TandemSession` → `JevDuoSession`。旧入口已移除，不保留别名。已有安装按下面三步升级：
-
-```bash
-pip uninstall -y tandem        # 卸载旧包（uv 环境：uv pip uninstall tandem）
-pip install -e '.[dev]'        # 以新名称重装
-jevduo check                   # 确认入口可用
-```
-
-- 自己的脚本里 `import tandem` / `from tandem_eval ...` 需改为 `jevduo` / `jevduo_eval`。
-- 环境变量 `TANDEM_EXPERIMENT_ROOT` / `TANDEM_CONFIG_FILE` 改名为 `JEVDUO_EXPERIMENT_ROOT` / `JEVDUO_CONFIG_FILE`；旧名作为过渡仍可用（stderr 提示弃用），后续版本移除。
-- rjob 任务名前缀由 `tandem-<run-id>` 变为 `jevduo-<run-id>`；开发机 `infra/config.json` 里的 `eval.repo_root` / `eval.deploy_root` 需按新目录同步，旧的部署副本确认无在跑任务后再清理。
-
-## 会话配置
-
-`SessionConfig`（`src/jevduo/config.py`，frozen dataclass，构造即校验）：
-
-| 字段 | 默认 | 说明 |
-|---|---|---|
-| `allow_cli` | `True` | 是否允许 planner 走 CLI 路由 |
-| `route_policy` | `"auto"` | `auto` / `gui` / `cli` |
-| `cli_timeout_seconds` | `90` | CLI 超时（协议上限 120） |
-| `fast_timeout_seconds` | `300` | 快模型排序服务超时（jev 与 kev 共用） |
-| `slow_max_tokens` | `16384` | 慢模型单次响应上限 |
-| `slow_timeout_seconds` | `120` | 慢模型超时 |
-| `slow_direct_api` | `False` | 直连 API（不经代理） |
-| `slow_reasoning_effort` | `None` | 服务端默认，或 `off` / `low` / `medium` / `high` / `max` |
-| `fast_backend` | `"jev"` | `jev`（`/rank`，需截图）/ `kev`（System One，纯文本） |
-
-**换慢模型厂商**：在 `infra/config.json` 的 `harness.slow_model.apis` 里登记多套 API，
-启动时用 `--slow-model <名字>` 挑（缺省取 `default`），不改代码。
-
-## 命名实验与日志目录
-
-`scripts/run_experiment.sh` 将一次实验的全部产物归档到 `rjob_logs/<experiment>/`。
-实验名只能使用小写字母、数字和连字符，且每个实验目录必须唯一。
-
-```bash
-bash scripts/run_experiment.sh \
-  --experiment kimi12-retry-20261030 \
-  --tasks 024,029,037,045,057,059,069,082,088,093,005,031 \
-  --concurrency 12 --slow-model kimi-k3 \
-  --max-steps 500 --max-wall 14400
-```
-
-目录结构：`manifest.json`（实验参数与 git describe）、`batch.log`、
-`drivers/<task>.driver.log` 和 `<experiment>-<task>/`（worker、模型、轨迹与结果）。
-worker 的 adpc 挂载只读时仍使用 evobox 暂存，任务结束后立即归档到该实验目录。
-
-慢模型支持自定义 OpenAI 兼容 API。在 `harness.slow_model.apis` 的条目中填写
-服务地址 `base_url`、访问密钥 `api_key` 和模型名称 `model`。
-客户端以非流式方式向 `<base_url>/chat/completions` 发送 POST 请求，
-使用 `Authorization: Bearer <api_key>` 鉴权；`base_url` 可带尾部斜杠。
-真实密钥只填写在被 gitignore 的 `infra/config.json`；模板中的密钥留空。
-
-慢模型的调用纪律（`models/slow.py`）：
-
-- HTTP 408、429、5xx，以及 MiniMax 通过 HTTP 200 返回的临时故障，
-  最多调用 3 次（首次 + 2 次重试），优先遵循 `Retry-After`，
-  缺失时每次等待 30 秒；等待和请求均受任务剩余预算约束。其他 API 错误直接上报。
-- 思考强度取所选 API 的配置；空正文（全留在思考通道）→ 下一次重试自动升档；
-- 叙述文字包裹 JSON → 自动剥围栏取首个平衡 `{…}` 抢救；
-- `finish_reason=length` → 明确报错，提示调大 `slow_max_tokens`。
-
-## 排序后端
-
-两个后端跑**同一套**两阶段排序（operation → action），harness 侧一行开关切换：
-
-| 后端 | 协议 | 截图 | 形态 |
-|---|---|---|---|
-| **jev**（默认） | `GET /` + `POST /rank` | 需要（暂存到中转目录，payload 带服务宿主机视角路径） | 视觉-语言决策模型 |
-| **kev** | System One `POST /v1/systemone` | 不需要（纯文本，候选描述含坐标/上下文） | 小体量决策模型 |
-
-两者的分数都是 **softmax 输出，不是校准正确率**——`score_is_calibrated_correctness_probability`
-恒为 `false`，对比分析时不能当作概率读。排序延迟 `latency_ms` 是服务端实测值。
-
-## 结果目录
-
-所有产物落在**唯一位置** `rjob_logs/<run_id>/`（无副本）。`obs_stage/`（episode 内工作区）结束即清。
-
-```
-rjob_logs/<run_id>/
-├── summary.json           # run 级汇总（demo / 人工验收入口）
-├── heartbeat.json         # 进度心跳
-├── code_version.json      # git describe + 协议版本 + 镜像 digest + run spec（secrets 脱敏为 ***）
-├── worker/entry.log       # worker 侧运行日志（LLM 审计 + 事件流）
-└── episodes/<task_id>/
-    ├── task.json          # 任务定义副本（自包含）
-    ├── traj.jsonl         # 每步观察 + 动作 + 回执
-    ├── llm_calls.jsonl    # 全量 LLM 请求/响应（role: task_requirements / plan_step / verify_observation）
-    ├── events.jsonl       # 决策事件（route: planner/gui/cli/gui_verified/cli_verified/done_probe/terminal）
-    ├── screenshots/       # 逐步截图
-    ├── a11y_digests.jsonl # 每步 a11y 摘要（sha256 + 节点数）
-    ├── deliverables/      # finish 时导出的 VM 文件
-    ├── evaluation.json    # 官方评分（source/raw/score）
-    └── episode.json       # 终态（score/status/stop_reason/steps）
-```
-
-字段级定义见 [docs/RESULT_DIR_CONTRACT.md](docs/RESULT_DIR_CONTRACT.md)（eval ↔ demo 的唯一接口契约）。
-
-## Demo
-
-`demo/` 把结果目录变成静态站点：逐步回放桌面轨迹与模型操作链，横向对比多个 run 的
-**成本 / 耗时 / 准确率**。
-
-```bash
-python demo/build_site.py --runs-root rjob_logs --out demo/site --benchmark osworld2
-python -m http.server 8899 --directory demo/site    # 本地预览
-```
-
-披露口径：未出分如实标注、不折算 0 分、不计入均分；排序分数标注 softmax 非校准概率；
-成本只用 token 与调用次数表达，不臆造货币单价；截图标明是离散帧非录屏。
-
-详见 [demo/README.md](demo/README.md)。
-
-## 文档
-
-| 文档 | 内容 |
+| 路径 | 内容 |
 |---|---|
-| [docs/CLUSTER_RUNTIME.md](docs/CLUSTER_RUNTIME.md) | 内部集群运行手册：配置、run 生命周期、worker 入口、共享资源、已知坑 |
-| [docs/RESULT_DIR_CONTRACT.md](docs/RESULT_DIR_CONTRACT.md) | 结果目录契约（字段级定义 + 步号语义） |
-| [DEVIATIONS.md](DEVIATIONS.md) | 与旧仓库 SA-CUAharness 的已知行为差异清单 |
-| [AGENTS.md](AGENTS.md) | 开发纪律与目录地图 |
-| [demo/README.md](demo/README.md) | demo 站点说明 |
+| `config.yaml` | **唯一配置**：模型、harness 行为、并发、集群、基准、日志；不含密钥 |
+| `scripts/run.sh` | 唯一运行入口（开发机） |
+| `scripts/sync_upstream.sh` | 同步上游源码到 `src/upstream/` |
+| `scripts/setup_env.sh` | 重建 agent venv（解释器装共享盘 + 路径断言） |
+| `infra/worker.sh` | rjob worker 入口：共享 env、dockerd、拉镜像、进 `entry` |
+| `src/settings.py` | 读 config.yaml、切题、渲染 job spec（开发机侧，需要 PyYAML） |
+| `src/pool.py` | 任务池：切片、并发 rjob、watch、收日志、合并、重试 |
+| `src/rjob.py` | rjob CLI 封装与状态解析 |
+| `src/entry.py` | worker 主循环（冻结解释器，只读 JSON spec） |
+| `src/vm.py` | OSWorld VM 生命周期：fetch_task / reset / execute / score / close |
+| `src/launch.py` | 起 agent 子进程、超时杀进程组、终态映射 |
+| `src/appcfg.py` | 生成 app.yaml / agent.yaml（指向 VM 的 osworld 后端） |
+| `src/task_run.py` | 单题 agent 运行器（在 agent venv 内跑） |
+| `src/recorder.py` | 结果目录契约（轨迹摘要、截图、汇总） |
+| `src/scoring.py` | 官方分数归一化与 `failed_unscored` 判定 |
+| `tests/test_pool.py` | 纯逻辑单测：切片、切题、spec 渲染、状态解析 |
+| `runs/<run_id>/` | 全部产物（gitignore） |
 
-## 阶段执行（可选）
+## 三个解释器，别混
 
-默认保持逐步规划；启用 `--execution-mode stage` 后，由慢模型规划阶段、快模型连续选择动作，
-规则验证优先，仅在必要时调用模型验证或重规划。
-`--execution-mode goal` 可启用带任务记忆的局部连续执行，阶段结束再独立 Verify；
-保留 A11y/CDP 语义融合及 JEV 服务恢复，默认 step/stage 行为不变。
-配置、执行边界、开发入口和验收方法见 [阶段执行说明](docs/STAGE_EXECUTION.md)。
+| 角色 | 解释器 | 说明 |
+|---|---|---|
+| 开发机 `pool` / `settings` | 仓库 `venv/bin/python` | 有 PyYAML，读 `config.yaml` |
+| worker `entry` | 共享 `$OSWORLD_PYTHON` | 冻结 venv，**没有 PyYAML**，只读 JSON spec |
+| agent 子进程 `task_run` | 仓库 `venv/bin/python` | 上游源码 + NexAU |
+
+因此 `config.yaml` 只在开发机解析；worker 只接收 `settings.py` 渲染好的 `job_specs/*.json`。
+
+## 配置要点
+
+- `models.apis`：命名 API 登记表，`--model` 按名字选，缺省取 `models.default`。
+  当前登记 `k3.1-pro` 与 `MiniMax-M3.1-Flash`，均走内部网关。
+- `direct_api: true`：起 agent 子进程时剔除所有 `*_proxy`，等价于 `curl --noproxy '*'`。
+- `harness.*`：步数/墙钟预算、坐标空间、桌面超时、prompt 窗口、评估器开关（默认关闭，
+  分数只来自 OSWorld 官方评分器）。
+- `pool.max_parallel` / `pool.tasks_per_job`：rjob 级并发；worker 内串行（一题一个 VM）。
+- `cluster.*`：cpu/memory/gpu/镜像/mount/registry 凭据环境变量名/轮询间隔。
+- `benchmark.*`：OSWorld 2.1 的 task_root、VM qcow2、assets、inner 镜像 digest、代理。
+
+## 并发模型
+
+只在 rjob 级并发，每题独占一个 VM：
+
+```
+max_parallel=6, tasks_per_job=18  →  6 个 rjob 并发，各 18 题（108 题）
+```
+
+每 job 4C/16G；提交失败指数退避；`failed_unscored` 按 `pool.retries` 重新入队。
+每个 job 独立写 `jobs/job-NN/summary.json`，最后一并合成为 `runs/<run_id>/summary.json`。
+
+## 产物
+
+```
+runs/<run_id>/
+├── run.json / submit.log / summary.json / summary.csv
+├── job_specs/job-NN.json           # 600；含 key，跑完可删
+├── jobs/job-NN/
+│   ├── job.json / status.txt / tail.log / heartbeat.json / summary.json
+│   ├── worker/{entry,dockerd,docker-pull,deps-check}.log
+│   └── episodes/<task>/
+│       ├── task.json / episode.json / evaluation.json
+│       ├── traj.jsonl              # 步骤摘要（动作、回执、窗口、截图引用）
+│       ├── llm_calls.jsonl         # 相对软链 → agent/<session>/llm_trace.jsonl
+│       ├── screenshots/step_NN.png
+│       ├── agent/                  # 上游原始产物（steps.jsonl / llm_trace / runtime）
+│       ├── config/{app.yaml,agent.yaml}
+│       └── agent_result.json / agent_stdout.log
+```
+
+`summary.csv` 字段：`task_id,status,score,steps,seconds,stop_reason,model`。
+
+## 冒烟基线（2026-11-08）
+
+题 001，`k3.1-pro`，100 步上限：
+
+```
+[job-00] succeeded
+{"total": 1, "scored": 1, "failed_unscored": 0, "score_mean": 0.3333}
+```
+
+同轮验证到：镜像拉取、dockerd、VM setup、agent 子进程、官方评分、产物落盘全链路。
+
+## 已知坑
+
+- **PyYAML 只在开发机**：worker 侧不要 import `settings`。
+- **venv 解释器必须在共享盘**：`setup_env.sh` 会断言 `venv/bin/python` 的解引用路径位于仓库内，
+  否则 worker 内会 `No such file or directory`。
+- **registry 凭据**：`worker.sh` 直接读 spec 里 `cluster.registry_auth[host].auth`（base64 或裸
+  `user:pass`，后者由 `settings.py` 自动编码），写入 `~/.docker/config.json`。
+- **集群容量**：CPU 紧张时 rjob 会长时间排队（事件里是 `Insufficient cpu`），不是代码问题。
+- **步数上限**：`harness.max_steps` 耗尽时 agent 记 `max_steps`，仍按官方评分器打分为 `scored`。
+
+## 分支约定
+
+`master` 只保留测评工程（本文件所述范围）。harness 本体、demo、docs 等属于 `main`，不从
+`main` 合并，也不向 `main` 回推。

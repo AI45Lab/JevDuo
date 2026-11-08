@@ -1,7 +1,0 @@
-{
-  "kind": "gui",
-  "action_type": "type",
-  "parameters": { "text": "第四季度销售汇总" },
-  "target_id": null,
-  "description": null
-}

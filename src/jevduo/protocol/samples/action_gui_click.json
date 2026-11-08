@@ -1,7 +1,0 @@
-{
-  "kind": "gui",
-  "action_type": "click",
-  "parameters": { "x": 512, "y": 384 },
-  "target_id": "btn-ok",
-  "description": "点击确定按钮"
-}

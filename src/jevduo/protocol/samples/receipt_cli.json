@@ -1,8 +1,0 @@
-{
-  "returncode": 0,
-  "stdout": "total 4\n-rw-r--r-- 1 user user 4096 10月20 11:02 备份说明.txt",
-  "stderr": "",
-  "kind": "cli",
-  "acknowledged": true,
-  "full_output_ref": "artifacts/step_03_cli_full.txt"
-}
