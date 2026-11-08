@@ -23,62 +23,116 @@ def _redact(text: str) -> str:
     return text.replace(key, "***") if key else text
 
 
+_MISSING = "[missing tool output; the call did not produce a result]"
+_FAULT_DIR: Path | None = None
+
+
 def _repair_tool_pairs(messages: list) -> tuple[list, int]:
-    """给没有回执的 tool_call 补一条说明性回执，返回 (新列表, 修补数)。
+    """按「紧邻」口径补齐 tool 回执，返回 (新列表, 修补数)。
 
-    网关（k3.1-pro）对 OpenAI Chat 格式做严格校验：assistant 的 tool_calls 必须
-    每条都被紧随其后的 tool 消息回应，否则整次请求 400，报 "The following
-    tool_call_ids did not have response messages: note:31"。NexAU 自带的补齐函数
-    只处理 Message 对象，而 openai_chat_completion 这条路径拿到的是 dict，孤儿
-    调用会原样发出去（实证：10 题里 5 题因此 failed_unscored）。
+    网关（k3.1-pro）对 OpenAI Chat 格式的校验是位置相关的，报错原文：
+    "an assistant message with 'tool_calls' must be followed by tool messages
+    responding to each 'tool_call_id' ... did not have response messages: wait:392"。
+    其中 392 是请求内 tool_call 的累计序号。
 
-    位置很关键：补出来的 tool 消息必须紧跟在该 assistant 轮次已有的 tool 消息
-    之后，追加到整个列表末尾同样会被网关拒绝（已用真网关验证：末尾追加 400，
-    紧跟轮次 200）。
+    因此「id 在列表里出现过」不等于合格：回执被挪到别处、或整轮回执没进请求，
+    都会 400。这里逐轮检查紧跟其后的连续 tool 段，缺的补上、错位的搬回来。
+    补出来的消息必须紧跟本轮已有回执之后，追加到列表末尾同样会被拒绝
+    （已用真网关验证：末尾追加 400，紧跟轮次 200）。
     """
     if not isinstance(messages, list):
         return messages, 0
-    answered = {
-        message.get("tool_call_id") for message in messages
-        if isinstance(message, dict) and message.get("role") == "tool"
-    }
-    repaired: list = []
-    inserted = 0
-    index = 0
+
+    positions: dict[str, list[int]] = {}
+    for index, message in enumerate(messages):
+        if isinstance(message, dict) and message.get("role") == "tool":
+            call_id = message.get("tool_call_id")
+            if isinstance(call_id, str) and call_id:
+                positions.setdefault(call_id, []).append(index)
+
     total = len(messages)
-    while index < total:
-        message = messages[index]
-        repaired.append(message)
-        index += 1
+    moved: set[int] = set()
+    # 键是「插在原始列表的哪个下标之后」，值是要插入的消息
+    inserts: dict[int, list] = {}
+    repaired_count = 0
+
+    for index, message in enumerate(messages):
         if not isinstance(message, dict) or message.get("role") != "assistant":
             continue
-        missing = [
+        calls = [
             call.get("id") for call in (message.get("tool_calls") or [])
-            if isinstance(call, dict) and call.get("id") and call["id"] not in answered
+            if isinstance(call, dict) and isinstance(call.get("id"), str) and call["id"]
         ]
-        if not missing:
+        if not calls:
             continue
-        # 原样搬走本轮已有的 tool 回执，保持它们原来的顺序
-        while (index < total and isinstance(messages[index], dict)
-               and messages[index].get("role") == "tool"):
-            repaired.append(messages[index])
-            index += 1
-        # 缺失的回执紧跟在本轮之后补上
-        for call_id in missing:
-            repaired.append({"role": "tool", "tool_call_id": call_id,
-                             "content": "[missing tool output; the call did not produce a result]"})
-            answered.add(call_id)
-            inserted += 1
-    if not inserted:
+        cursor = index + 1
+        covered: list = []
+        while (cursor < total and isinstance(messages[cursor], dict)
+               and messages[cursor].get("role") == "tool"):
+            covered.append(messages[cursor].get("tool_call_id"))
+            cursor += 1
+        additions = []
+        for call_id in calls:
+            if call_id in covered:
+                continue
+            later = [pos for pos in positions.get(call_id, [])
+                     if pos >= cursor and pos not in moved]
+            if later:
+                # 回执存在但错位：搬到本轮后面，别让它留在远处
+                additions.append(messages[later[0]])
+                moved.add(later[0])
+            else:
+                additions.append({"role": "tool", "tool_call_id": call_id, "content": _MISSING})
+            repaired_count += 1
+        if additions:
+            inserts[cursor - 1] = additions
+
+    if not repaired_count:
         return messages, 0
-    print(json.dumps({"event": "tool_pair_repair", "count": inserted}, ensure_ascii=False), flush=True)
-    return repaired, inserted
+
+    repaired: list = []
+    for index, message in enumerate(messages):
+        if index in moved:
+            continue
+        repaired.append(message)
+        repaired.extend(inserts.get(index, ()))
+    print(json.dumps({"event": "tool_pair_repair", "count": repaired_count},
+                     ensure_ascii=False), flush=True)
+    return repaired, repaired_count
 
 
-def _install_tool_pair_repair(enabled: bool) -> None:
+def _dump_fault(messages: list) -> None:
+    """把出站消息的结构落一份现场：只为定位，不含正文与图片。"""
+    if _FAULT_DIR is None:
+        return
+    shape = []
+    for index, message in enumerate(messages):
+        if not isinstance(message, dict):
+            shape.append({"index": index, "role": type(message).__name__})
+            continue
+        item = {"index": index, "role": message.get("role")}
+        calls = message.get("tool_calls") or []
+        if calls:
+            item["tool_calls"] = [call.get("id") for call in calls if isinstance(call, dict)]
+        if message.get("tool_call_id"):
+            item["tool_call_id"] = message["tool_call_id"]
+        content = message.get("content")
+        item["content_chars"] = len(content) if isinstance(content, str) else type(content).__name__
+        shape.append(item)
+    path = _FAULT_DIR / "tool_pair_fault.json"
+    try:
+        path.write_text(json.dumps(shape, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(json.dumps({"event": "tool_pair_fault", "path": str(path)}, ensure_ascii=False), flush=True)
+    except OSError:
+        pass
+
+
+def _install_tool_pair_repair(enabled: bool, fault_dir: Path | None = None) -> None:
     """在 NexAU 的模型调用入口外面包一层，出站前补齐 tool 回执。"""
     if not enabled:
         return
+    global _FAULT_DIR
+    _FAULT_DIR = fault_dir
     from nexau.archs.main_sub.execution import llm_caller
 
     original = llm_caller.call_llm_with_different_client
@@ -87,7 +141,13 @@ def _install_tool_pair_repair(enabled: bool) -> None:
         messages, count = _repair_tool_pairs(kwargs.get("messages") or [])
         if count:
             kwargs = {**kwargs, "messages": messages}
-        return original(client, llm_config, kwargs, **extra)
+        try:
+            return original(client, llm_config, kwargs, **extra)
+        except Exception as error:
+            # 网关仍拒收时留下现场，避免下次还要靠猜
+            if "did not have response messages" in str(error):
+                _dump_fault(kwargs.get("messages") or [])
+            raise
 
     guarded.__wrapped__ = original
     llm_caller.call_llm_with_different_client = guarded
@@ -97,7 +157,8 @@ async def run(args: argparse.Namespace) -> dict:
     from northcua.agentinfra.runtime.protocol import DesktopRunRequest
     from northcua.agents.desktop.application import NorthCUAApplication
 
-    _install_tool_pair_repair(not getattr(args, "no_tool_pair_repair", False))
+    _install_tool_pair_repair(not getattr(args, "no_tool_pair_repair", False),
+                              fault_dir=Path(args.log_dir))
     app = NorthCUAApplication.from_app_config(
         args.app_config, session_id=args.session_id, artifact_root_dir_override=args.log_dir)
     info = {"session_id": args.session_id, "artifact_root": str(app.artifact_store.root)}

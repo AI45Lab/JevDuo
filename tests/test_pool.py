@@ -232,6 +232,23 @@ class ToolPairRepairTest(unittest.TestCase):
             ("user", None), ("assistant", ("x", "y")),
             ("tool", "x"), ("tool", "y"), ("user", None)])
 
+    def test_misplaced_result_is_moved_back(self):
+        # 回执存在但错位（网关按紧邻校验，仍会 400）：必须搬回所属轮次
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "tool_calls": [{"id": "a"}, {"id": "b"}]},
+            {"role": "tool", "tool_call_id": "a", "content": "ok"},
+            {"role": "user", "content": "interrupt"},
+            {"role": "tool", "tool_call_id": "b", "content": "late"},
+        ]
+        fixed, count = task_run._repair_tool_pairs(messages)
+        self.assertEqual(count, 1)
+        self.assertEqual(self._shapes(fixed), [
+            ("user", None), ("assistant", ("a", "b")),
+            ("tool", "a"), ("tool", "b"), ("user", None)])
+        # 搬走的原件不能留在原地
+        self.assertEqual(sum(1 for m in fixed if m.get("tool_call_id") == "b"), 1)
+
     def test_complete_history_untouched(self):
         messages = [{"role": "assistant", "tool_calls": [{"id": "z"}]},
                     {"role": "tool", "tool_call_id": "z"}]

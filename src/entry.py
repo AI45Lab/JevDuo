@@ -24,6 +24,18 @@ def _load_spec(path: str) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def _steps_from_disk(directory: Path) -> int:
+    """异常退出时从 steps.jsonl 数步数：agent 子进程没返回，但轨迹已经写了。"""
+    candidates = sorted(directory.glob("agent/**/steps.jsonl"), key=lambda path: len(path.parts))
+    if not candidates:
+        return 0
+    try:
+        with candidates[0].open("r", encoding="utf-8", errors="ignore") as handle:
+            return sum(1 for line in handle if line.strip())
+    except OSError:
+        return 0
+
+
 def run_task(vm: Vm, spec: dict, task: dict, job_root: Path) -> dict:
     harness = spec["harness"]
     max_steps = int(harness["max_steps"])
@@ -76,7 +88,8 @@ def run_task(vm: Vm, spec: dict, task: dict, job_root: Path) -> dict:
         return recorder.finalize(
             directory, task_id=task_id, stop_reason="exception", score=None,
             status=scoring.episode_status(scored=False, exception=error),
-            steps=int(info.get("step_count") or 0), model=model["name"],
+            steps=int(info.get("step_count") or _steps_from_disk(directory)),
+            model=model["name"],
             exception=error, seconds=time.perf_counter() - started,
         )
 
