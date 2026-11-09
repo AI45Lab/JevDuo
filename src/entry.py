@@ -70,10 +70,6 @@ def run_task(vm: Vm, spec: dict, task: dict, job_root: Path) -> dict:
             raise RuntimeError(f"agent 运行失败：{stop_reason}（详见 agent_stdout.log）")
         if action:  # DONE/FAIL 必须送达 VM：infeasible 题依赖最后一个动作是 FAIL
             vm.execute(action, pause=1)
-        recorder.write_trajectory(
-            directory, directory / "agent",
-            llm_calls=bool(spec["log"].get("llm_calls", True)),
-        )
         raw = vm.score(task)
         score = scoring.official_score(raw) if raw is not None else None
         recorder.write_evaluation(directory, raw, score)
@@ -92,6 +88,18 @@ def run_task(vm: Vm, spec: dict, task: dict, job_root: Path) -> dict:
             model=model["name"],
             exception=error, seconds=time.perf_counter() - started,
         )
+    finally:
+        # 轨迹在 finally 里落盘：崩溃的题最需要轨迹，正是最容易丢掉的那次。
+        # 这里自己吞异常，别让归一化失败盖掉上面已经算好的结果。
+        try:
+            recorder.write_trajectory(
+                directory, directory / "agent",
+                llm_calls=bool(spec["log"].get("llm_calls", True)),
+            )
+        except Exception as error:
+            print(json.dumps({"event": "trajectory_failed", "task_id": task_id,
+                              "error": f"{type(error).__name__}: {error}"},
+                             ensure_ascii=False), flush=True)
 
 
 def run_job(spec: dict) -> dict:

@@ -80,7 +80,8 @@ bash scripts/run.sh --run-id jv-osw21-a --shard 1/6 --jobs 6 --per-job 18
 max_parallel=6, tasks_per_job=18  →  6 个 rjob 并发，各 18 题（108 题）
 ```
 
-每 job 4C/16G；提交失败指数退避；`failed_unscored` 按 `pool.retries` 重新入队。
+每 job 4C/16G；提交失败指数退避。`failed_unscored` 不会自动重排队，
+需要重跑时用 `--retry-failed` 续跑（只重跑上次未评分的题）。
 每个 job 独立写 `jobs/job-NN/summary.json`，最后一并合成为 `runs/<run_id>/summary.json`。
 
 ## 产物

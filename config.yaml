@@ -63,7 +63,6 @@ harness:
 pool:
   max_parallel: 6      # 同时运行的 rjob 数
   tasks_per_job: 18    # 每个 rjob 串行处理的题数
-  retries: 1           # failed_unscored 重排队次数
 
 # ------------------------------------------------------------------ 集群
 cluster:
