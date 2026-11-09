@@ -127,9 +127,9 @@ def _dump_fault(messages: list) -> None:
         pass
 
 
-def _install_tool_pair_repair(enabled: bool, fault_dir: Path | None = None) -> None:
+def _install_tool_pair_repair(enabled: bool, fault_dir: Path | None = None, on_call=None) -> None:
     """在 NexAU 的模型调用入口外面包一层，出站前补齐 tool 回执。"""
-    if not enabled:
+    if not enabled and on_call is None:
         return
     global _FAULT_DIR
     _FAULT_DIR = fault_dir
@@ -138,16 +138,24 @@ def _install_tool_pair_repair(enabled: bool, fault_dir: Path | None = None) -> N
     original = llm_caller.call_llm_with_different_client
 
     def guarded(client, llm_config, kwargs, **extra):
-        messages, count = _repair_tool_pairs(kwargs.get("messages") or [])
-        if count:
-            kwargs = {**kwargs, "messages": messages}
+        if enabled:
+            messages, count = _repair_tool_pairs(kwargs.get("messages") or [])
+            if count:
+                kwargs = {**kwargs, "messages": messages}
+        started, failed, response = time.monotonic(), False, None
         try:
-            return original(client, llm_config, kwargs, **extra)
+            response = original(client, llm_config, kwargs, **extra)
+            return response
         except Exception as error:
+            failed = True
             # 网关仍拒收时留下现场，避免下次还要靠猜
             if "did not have response messages" in str(error):
                 _dump_fault(kwargs.get("messages") or [])
             raise
+        finally:
+            if on_call is not None:
+                usage = response.usage.to_dict() if response is not None else None
+                on_call(time.monotonic() - started, failed, usage)
 
     guarded.__wrapped__ = original
     llm_caller.call_llm_with_different_client = guarded
@@ -157,16 +165,28 @@ async def run(args: argparse.Namespace) -> dict:
     from northcua.agentinfra.runtime.protocol import DesktopRunRequest
     from northcua.agents.desktop.application import NorthCUAApplication
 
+    local_config = json.loads(args.gui_config) if getattr(args, "gui_config", "") else {}
+    owner = None
+    if local_config.get("backend") == "jev":
+        from jev_gui.tools import install
+
+        app_config = json.loads(Path(args.app_config).read_text())
+        if app_config.get("desktop", {}).get("backend") != "osworld":
+            raise ValueError("The JEV plugin supports only the task VM's OSWorld backend")
+        owner = install(local_config, args.log_dir, args.max_steps, args.deadline_at)
     _install_tool_pair_repair(not getattr(args, "no_tool_pair_repair", False),
-                              fault_dir=Path(args.log_dir))
-    app = NorthCUAApplication.from_app_config(
-        args.app_config, session_id=args.session_id, artifact_root_dir_override=args.log_dir)
-    info = {"session_id": args.session_id, "artifact_root": str(app.artifact_store.root)}
+                              fault_dir=Path(args.log_dir), on_call=owner.model_call if owner else None)
+    app = None
+    info = {"session_id": args.session_id}
     started = time.time()
     try:
+        app = NorthCUAApplication.from_app_config(
+            args.app_config, session_id=args.session_id, artifact_root_dir_override=args.log_dir)
+        info["artifact_root"] = str(app.artifact_store.root)
         result = await app.run_query(DesktopRunRequest(
             session_id=args.session_id, query=args.query,
-            max_steps=args.max_steps, max_session_steps=0))
+            max_steps=args.max_steps, max_session_steps=0),
+            **({"on_step": owner.on_step, "on_before_step": owner.before_step} if owner is not None else {}))
         info.update(
             terminal_status=result.terminal_status,
             hit_step_limit=result.hit_step_limit,
@@ -175,8 +195,24 @@ async def run(args: argparse.Namespace) -> dict:
             step_log_path=str(result.step_log_path),
             runtime_log_path=str(result.runtime_log_path),
         )
+    except BaseException as error:
+        if owner is None:
+            raise
+        from jev_gui.desktop import ActionLimit
+
+        if not isinstance(error, ActionLimit):
+            raise
+        info.update(terminal_status=None, hit_step_limit=error.reason == "max_steps",
+                    timed_out=error.reason == "wall_time_limit", terminal_decision={},
+                    step_count=owner.budget.actions)
     finally:
-        await app.stop()
+        try:
+            if app is not None:
+                await app.stop()
+        finally:
+            if owner is not None:
+                info.update(owner.statistics(), step_count=owner.budget.actions)
+                owner.close()
     info["seconds"] = round(time.time() - started, 3)
     return info
 
@@ -189,6 +225,8 @@ def main() -> int:
     parser.add_argument("--max-steps", type=int, required=True)
     parser.add_argument("--result", required=True, help="终态 JSON 输出路径")
     parser.add_argument("--query", required=True)
+    parser.add_argument("--gui-config", default="", help="从唯一配置渲染的局部执行参数 JSON")
+    parser.add_argument("--deadline-at", type=float, default=0.0, help="局部执行共享的绝对墙钟截止时间")
     parser.add_argument("--no-tool-pair-repair", action="store_true",
                         help="关闭出站前的 tool 回执补齐（默认开启）")
     args = parser.parse_args()
@@ -202,6 +240,10 @@ def main() -> int:
             "traceback": _redact(traceback.format_exc())[-3000:],
         }
         code = 2
+    stats = Path(args.log_dir) / "jev_stats.json"
+    if args.gui_config and stats.is_file():
+        info.update(json.loads(stats.read_text()))
+        info["step_count"] = info["physical_actions"]
     Path(args.result).write_text(
         json.dumps(info, ensure_ascii=False, default=str, indent=2), encoding="utf-8")
     return code

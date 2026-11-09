@@ -55,7 +55,8 @@ class Vm:
                 continue
             kept.append(entry)
         sys.path[:] = kept
-        for name in [item for item in sys.modules if item == "desktop_env" or item.startswith("desktop_env.")]:
+        for name in [item for item in sys.modules
+                     if item == "desktop_env" or item.startswith("desktop_env.")]:
             module = sys.modules[name]
             origin = getattr(module, "__file__", "") or ""
             if origin and not Path(origin).is_relative_to(root):

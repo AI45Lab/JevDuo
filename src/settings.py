@@ -28,6 +28,13 @@ def load(path: str | Path) -> dict:
     for section in ("project", "models", "harness", "pool", "cluster", "benchmark"):
         if section not in data:
             raise ConfigError(f"配置缺少段: {section}")
+    local = data["harness"].get("local_gui", {})
+    if local.get("backend", "native") not in {"native", "jev"}:
+        raise ConfigError("harness.local_gui.backend 应为 native / jev")
+    if local.get("backend") == "jev":
+        fast = local.get("fast_model", {})
+        if not (fast.get("endpoint") or fast.get("endpoint_file")):
+            raise ConfigError("JEV 后端需要 fast_model.endpoint 或 endpoint_file")
     return data
 
 

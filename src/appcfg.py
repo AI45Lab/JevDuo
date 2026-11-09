@@ -48,6 +48,9 @@ def app_config(*, vm_ip: str, server_port: int, max_steps: int, artifact_root: P
     """app 配置：osworld 后端指向 VM；评估器关闭，分数只来自 OSWorld 官方评分。"""
     desktop = harness.get("desktop", {})
     coordinate = harness.get("coordinate", {})
+    if harness.get("local_gui", {}).get("backend") == "jev":
+        # The JEV card schema uses full-screenshot normalized coordinates, independent of native mode.
+        coordinate = {"input_space": "normalized_1000", "clamp_to_bounds": False}
     prompt = harness.get("prompt", {})
     execution = harness.get("execution", {})
     return {

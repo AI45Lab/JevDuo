@@ -19,7 +19,8 @@ _PATTERNS = [
     ("deleted", re.compile(r"(?i)\bdeleted\b|已删除")),
     ("succeeded", re.compile(r"(?i)\b(succeeded|succeed)\b|成功")),
     ("failed", re.compile(r"(?i)\b(failed|error)\b|失败")),
-    ("running", re.compile(r"(?i)\b(running|terminating|pending|creating|waiting|starting|inqueue)\b|运行中|等待")),
+    ("running", re.compile(
+        r"(?i)\b(running|terminating|pending|creating|waiting|starting|inqueue)\b|运行中|等待")),
 ]
 
 DELETE_RETRIES = 3
