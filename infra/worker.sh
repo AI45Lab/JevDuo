@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # rjob worker 入口：准备共享环境与 docker，再进入 entry。
 set -euo pipefail
+export PYTHONDONTWRITEBYTECODE=1
 
 SPEC="${1:?用法: worker.sh <job spec json 绝对路径>}"
 [ -f "$SPEC" ] || { echo "job spec 不存在: $SPEC" >&2; exit 4; }
@@ -40,6 +41,26 @@ print("" if node is None else node)' "$SPEC" "$1"; }
 OUTPUT_ROOT="$(get output_root)"
 BENCHMARK="$(get benchmark.name)"
 SHARED_ENV="${SA_CUA_SHARED_ENV:-$(get benchmark.shared_env)}"
+GUI_BACKEND="$(python3 -c 'import json,sys
+print(json.load(open(sys.argv[1]))["harness"].get("local_gui", {}).get("backend", "native"))' "$SPEC")"
+if [ "$GUI_BACKEND" = jev ]; then
+  if [ "${2:-}" != --private-storage ]; then
+    exec unshare --mount --propagation private bash "$0" "$SPEC" --private-storage
+  fi
+  if [ "$(findmnt -n -o FSTYPE -T "$OUTPUT_ROOT")" != gpfs ] || \
+     [ "$(stat -f -c %T /tmp)" != tmpfs ] || [ "$(wc -l < /proc/swaps)" -ne 1 ]; then
+    echo "storage_policy_failed: JEV requires GPFS results and unswapped tmpfs; no local-disk fallback" >&2
+    exit 42
+  fi
+  # Only this child mount namespace changes; no host files or block devices are mounted or written.
+  mount -t tmpfs -o size=64m,nosuid,nodev tmpfs /run
+  storage_hosts_file="$(mktemp /tmp/jevduo-hosts.XXXXXX)"
+  cp /etc/hosts "$storage_hosts_file"
+  mount --bind "$storage_hosts_file" /etc/hosts
+  export DOCKER_CONFIG="$OUTPUT_ROOT/worker/docker-config"
+  export XDG_CACHE_HOME="$OUTPUT_ROOT/worker/cache"
+  export TMPDIR=/tmp
+fi
 mkdir -p "$OUTPUT_ROOT/worker"
 LOG="$OUTPUT_ROOT/worker/entry.log"
 [ "$BENCHMARK" = "osworld21" ] || { echo "本工程只支持 osworld21，收到: $BENCHMARK" | tee "$LOG" >&2; exit 4; }
@@ -49,7 +70,8 @@ LOG="$OUTPUT_ROOT/worker/entry.log"
 source "$SHARED_ENV"
 python3 "$OSWORLD21_ROOT/setup/shared_services.py" hosts
 
-mkdir -p "$HOME/.docker"
+REGISTRY_CONFIG_DIR="${DOCKER_CONFIG:-$HOME/.docker}"
+mkdir -p "$REGISTRY_CONFIG_DIR"
 # spec 里已是 base64(user:pass) 的字面值（settings.py 渲染时做过归一化），直接写 docker config
 AUTH="$(python3 -c 'import json,sys
 spec=json.load(open(sys.argv[1]))
@@ -59,8 +81,8 @@ auths={host:{"auth":entry["auth"]}
 print(json.dumps({"auths":auths}) if auths else "")
 ' "$SPEC")"
 if [ -n "$AUTH" ]; then
-  printf '%s' "$AUTH" > "$HOME/.docker/config.json"
-  chmod 600 "$HOME/.docker/config.json"
+  printf '%s' "$AUTH" > "$REGISTRY_CONFIG_DIR/config.json"
+  chmod 600 "$REGISTRY_CONFIG_DIR/config.json"
 fi
 
 INNER_IMAGE="$(get benchmark.inner_image)"

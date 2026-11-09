@@ -34,6 +34,14 @@ harness:
   name: jevduo
   max_steps: 100
   max_wall_seconds: 3600
+  local_gui:
+    backend: native            # native：原生 NorthCUA；jev：CLI 独立、所有 GUI 输入由 JEV 选择
+    max_actions: 64            # 每张局部操作卡的真实动作上限，仍受全局 max_steps 限制
+    max_frame_age_seconds: 1.0
+    fast_model:
+      endpoint: ""            # 留空时每次选择从 endpoint_file 读取最新地址
+      endpoint_file: ""       # JEV 服务发现 JSON 的共享盘绝对路径
+      timeout_seconds: 30
   execution:
     no_tool_call_attempts: 1
     model_response_recovery: true

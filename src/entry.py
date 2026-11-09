@@ -26,6 +26,10 @@ def _load_spec(path: str) -> dict:
 
 def _steps_from_disk(directory: Path) -> int:
     """异常退出时从 steps.jsonl 数步数：agent 子进程没返回，但轨迹已经写了。"""
+    actions = directory / "agent/jev_actions.jsonl"
+    if actions.is_file():
+        with actions.open(encoding="utf-8") as handle:
+            return sum(json.loads(line).get("route") == "action" for line in handle if line.strip())
     candidates = sorted(directory.glob("agent/**/steps.jsonl"), key=lambda path: len(path.parts))
     if not candidates:
         return 0
@@ -64,6 +68,7 @@ def run_task(vm: Vm, spec: dict, task: dict, job_root: Path) -> dict:
                 stdout_path=directory / "agent_stdout.log", max_steps=max_steps,
                 timeout_seconds=remaining, api_key=model["api_key"],
                 direct_api=bool(model.get("direct_api", False)),
+                local_gui=harness.get("local_gui"),
             )
         action, stop_reason = classify(info)
         if action == "error":
@@ -76,7 +81,7 @@ def run_task(vm: Vm, spec: dict, task: dict, job_root: Path) -> dict:
         return recorder.finalize(
             directory, task_id=task_id, stop_reason=stop_reason, score=score,
             status=scoring.episode_status(scored=score is not None, exception=None),
-            steps=int(info.get("step_count") or 0), model=model["name"],
+            steps=int(info.get("step_count") or _steps_from_disk(directory)), model=model["name"],
             seconds=time.perf_counter() - started,
             failure_reason=recorder.evaluation_failure_reason(raw),
         )
@@ -96,6 +101,7 @@ def run_task(vm: Vm, spec: dict, task: dict, job_root: Path) -> dict:
                 directory, directory / "agent",
                 llm_calls=bool(spec["log"].get("llm_calls", True)),
             )
+            recorder.write_execution_metrics(directory, directory / "agent", info)
         except Exception as error:
             print(json.dumps({"event": "trajectory_failed", "task_id": task_id,
                               "error": f"{type(error).__name__}: {error}"},

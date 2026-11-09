@@ -122,6 +122,70 @@ def _compact_step(record: dict, limit: int = 2000) -> dict:
     }
 
 
+def _usage_counts(usage: dict) -> dict:
+    # NexAU's input_tokens excludes cache reads/writes; input_tokens_uncached is its alias, not extra input.
+    cached = usage.get("cache_read_tokens", 0)
+    created = usage.get("cache_creation_tokens", 0)
+    return {"prompt_tokens": usage.get("input_tokens", 0) + cached + created,
+            "completion_tokens": usage.get("completion_tokens", 0),
+            "cached_tokens": cached, "reasoning_tokens": usage.get("reasoning_tokens", 0)}
+
+
+def write_execution_metrics(directory: Path, agent_log_dir: Path, info: dict) -> None:
+    """Summarize existing model traces and the plugin ledger without inventing missing usage."""
+    model = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0,
+             "reasoning_tokens": 0, "calls_missing_usage": 0,
+             "invocations": 0, "seconds": 0.0, "failed_invocations": 0}
+    trace = directory / "llm_calls.jsonl"
+    if trace.is_file():
+        with trace.open(encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                usage = record["llm_trace"].get("usage") or {}
+                model["calls"] += 1
+                if usage:
+                    for key, value in _usage_counts(usage).items():
+                        model[key] += value
+                else:
+                    model["calls_missing_usage"] += 1
+    actions = {"gui_actions": 0, "cli_actions": 0, "jev_calls": 0, "jev_seconds": 0.0}
+    phases: dict[str, float] = {}
+    invocation_usage = []
+    ledger = agent_log_dir / "jev_actions.jsonl"
+    if ledger.is_file():
+        with ledger.open(encoding="utf-8") as handle:
+            for line in handle:
+                event = json.loads(line)
+                route = event.get("route")
+                if route == "action":
+                    actions["cli_actions" if event["operation"] == "terminal" else "gui_actions"] += 1
+                elif route == "gui":
+                    actions["jev_calls"] += 1
+                    actions["jev_seconds"] += event["ranking"]["latency_ms"] / 1000
+                elif route == "slow_model_call":
+                    model["invocations"] += 1
+                    model["seconds"] += event["seconds"]
+                    model["failed_invocations"] += int(event["failed"])
+                    invocation_usage.append(event.get("usage"))
+                elif route in {"receipt", "local_observation"}:
+                    phase = "cli" if event.get("operation") == "terminal" else route
+                    phases[phase] = phases.get(phase, 0) + event.get("seconds", 0)
+    if invocation_usage:
+        # Includes successful HTTP replies rejected as empty by the model runtime before trace persistence.
+        model["calls"] = len(invocation_usage)
+        model["calls_missing_usage"] = sum(not usage for usage in invocation_usage)
+        for key in ("prompt_tokens", "completion_tokens", "cached_tokens", "reasoning_tokens"):
+            model[key] = sum(_usage_counts(usage)[key] for usage in invocation_usage if usage)
+    _write_json(directory / "timing.json", {
+        "slow_model": model, "local_execution": actions, "phases_seconds": phases,
+        "actor_seconds": info.get("seconds"), "logical_steps": info.get("logical_steps"),
+        "physical_actions": actions["gui_actions"] + actions["cli_actions"] if ledger.is_file() else None,
+        "counting": "JEV mode: every GUI primitive and independent VM CLI command consumes one action",
+    })
+
+
 def evaluation_failure_reason(raw: Any) -> str:
     """评分器自己给出的失败原因（如 replay_failed / melt_not_found）。
 
@@ -157,8 +221,8 @@ def finalize(directory: Path, *, task_id: str, stop_reason: str, score: float | 
         record["exception"] = {
             "type": type(exception).__name__,
             "message": _redact(str(exception)),
-            "traceback": [_redact(line, 300) for line in
-                          traceback.format_exception(type(exception), exception, exception.__traceback__)[-8:]],
+            "traceback": [_redact(line, 300) for line in traceback.format_exception(
+                type(exception), exception, exception.__traceback__)[-8:]],
         }
     _write_json(directory / "episode.json", record)
     return record
@@ -171,7 +235,8 @@ def write_job_summary(job_root: Path, episodes: list[dict]) -> None:
         "total": len(episodes),
         "scored": len(scored),
         "failed_unscored": len(episodes) - len(scored),
-        "score_mean": round(sum(item["score"] or 0.0 for item in scored) / len(scored), 4) if scored else None,
+        "score_mean": (round(sum(item["score"] or 0.0 for item in scored) / len(scored), 4)
+                       if scored else None),
         "episodes": episodes,
     }
     _write_json(job_root / "summary.json", summary)
@@ -205,7 +270,8 @@ def merge_episodes(run_root: Path, episodes: list[dict]) -> dict:
         "total": len(episodes),
         "scored": len(scored),
         "failed_unscored": len(episodes) - len(scored),
-        "score_mean": round(sum(item["score"] or 0.0 for item in scored) / len(scored), 4) if scored else None,
+        "score_mean": (round(sum(item["score"] or 0.0 for item in scored) / len(scored), 4)
+                       if scored else None),
         "episodes": episodes,
     }
     _write_json(run_root / "summary.json", merged)
