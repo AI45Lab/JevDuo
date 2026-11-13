@@ -40,6 +40,10 @@ rm -rf "$VENV"
 cd "$UPSTREAM"
 "$UV" sync --locked --python 3.12 --extra local --extra device
 
+if [ -n "${JEVDUO_JEV_PACKAGE:-}" ]; then
+  "$UV" pip install --python "$VENV/bin/python" --no-deps -e "$JEVDUO_JEV_PACKAGE"
+fi
+
 "$VENV/bin/python" - <<'PY'
 import northcua, nexau, yaml, sys
 print("northcua:", northcua.__file__)

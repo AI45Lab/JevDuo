@@ -46,6 +46,7 @@ class RoundStepPersister:
         round_step: int,
         request: str,
         llm_trace: LLMTraceRecord,
+        agent_path: str = "",
     ) -> None:
         """Append one desktop llm trace record.
 
@@ -65,6 +66,7 @@ class RoundStepPersister:
             round_step=round_step,
             request=request,
             llm_trace=llm_trace,
+            agent_path=agent_path,
         )
 
     async def persist_step(

@@ -165,6 +165,9 @@ class DesktopTaskRuntime:
 
         runtime_options = options or DesktopRuntimeOptions()
         effective_max_steps = max(1, max_steps)
+        config = self.facade.runtime_factory.round_execution_service.app_config.orchestration
+        if config.enabled:
+            effective_max_steps = config.max_cycles
         round_runtime = self.facade.runtime_factory.build_round_runtime(options=runtime_options)
         try:
             round_result = await round_runtime.run(

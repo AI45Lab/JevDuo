@@ -309,14 +309,26 @@ class NorthCUAAgentFacade(SessionScopedAgentFacade[NorthCUAArtifactStore]):
         if request.session_id != self.session_id:
             raise ValueError(f"Desktop facade session mismatch: expected {self.session_id}, got {request.session_id}")
         runner = DesktopTaskRuntime(self)
-        result = await runner.run(
-            request.query,
-            max_steps=request.max_steps,
-            max_session_steps=request.max_session_steps,
-            metadata=dict(request.metadata),
-            on_before_step=on_before_step,
-            on_step=on_step,
-        )
+        if request.metadata.get("resume") and self.app_config.orchestration.enabled:
+            await self.hydrate_state()
+            if request.query != self.rounds.state.latest_request or self.rounds.state.round_num <= 0:
+                raise ValueError("Resume must refer to the existing task in the same session")
+            result = await runner.run_round_input(
+                RoundInput(query=request.query, metadata=dict(request.metadata)),
+                max_steps=request.max_steps,
+                max_session_steps=request.max_session_steps,
+                on_before_step=on_before_step,
+                on_step=on_step,
+            )
+        else:
+            result = await runner.run(
+                request.query,
+                max_steps=request.max_steps,
+                max_session_steps=request.max_session_steps,
+                metadata=dict(request.metadata),
+                on_before_step=on_before_step,
+                on_step=on_step,
+            )
         terminal_decision = result.steps[-1].terminal_decision if result.steps else {}
         if result.hit_step_limit:
             terminal_decision = (
@@ -334,7 +346,16 @@ class NorthCUAAgentFacade(SessionScopedAgentFacade[NorthCUAArtifactStore]):
             hit_step_limit=result.hit_step_limit,
             primary_result_path=self.artifact_store.primary_trace_path,
             terminal_decision=terminal_decision,
-            step_count=len(result.steps),
+            step_count=(
+                sum(
+                    step.round_num == self.rounds.state.round_num
+                    and step.orchestration is not None
+                    and not step.orchestration.synthetic
+                    for step in self.rounds.state.step_logs
+                )
+                if self.app_config.orchestration.enabled
+                else len(result.steps)
+            ),
             step_log_path=self.artifact_store.step_log_path,
             runtime_log_path=self.artifact_store.runtime_log_path,
             evaluation_log_path=self.artifact_store.evaluation_log_path,

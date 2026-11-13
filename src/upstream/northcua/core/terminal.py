@@ -38,6 +38,8 @@ class AgentTerminalReason(str, Enum):
     EMPTY_RESPONSE = "empty_response"
     MODEL_REPORTED_FAILURE = "model_reported_failure"
     INFEASIBLE = "infeasible"
+    BUDGET_EXHAUSTED = "budget_exhausted"
+    CONFIGURATION_ERROR = "configuration_error"
 
 
 class AgentRunStatus(str, Enum):

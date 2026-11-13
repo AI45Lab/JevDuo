@@ -10,6 +10,7 @@ from nexau.archs.session import SessionManager
 from pydantic import BaseModel, Field
 
 from northcua.app.logging import log_runtime_event
+from northcua.agentkit.orchestration.contracts import OrchestrationState
 from northcua.core.models import (
     CommandExecutionResultRecord,
     DesktopStateSnapshot,
@@ -47,6 +48,7 @@ class PersistedRoundState(BaseModel):
     step_logs: list[StepLogRecord] = Field(default_factory=list)
     pending_command_results: dict[str, CommandExecutionResultRecord] = Field(default_factory=dict)
     pending_resume_results: list[CommandExecutionResultRecord] = Field(default_factory=list)
+    orchestration: OrchestrationState | None = None
 
 
 class RoundStateStore:
@@ -99,6 +101,7 @@ class RoundStateStore:
                 step_logs=list(persisted.step_logs),
                 pending_command_results=dict(persisted.pending_command_results),
                 pending_resume_results=list(persisted.pending_resume_results),
+                orchestration=persisted.orchestration,
             )
             log_runtime_event(
                 logger,
@@ -139,6 +142,7 @@ class RoundStateStore:
             step_logs=list(state.step_logs),
             pending_command_results=dict(state.pending_command_results),
             pending_resume_results=list(state.pending_resume_results),
+            orchestration=state.orchestration,
         )
         await self.session_manager.update_session_state(
             user_id=self.user_id,

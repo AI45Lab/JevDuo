@@ -21,7 +21,8 @@ import settings
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def submit_argv(config: dict, *, run_id: str, job_id: int, spec_path: Path) -> list[str]:
+def submit_argv(config: dict, *, run_id: str, job_id: int, spec_path: Path,
+                repo_root: Path | None = None) -> list[str]:
     cluster = config["cluster"]
     name = rjob.job_name(run_id, job_id)
     argv = [
@@ -41,7 +42,8 @@ def submit_argv(config: dict, *, run_id: str, job_id: int, spec_path: Path) -> l
     ]
     for mount in cluster.get("mounts", []):
         argv.append(f"--mount={mount['source']}:{mount['target']}")
-    argv += ["--", "bash", str(ROOT / "infra" / "worker.sh"), str(spec_path)]
+    root = ROOT if repo_root is None else repo_root
+    argv += ["--", "bash", str(root / "infra" / "worker.sh"), str(spec_path)]
     return argv
 
 

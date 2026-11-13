@@ -37,6 +37,7 @@ from northcua.policy_invocation import policy_step_extra_headers
 from northcua_runtime_shared.tool_contracts import apply_openai_union_tool_policy
 
 from .anthropic import LegacyAnthropicSignatureError, wrap_anthropic_client
+from .openai_chat import chat_capture_caller, wrap_openai_chat_client
 from .openai_responses import normalize_legacy_openai_responses_items, wrap_openai_responses_client
 from .responses import normalize_legacy_model_response
 
@@ -241,7 +242,8 @@ class NexAUProviderAdapter:
         def projected(params: object, *args: object, **kwargs: object) -> ModelResponse | None:
             try:
                 projected_params = self._project_model_call_params(caller, params)
-                response = typed_original(projected_params, *args, **kwargs)
+                with chat_capture_caller(caller):
+                    response = typed_original(projected_params, *args, **kwargs)
                 return normalize_legacy_model_response(
                     self._model_call_api_type(caller, projected_params),
                     response,
@@ -263,7 +265,8 @@ class NexAUProviderAdapter:
             try:
                 self._refresh_async_client(caller, params)
                 projected_params = self._project_model_call_params(caller, params)
-                response = await typed_original(projected_params, *args, **kwargs)
+                with chat_capture_caller(caller):
+                    response = await typed_original(projected_params, *args, **kwargs)
                 return normalize_legacy_model_response(
                     self._model_call_api_type(caller, projected_params),
                     response,
@@ -349,6 +352,8 @@ class NexAUProviderAdapter:
         return projected
 
     def _prepare_client(self, api_type: str, client: object | None) -> object | None:
+        if api_type == "openai_chat_completion":
+            return wrap_openai_chat_client(client)
         if self._policy.preserve_invalid_signature_outer_retry and api_type == "anthropic_chat_completion":
             return wrap_anthropic_client(client)
         if api_type == "openai_responses":

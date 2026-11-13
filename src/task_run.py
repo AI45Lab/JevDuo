@@ -15,6 +15,7 @@ import json
 import os
 import time
 import traceback
+from functools import wraps
 from pathlib import Path
 
 
@@ -25,6 +26,27 @@ def _redact(text: str) -> str:
 
 _MISSING = "[missing tool output; the call did not produce a result]"
 _FAULT_DIR: Path | None = None
+
+
+def _install_client_retry_limit() -> None:
+    """Preserve an explicit zero across the installed NexAU SDK boundary."""
+    from nexau.archs.llm.llm_config import LLMConfig
+
+    original = LLMConfig.to_client_kwargs
+    if getattr(original, "_jevduo_retry_limit", False):
+        return
+
+    @wraps(original)
+    def client_kwargs(config):
+        result = original(config)
+        # NexAU checks truthiness and drops zero; OpenAI then silently uses its
+        # own default retries, outside the orchestrator's request accounting.
+        if config.max_retries is not None:
+            result["max_retries"] = config.max_retries
+        return result
+
+    client_kwargs._jevduo_retry_limit = True
+    LLMConfig.to_client_kwargs = client_kwargs
 
 
 def _repair_tool_pairs(messages: list) -> tuple[list, int]:
@@ -157,6 +179,7 @@ async def run(args: argparse.Namespace) -> dict:
     from northcua.agentinfra.runtime.protocol import DesktopRunRequest
     from northcua.agents.desktop.application import NorthCUAApplication
 
+    _install_client_retry_limit()
     _install_tool_pair_repair(not getattr(args, "no_tool_pair_repair", False),
                               fault_dir=Path(args.log_dir))
     app = NorthCUAApplication.from_app_config(
@@ -174,6 +197,8 @@ async def run(args: argparse.Namespace) -> dict:
             terminal_decision=dict(result.terminal_decision),
             step_log_path=str(result.step_log_path),
             runtime_log_path=str(result.runtime_log_path),
+            step_unit=dict(result.terminal_decision).get("metadata", {}).get("step_unit", "model_tool_step"),
+            usage=dict(result.terminal_decision).get("metadata", {}).get("usage", {}),
         )
     finally:
         await app.stop()

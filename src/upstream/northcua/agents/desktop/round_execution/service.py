@@ -205,6 +205,8 @@ class RoundExecutionService:
             Persisted step log for the completed round.
         """
 
+        if self.app_config.orchestration.enabled:
+            raise ValueError("Orchestration requires run_query; single-step run_round is unsupported")
         # Some tests and facades replace executors after service construction;
         # keep the verification path pointed at the current collaborators.
         self.verification_capture.set_command_executor(self.local_device_executor)

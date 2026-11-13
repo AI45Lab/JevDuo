@@ -56,6 +56,7 @@ class _ProviderBudgetAbort(BaseException):
 @dataclass(slots=True)
 class _GuardedCallerState:
     guard: ProviderContextBudgetGuard
+    before_dispatch: Callable[[], None] | None = None
 
 
 def _provider_tools(params: ModelCallParams) -> Sequence[Mapping[str, object]] | None:
@@ -71,9 +72,16 @@ def _provider_tools(params: ModelCallParams) -> Sequence[Mapping[str, object]] |
 
 def _validate_params(state: _GuardedCallerState, params: ModelCallParams) -> None:
     state.guard.validate(params.messages, _provider_tools(params))
+    if state.before_dispatch is not None:
+        state.before_dispatch()
 
 
-def install_provider_context_budget_guard(caller: object, guard: ProviderContextBudgetGuard) -> None:
+def install_provider_context_budget_guard(
+    caller: object,
+    guard: ProviderContextBudgetGuard,
+    *,
+    before_dispatch: Callable[[], None] | None = None,
+) -> None:
     """Install a final-boundary guard for the pinned NexAU ``LLMCaller``.
 
     With middleware, NexAU performs retries *outside* ``wrap_model_call``.  The
@@ -87,8 +95,10 @@ def install_provider_context_budget_guard(caller: object, guard: ProviderContext
     existing = getattr(caller, "__northcua_context_guard_state__", None)
     if isinstance(existing, _GuardedCallerState):
         existing.guard = guard
+        if before_dispatch is not None:
+            existing.before_dispatch = before_dispatch
         return
-    state = _GuardedCallerState(guard=guard)
+    state = _GuardedCallerState(guard=guard, before_dispatch=before_dispatch)
     manager = getattr(caller, "middleware_manager", None)
     wrap_model_call = getattr(manager, "wrap_model_call", None)
     if manager and callable(wrap_model_call):
