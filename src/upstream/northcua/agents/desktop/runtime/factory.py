@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from northcua.agentkit.runtime import (
@@ -13,6 +13,8 @@ from northcua.agentkit.runtime import (
 )
 from northcua.agents.desktop.session import NorthCUARoundCoordinator
 from northcua.core.models import StepLogRecord
+from northcua.core.enums import RuntimeMode
+from northcua.agentkit.orchestration.contracts import SubagentRegistry
 from northcua.runtime.artifacts.store import NorthCUAArtifactStore
 
 from .contracts import DesktopRuntimeOptions
@@ -42,6 +44,7 @@ class DesktopRuntimeFactory:
     round_coordinator: NorthCUARoundCoordinator
     round_execution_service: RoundExecutionService
     terminal_facade: DesktopTerminalPersistenceFacade
+    subagents: SubagentRegistry = field(default_factory=SubagentRegistry)
 
     def build_round_runtime(
         self,
@@ -59,6 +62,10 @@ class DesktopRuntimeFactory:
         """
 
         service = self.round_execution_service
+        if service.app_config.orchestration.enabled:
+            return self._build_orchestration(options)
+        if self.round_coordinator.state.orchestration is not None:
+            raise ValueError("Use a new session when switching orchestration mode")
         counters = AgentRuntimeCounterState(session_id=self.round_coordinator.state.session_id)
         state_store = DesktopRuntimeStateStore(
             counters=counters,
@@ -112,6 +119,60 @@ class DesktopRuntimeFactory:
                 self.terminal_facade,
                 remote_tool_dispatcher=options.remote_tool_dispatcher,
             ),
+        )
+
+    def _build_orchestration(self, options):
+        from .orchestration import DesktopOrchestrationPorts, OrchestrationStateStore
+
+        service = self.round_execution_service
+        if service.app_config.websocket.runtime_mode != RuntimeMode.LOCAL:
+            raise ValueError("Orchestration currently supports the local Python/OSWorld entry only")
+        if service.app_config.evaluation.enabled:
+            raise ValueError(
+                "Orchestration currently requires evaluation.enabled=false; external scoring is independent"
+            )
+        if options.snapshot is not None or options.observation_context is not None:
+            raise ValueError("Orchestration requires a live observation provider")
+        if any(step.orchestration is None for step in self.round_coordinator.state.step_logs):
+            raise ValueError("Use a new session when enabling orchestration")
+        if service.app_config.orchestration.general.enabled and not any(
+            spec["agent_id"] == "general" for spec in self.subagents.descriptors()
+        ):
+            from ..subagents.general import GeneralSubagent
+
+            self.subagents.register(GeneralSubagent(
+                service.app_config.orchestration.general, service.app_config.desktop,
+            ))
+        if service.app_config.orchestration.gui_jev.enabled and not any(
+            spec["agent_id"] == "gui_jev" for spec in self.subagents.descriptors()
+        ):
+            try:
+                from ..subagents.jev import JevSubagent
+            except ModuleNotFoundError as exc:
+                if exc.name != "jev_desktop":
+                    raise
+                raise ValueError("gui_jev requires the optional jev-desktop package; see docs/ORCHESTRATION.md") from exc
+            self.subagents.register(JevSubagent(service.app_config.orchestration.gui_jev, service.app_config.desktop))
+        ports = DesktopOrchestrationPorts(
+            service,
+            self.artifact_store,
+            self.round_coordinator,
+            options,
+            self.subagents,
+        )
+        counters = AgentRuntimeCounterState(session_id=self.round_coordinator.state.session_id)
+        return AgentRoundRuntime(
+            session_runtime=AgentSessionRuntime(
+                counters=counters,
+                state_store=OrchestrationStateStore(
+                    counters,
+                    self.round_coordinator,
+                    service.state_store,
+                    self.artifact_store,
+                ),
+            ),
+            step_runtime=AgentStepRuntime(step_executor=ports, persistence=ports),
+            terminal_projection=ports,
         )
 
 

@@ -151,6 +151,7 @@ class DesktopPlatformRuntime(PlatformRuntime):
             session_id=str(request.metadata.get("session_id", "")),
             round_num=int(request.metadata.get("round_num", 0) or 0),
             round_step=int(request.metadata.get("round_step", 0) or 0),
+            metadata=dict(request.metadata),
             commands=[
                 CommandRequestRecord(
                     call_id=request.call_id,

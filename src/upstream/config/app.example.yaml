@@ -10,6 +10,20 @@ websocket:
 execution:
   max_agent_iterations_per_round: 30
   enable_langfuse_tracer: false
+orchestration:
+  enabled: false
+  max_cycles: 20
+  max_seconds: 600
+  max_model_calls: 100
+  max_tool_calls: 1000
+  min_subagent_steps: 30
+  empty_response_retries: 2
+  general:
+    enabled: false
+    mode: hybrid
+  gui_jev:
+    enabled: false
+    launch_args: {}
 context_management:
   mode: 'off'
 evaluation:

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from nexau.core.messages import Message
+    from northcua.agentkit.orchestration.contracts import Note
     from northcua.core.models import ToolExecutionRecord
 
 MEMORY_METADATA_KEY = "northcua_working_memory"
@@ -91,6 +92,21 @@ class WorkingMemoryStore:
                 (round_num,),
             ).fetchall()
             return [dict(zip(("key", "kind", "text", "reason"), row)) for row in rows]
+        finally:
+            connection.close()
+
+    def record_notes(self, notes: list[Note], *, round_num: int, session_step: int, source: str) -> None:
+        """Record structured orchestrator notes with a stable, unhashed audit identity."""
+        if not notes:
+            return
+        connection = self._connect()
+        try:
+            with connection:
+                connection.executemany(
+                    "INSERT OR IGNORE INTO notes VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [(f"orchestrator:{source}:{index}", round_num, note.key, "fact", note.text,
+                      f"orchestrator cycle {source}", session_step) for index, note in enumerate(notes)],
+                )
         finally:
             connection.close()
 

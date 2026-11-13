@@ -13,6 +13,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
+from northcua.agentkit.orchestration.contracts import CycleRecord, OrchestrationState
+
 from .accessibility import AccessibilityStepRecord
 from .enums import (
     ObservationArtifactKind,
@@ -523,6 +525,7 @@ class StepLogRecord(BaseModel):
     observation_artifacts: list[ObservationArtifact] = Field(default_factory=list)
     observation_metadata: JsonObject = Field(default_factory=dict)
     _retained_payloads_compacted: bool = PrivateAttr(default=False)
+    orchestration: CycleRecord | None = None
 
     @property
     def retained_payloads_compacted(self) -> bool:
@@ -635,6 +638,7 @@ class RoundState:
     evaluation_log_path: Path | None = None
     pending_command_results: dict[str, CommandExecutionResultRecord] = field(default_factory=dict)
     pending_resume_results: list[CommandExecutionResultRecord] = field(default_factory=list)
+    orchestration: OrchestrationState | None = None
 
     def enqueue(self, round_input: RoundInput) -> None:
         """Append a follow-up round input.

@@ -88,6 +88,7 @@ class PlatformCommandExecutor:
                         call_id=command.call_id,
                         server_name=command.server_name,
                         metadata={
+                            **payload.metadata,
                             "session_id": payload.session_id,
                             "round_num": payload.round_num,
                             "round_step": payload.round_step,

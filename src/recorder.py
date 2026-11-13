@@ -10,14 +10,16 @@ episode 级（jobs/job-NN/episodes/<task>/）：
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import time
 import traceback
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-_SECRET = re.compile(r"(sk-[A-Za-z0-9._-]{6,}|Bearer\s+)[^\s\"']*")
+_SECRET = re.compile(r"(sk-(?=[A-Za-z0-9._-]{6,})|Bearer[ \t]+)[^\s\"']+", re.IGNORECASE)
 
 
 def _redact(text: str, limit: int = 500) -> str:
@@ -55,29 +57,86 @@ def write_evaluation(directory: Path, raw: Any, score: float | None) -> None:
     _write_json(directory / "evaluation.json", {"raw": raw, "score": score})
 
 
-def write_trajectory(directory: Path, agent_log_dir: Path, *, llm_calls: bool = True) -> int:
+def find_log(directory: Path, name: str = "steps.jsonl", *, preferred: Path | None = None) -> Path | None:
+    """Prefer an explicit path, otherwise the shallowest log with a lexical tie-break."""
+    if preferred is not None:
+        return preferred
+    try:
+        return min(directory.rglob(name),
+                   key=lambda path: (len(path.relative_to(directory).parts), str(path)), default=None)
+    except OSError:
+        return None
+
+
+def read_jsonl(path: Path | None, *, required: bool = False) -> Iterator[dict]:
+    """Skip invalid records; budget recovery requires readable, valid UTF-8 input."""
+    if path is None:
+        if required:
+            raise FileNotFoundError("Required artifact log not found")
+        return
+    try:
+        with path.open(encoding="utf-8", errors="strict" if required else "replace") as stream:
+            for line in stream:
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(record, dict):
+                    yield record
+    except OSError:
+        if required:
+            raise
+        return
+
+
+def find_step_log(directory: Path, *, result_path: Path | None = None) -> Path | None:
+    """Honor the actor's recorded log path before discovering a fallback."""
+    preferred = None
+    if result_path is not None:
+        try:
+            info = json.loads(result_path.read_text(encoding="utf-8"))
+            value = info.get("step_log_path") if isinstance(info, dict) else None
+            preferred = Path(value) if isinstance(value, str) and value else None
+        except (OSError, ValueError):
+            pass
+    return find_log(directory, preferred=preferred)
+
+
+def count_steps(directory: Path, *, result_path: Path | None = None) -> int:
+    return sum(1 for _ in read_jsonl(find_step_log(directory, result_path=result_path)))
+
+
+def write_trajectory(directory: Path, agent_log_dir: Path, *, llm_calls: bool = True,
+                     step_log_path: Path | None = None) -> int:
     """把 agent 的 steps.jsonl 归一化成 traj.jsonl，并搬 screenshots/。返回截图数。
 
     上游把日志写在 `<log_dir>/<session_id>/` 这一层，不保证就在 log_dir 根下；
     找最浅的那份 steps.jsonl。steps.jsonl 单题可达 100MB，只保留可读摘要，
     原始文件留在 agent/ 里不重复复制。
     """
-    candidates = sorted(agent_log_dir.rglob("steps.jsonl"),
-                        key=lambda path: (len(path.relative_to(agent_log_dir).parts), str(path)))
-    steps = candidates[0] if candidates else None
+    phase_roots = sorted(agent_log_dir.glob("phase-*"))
+    if phase_roots:
+        screenshots, index = 0, []
+        with (directory / "traj.jsonl").open("w", encoding="utf-8") as target:
+            for number, phase in enumerate(phase_roots, 1):
+                local = directory / "phases" / phase.name
+                local.mkdir(parents=True, exist_ok=True)
+                preferred = find_step_log(phase, result_path=local / "agent_result.json")
+                screenshots += write_trajectory(local, phase, llm_calls=llm_calls, step_log_path=preferred)
+                for value in read_jsonl(local / "traj.jsonl"):
+                    value["phase_index"] = number
+                    target.write(json.dumps(value, ensure_ascii=False) + "\n")
+                index.append({"phase_index": number,
+                              "traces": [str(path.relative_to(directory))
+                                         for path in phase.glob("**/llm_trace.jsonl")]})
+        (directory / "llm_calls.index.json").write_text(json.dumps(index, ensure_ascii=False, indent=2))
+        return screenshots
+    steps = (find_log(agent_log_dir, preferred=step_log_path) if step_log_path is not None
+             else find_step_log(agent_log_dir, result_path=directory / "agent_result.json"))
     target = directory / "traj.jsonl"
-    written = 0
     with target.open("w", encoding="utf-8") as out:
-        if steps is not None:
-            for line in steps.read_text(encoding="utf-8").splitlines():
-                if not line.strip():
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                out.write(json.dumps(_compact_step(record), ensure_ascii=False) + "\n")
-                written += 1
+        for record in read_jsonl(steps):
+            out.write(json.dumps(_compact_step(record), ensure_ascii=False) + "\n")
 
     shots = sorted(agent_log_dir.rglob("action_step*_tool_*.png"))
     if shots:
@@ -93,7 +152,7 @@ def write_trajectory(directory: Path, agent_log_dir: Path, *, llm_calls: bool = 
             link = directory / "llm_calls.jsonl"
             link.unlink(missing_ok=True)
             try:
-                link.symlink_to(trace.relative_to(directory))
+                link.symlink_to(os.path.relpath(trace, directory))
             except OSError:
                 shutil.copyfile(trace, link)
     return len(shots)
@@ -119,6 +178,7 @@ def _compact_step(record: dict, limit: int = 2000) -> dict:
         "tool_results": results,
         "screenshot": record.get("clean_screenshot_path"),
         "terminal_decision": record.get("terminal_decision"),
+        "orchestration": record.get("orchestration"),
     }
 
 
@@ -133,7 +193,7 @@ def evaluation_failure_reason(raw: Any) -> str:
         if reason:
             return str(reason)
         replay = raw.get("replay_validation")
-        if isinstance(replay, dict) and replay.get("reason"):
+        if isinstance(replay, dict) and replay.get("passed") is not True and replay.get("reason"):
             return f"replay:{replay['reason']}"
     return ""
 
@@ -158,23 +218,27 @@ def finalize(directory: Path, *, task_id: str, stop_reason: str, score: float | 
             "type": type(exception).__name__,
             "message": _redact(str(exception)),
             "traceback": [_redact(line, 300) for line in
-                          traceback.format_exception(type(exception), exception, exception.__traceback__)[-8:]],
+                          traceback.format_exception(
+                              type(exception), exception, exception.__traceback__)[-8:]],
         }
     _write_json(directory / "episode.json", record)
     return record
 
 
-def write_job_summary(job_root: Path, episodes: list[dict]) -> None:
+def episode_summary(episodes: list[dict]) -> dict:
     scored = [item for item in episodes if item["status"] == "scored"]
-    summary = {
-        "job_id": job_root.name,
+    return {
         "total": len(episodes),
         "scored": len(scored),
         "failed_unscored": len(episodes) - len(scored),
-        "score_mean": round(sum(item["score"] or 0.0 for item in scored) / len(scored), 4) if scored else None,
+        "score_mean": (
+            round(sum(item["score"] or 0.0 for item in scored) / len(scored), 4) if scored else None),
         "episodes": episodes,
     }
-    _write_json(job_root / "summary.json", summary)
+
+
+def write_job_summary(job_root: Path, episodes: list[dict]) -> None:
+    _write_json(job_root / "summary.json", {"job_id": job_root.name, **episode_summary(episodes)})
 
 
 def collect_episodes(run_root: Path) -> list[dict]:
@@ -200,14 +264,7 @@ def collect_episodes(run_root: Path) -> list[dict]:
 def merge_episodes(run_root: Path, episodes: list[dict]) -> dict:
     """把 episode 记录合并成 run 级 summary.json / summary.csv。"""
     episodes = sorted(episodes, key=lambda item: item["task_id"])
-    scored = [item for item in episodes if item["status"] == "scored"]
-    merged = {
-        "total": len(episodes),
-        "scored": len(scored),
-        "failed_unscored": len(episodes) - len(scored),
-        "score_mean": round(sum(item["score"] or 0.0 for item in scored) / len(scored), 4) if scored else None,
-        "episodes": episodes,
-    }
+    merged = episode_summary(episodes)
     _write_json(run_root / "summary.json", merged)
     lines = ["task_id,status,score,steps,seconds,stop_reason,model,failure_reason"]
     for item in episodes:
@@ -220,10 +277,3 @@ def merge_episodes(run_root: Path, episodes: list[dict]) -> dict:
             item.get("evaluation_failure_reason", ""))))
     (run_root / "summary.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return merged
-
-
-def merge_summaries(run_root: Path, job_summaries: list[dict]) -> dict:
-    episodes: list[dict] = []
-    for summary in job_summaries:
-        episodes.extend(summary.get("episodes", []))
-    return merge_episodes(run_root, episodes)

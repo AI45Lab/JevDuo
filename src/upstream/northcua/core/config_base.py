@@ -104,6 +104,45 @@ class ExecutionConfig(BaseModel):
         return self
 
 
+class GuiJevConfig(BaseModel):
+    """Optional jev-desktop adapter; dictionaries use the package's own dataclasses."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    desktop: JsonObject = Field(default_factory=dict)
+    options: JsonObject = Field(default_factory=dict)
+    limits: JsonObject = Field(default_factory=dict)
+    launch_args: dict[str, list[str]] = Field(default_factory=dict)
+
+
+class GeneralSubagentConfig(BaseModel):
+    """Screenshot/PyAutoGUI fallback, with optional shell access in the task VM."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    mode: Literal["gui", "hybrid"] = "hybrid"
+
+
+class OrchestrationConfig(BaseModel):
+    """Opt-in desktop orchestration; the production plugin registry starts empty."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    max_cycles: int = Field(default=20, ge=1)
+    max_seconds: float = Field(default=600, gt=0, allow_inf_nan=False)
+    max_model_calls: int = Field(default=100, ge=1)
+    max_tool_calls: int = Field(default=1000, ge=0)
+    min_subagent_steps: int = Field(default=30, ge=0)
+    subagent_steps_per_cycle: int | None = Field(default=None, ge=1)
+    empty_response_retries: int = Field(default=2, ge=0, le=5)
+    model_timeout_retries: int = Field(default=0, ge=0, le=5)
+    gui_jev: GuiJevConfig = Field(default_factory=GuiJevConfig)
+    general: GeneralSubagentConfig = Field(default_factory=GeneralSubagentConfig)
+
+
 class CoordinatePolicyConfig(BaseModel):
     """Configured model-facing coordinate interpretation policy.
 

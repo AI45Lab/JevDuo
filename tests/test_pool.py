@@ -62,6 +62,20 @@ class SpecTest(unittest.TestCase):
         self.assertEqual(spec["output_root"], "/tmp/run/jobs/job-00")
         self.assertEqual(settings.masked(spec)["model"]["api_key"], "***")
 
+    def test_subagent_credentials_are_carried_in_private_spec_and_masked(self):
+        config = {
+            "harness": {}, "benchmark": {"name": "osworld21", "task_root": "/r", "vm": "/v"},
+            "log": {},
+        }
+        from unittest.mock import patch
+
+        with patch.dict(os.environ, {"TYPESAFE_API_KEY": "private-jev-key", "TYPESAFE_MODEL": "jev-latest"}):
+            spec = settings.render_spec(config, run_id="r", job_id=0, tasks=["061"],
+                                        api_name="m", api={"base_url": "http://test", "model": "m"},
+                                        run_root=Path("/tmp/test"))
+        self.assertEqual(spec["subagent_env"]["TYPESAFE_API_KEY"], "private-jev-key")
+        self.assertEqual(settings.masked(spec)["subagent_env"]["TYPESAFE_API_KEY"], "***")
+
     def test_missing_key_raises(self):
         config = {
             "models": {"default": "m", "apis": {"m": {"model": "m", "base_url": "u",
@@ -83,6 +97,17 @@ class SpecTest(unittest.TestCase):
 
 
 class RjobStatusTest(unittest.TestCase):
+    def test_worker_path_can_use_a_snapshot_without_mutating_the_default_root(self):
+        config = {"cluster": {"image": "unused"}}
+        default_root = pool.ROOT
+        snapshot = Path("/immutable/source-snapshot")
+        regular = pool.submit_argv(config, run_id="r", job_id=0, spec_path=Path("/spec.json"))
+        frozen = pool.submit_argv(config, run_id="r", job_id=0, spec_path=Path("/spec.json"),
+                                  repo_root=snapshot)
+        self.assertEqual(regular[-2], str(default_root / "infra/worker.sh"))
+        self.assertEqual(frozen[-2], str(snapshot / "infra/worker.sh"))
+        self.assertEqual(pool.ROOT, default_root)
+
     def test_status_line(self):
         self.assertEqual(rjob.parse_status("rjob jevduo-x: Succeeded"), "succeeded")
         self.assertEqual(rjob.parse_status("replica jevduo-x-abc: FAILED"), "failed")
@@ -276,6 +301,15 @@ class EvaluationReasonTest(unittest.TestCase):
 
     def test_plain_score_has_no_reason(self):
         self.assertEqual(recorder.evaluation_failure_reason(0.5), "")
+
+    def test_successful_replay_does_not_become_a_failure_label(self):
+        raw = {"score": 0.15, "replay_validation": {"passed": True, "reason": "ok"}}
+        self.assertEqual(recorder.evaluation_failure_reason(raw), "")
+
+    def test_explicit_evaluator_failure_still_takes_precedence(self):
+        raw = {"failure_reason": "evaluation_data_missing",
+               "replay_validation": {"passed": True, "reason": "ok"}}
+        self.assertEqual(recorder.evaluation_failure_reason(raw), "evaluation_data_missing")
 
 
 if __name__ == "__main__":

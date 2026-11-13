@@ -10,6 +10,8 @@ import json
 import os
 import signal
 import subprocess
+import time
+from contextlib import suppress
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,13 +29,16 @@ def agent_env(api_key: str, *, direct_api: bool) -> dict[str, str]:
     }
     env["PATH"] = str(AGENT_PYTHON.parent) + os.pathsep + env.get("PATH", "")
     env[API_KEY_ENV] = api_key
+    # Each retry runs an immutable source snapshot with a shared installed venv.
+    # Its source must win over the venv's editable development-checkout mapping.
+    env["PYTHONPATH"] = os.pathsep.join([str(ROOT / "src"), str(ROOT / "src" / "upstream")])
     env["PYTHONUNBUFFERED"] = "1"
     return env
 
 
 def run_agent(*, query: str, session_id: str, app_config: Path, log_dir: Path,
               result_path: Path, stdout_path: Path, max_steps: int, timeout_seconds: float,
-              api_key: str, direct_api: bool) -> dict:
+              api_key: str, direct_api: bool, inactivity_seconds: float = 0) -> dict:
     """跑一题；超时终止整个进程组。返回 task_run 写的 JSON + returncode/timed_out。"""
     command = [
         str(AGENT_PYTHON), str(TASK_RUNNER),
@@ -43,25 +48,51 @@ def run_agent(*, query: str, session_id: str, app_config: Path, log_dir: Path,
     ]
     stdout_path.parent.mkdir(parents=True, exist_ok=True)
     timed_out = False
+    stalled = False
     with stdout_path.open("w", encoding="utf-8") as log:
         process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,
                                    env=agent_env(api_key, direct_api=direct_api),
                                    start_new_session=True)
+        deadline = time.monotonic() + timeout_seconds
+        started = time.time()
         try:
-            process.wait(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            os.killpg(process.pid, signal.SIGTERM)
-            try:
-                process.wait(timeout=20)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait()
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                try:
+                    process.wait(timeout=min(5, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    if inactivity_seconds > 0:
+                        activity = [stdout_path, *log_dir.glob("**/orchestration.jsonl"),
+                                    *log_dir.glob("**/provider_responses.jsonl")]
+                        latest = max([started, *(p.stat().st_mtime for p in activity if p.exists())])
+                        if time.time() - latest >= inactivity_seconds:
+                            stalled = True
+                            log.write(json.dumps({"event": "agent_inactivity_timeout",
+                                                  "seconds": inactivity_seconds}) + "\n")
+                            log.flush()
+                            break
+        finally:
+            # Also clean up on the worker's hard deadline or another exception.
+            if process.poll() is None:
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    process.wait(timeout=20)
+                except subprocess.TimeoutExpired:
+                    with suppress(ProcessLookupError):
+                        os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
     info: dict = {}
     if result_path.is_file():
         info = json.loads(result_path.read_text(encoding="utf-8"))
     info["returncode"] = process.returncode
     info["timed_out"] = timed_out
+    if stalled:
+        info["error"] = "agent_inactivity_timeout"
     return info
 
 
@@ -80,6 +111,8 @@ def classify(info: dict) -> tuple[str | None, str]:
     status = info.get("terminal_status")
     decision = info.get("terminal_decision") or {}
     reason = str(decision.get("reason") or "")
+    if reason == "budget_exhausted":
+        return None, "orchestration_budget_exhausted"
     if status == "finish":
         return "DONE", "done"
     if status == "fail":

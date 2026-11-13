@@ -72,6 +72,7 @@ class LLMTraceLogWriter(JsonlTraceWriter):
         round_step: int,
         request: str,
         llm_trace: object,
+        agent_path: str = "",
     ) -> None:
         """Persist one desktop provider-facing trace record.
 
@@ -93,6 +94,7 @@ class LLMTraceLogWriter(JsonlTraceWriter):
                 "round_step": round_step,
                 "request": request,
                 "llm_trace": llm_trace,
+                "agent_path": agent_path,
             }
         )
 

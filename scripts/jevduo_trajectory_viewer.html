@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JevDuo 轨迹浏览</title>
+<style>
+:root{color-scheme:dark;--bg:#10151e;--panel:#192231;--line:#334256;--text:#e6edf8;--muted:#9eb1c9;--accent:#91bcff;--good:#7bdfb7;--bad:#ffad9e}
+*{box-sizing:border-box}body{margin:0;font:14px/1.6 system-ui,sans-serif;background:var(--bg);color:var(--text)}[hidden]{display:none!important}button,input,select{font:inherit;color:inherit;background:#223047;border:1px solid var(--line);border-radius:6px;padding:6px 10px;max-width:100%}button,select{cursor:pointer}button:hover:not(:disabled),button.active{border-color:var(--accent);background:#2c4261}button:disabled{opacity:.35;cursor:default}:focus-visible{outline:2px solid var(--accent);outline-offset:2px}a{color:var(--accent)}h1,h2,h3,p{margin:0 0 10px}h1{font-size:24px}h2{font-size:19px}h3{font-size:15px}header{padding:22px 26px;border-bottom:1px solid var(--line)}.muted{color:var(--muted)}.good{color:var(--good)}.bad,.warning{color:var(--bad)}.warning{white-space:pre-wrap;margin:8px 0}.metrics{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0}.metric{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:7px 15px;min-width:100px}.metric b{display:block;font-size:22px}.metric span{font-size:12px;color:var(--muted)}details{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:9px 12px;margin:12px 0}summary{cursor:pointer;color:var(--accent)}pre,.prose{white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}pre{font:12px/1.6 ui-monospace,monospace;max-height:500px;overflow:auto;margin:10px 0}.prose{max-height:360px;overflow:auto}table{border-collapse:collapse;width:100%}td,th{padding:7px 12px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}.table-wrap{overflow:auto}.layout{display:grid;grid-template-columns:235px minmax(0,1fr)}aside{padding:18px 12px;border-right:1px solid var(--line)}aside input,aside select{width:100%;margin-bottom:10px}.task-button{display:block;text-align:left;width:100%;padding:9px 12px;margin-bottom:7px}.task-top{display:flex;justify-content:space-between;font-weight:650}.small{font-size:12px;color:var(--muted)}main{padding:20px;min-width:0}.heading,.row{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.heading{justify-content:space-between}.pill{padding:3px 9px;border-radius:5px;background:#243b58;color:var(--accent);font-size:12px}.task-meta{display:flex;flex-wrap:wrap;gap:6px 22px;margin:10px 0;color:var(--muted)}.task-meta b{color:var(--text)}.navigation{position:sticky;top:0;z-index:2;background:var(--bg);padding:10px 0;border-bottom:1px solid var(--line);margin-bottom:16px}.navigation input[type=number]{width:75px}.navigation input[type=range]{min-width:100px;flex:1;accent-color:var(--accent);padding:0}.entry-layout{display:grid;grid-template-columns:minmax(300px,1.05fr) minmax(330px,1fr);gap:20px;align-items:start}.screen-panel{position:sticky;top:124px;min-width:0}.screen-toolbar{display:flex;align-items:center;gap:8px;margin-bottom:8px}.screen-toolbar select{min-width:0;flex:1}.screen-toolbar a{white-space:nowrap}.screen{border:1px solid var(--line);border-radius:7px;background:#080c13;max-height:70vh;overflow:auto;min-height:180px;display:flex;align-items:center;justify-content:center}.screen img{display:block;width:100%;height:auto;cursor:zoom-in}.screen img.zoomed{width:auto;max-width:none;cursor:zoom-out}.screen-message{padding:32px;color:var(--muted)}.caption{font-size:12px;overflow-wrap:anywhere;color:var(--muted);margin-top:6px}.tabs{display:flex;gap:6px;margin:12px 0}.tabs button{flex:1}.panel{min-width:0}.block{background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:12px;margin:10px 0}.block h3{color:var(--accent)}.tools-bar{display:flex;flex-wrap:wrap;gap:7px;margin:10px 0}.tools-bar select{width:100%}.empty{padding:25px;text-align:center;color:var(--muted)}.result-label{margin-top:12px;color:var(--accent)}.source{font-size:11px;color:var(--muted);overflow-wrap:anywhere}.count-note{font-size:12px;color:var(--muted)}
+@media(min-width:1700px){main{padding:24px 32px}.entry-layout{gap:28px}}@media(max-width:1100px){.entry-layout{grid-template-columns:1fr}.screen-panel{position:static}.screen{max-height:65vh}}@media(max-width:700px){header{padding:16px}.layout{display:block}aside{border-right:0;border-bottom:1px solid var(--line)}#task-list{display:flex;gap:8px;overflow:auto}aside .task-button{min-width:165px;width:auto;flex-shrink:0}main{padding:12px}.metric{min-width:85px;padding:5px 10px}.metric b{font-size:19px}.navigation{position:static}.entry-layout{display:block}.tabs button{padding:6px}.screen-toolbar{flex-wrap:wrap}}
+</style>
+</head>
+<body>
+<header>
+  <h1>JevDuo <span id="batch-name" class="muted"></span></h1>
+  <div class="muted">Slow 决策 → 子目标 → 子代理工具执行 → 返回结果 → 后续父代理验证</div>
+  <div id="metrics" class="metrics"></div>
+  <div id="count-note" class="count-note"></div>
+  <div id="image-warning" class="warning"></div>
+  <details><summary>全部任务得分与执行统计</summary><div id="batch-table" class="table-wrap"></div></details>
+</header>
+<div class="layout">
+  <aside aria-label="任务列表">
+    <input id="search" type="search" placeholder="搜索题号、任务或子目标" aria-label="搜索任务">
+    <select id="filter" aria-label="筛选得分"><option value="all">全部任务</option><option value="perfect">满分</option><option value="partial">部分得分</option><option value="zero">零分</option><option value="unscored">未评分</option></select>
+    <div id="task-list"></div>
+  </aside>
+  <main>
+    <div class="heading"><h2 id="task-title"></h2><span id="model" class="pill"></span></div>
+    <div id="task-meta" class="task-meta"></div>
+    <div id="task-warning" class="warning"></div>
+    <details><summary>任务要求与阶段要求</summary><div id="instruction" class="prose"></div></details>
+    <details><summary>官方评测与阶段评分</summary><pre id="evaluation"></pre></details>
+    <div class="navigation">
+      <div class="row">
+        <button id="first" title="Home">首条</button><button id="prev" title="←">← 上一条</button>
+        <label>记录 <input id="entry-number" type="number" min="1" value="1" aria-label="跳转到记录"></label><span id="entry-total"></span>
+        <button id="next" title="→">下一条 →</button><button id="last" title="End">末条</button>
+        <button id="play" aria-pressed="false">▶ 自动播放</button>
+        <label>间隔 <select id="interval" aria-label="自动播放间隔"><option value="250">0.25 秒</option><option value="500" selected>0.5 秒</option><option value="1000">1 秒</option><option value="2000">2 秒</option><option value="3000">3 秒</option><option value="5000">5 秒</option></select></label>
+        <input id="slider" type="range" min="1" value="1" aria-label="轨迹进度">
+      </div>
+      <div class="small">← / → 切换记录 · Home / End 首末条 · 工具执行有独立前后按钮 · 截图按记录来源标注</div>
+    </div>
+    <div id="empty" class="empty" hidden>未记录轨迹；可查看任务元数据和评测。</div>
+    <div id="entry-layout" class="entry-layout">
+      <section class="screen-panel" aria-label="截图">
+        <div class="screen-toolbar"><button id="prev-frame" aria-label="上一张截图">← 图</button><select id="frame" aria-label="选择截图"></select><button id="next-frame" aria-label="下一张截图">图 →</button><a id="open-image" target="_blank" rel="noopener">打开原图 ↗</a></div>
+        <div class="screen"><img id="screenshot" alt="轨迹截图" hidden><div id="screen-message" class="screen-message"></div></div>
+        <div id="caption" class="caption"></div>
+        <div id="frame-position" class="small"></div>
+        <details id="frame-context-details" hidden><summary>此张中间截图对应的模型记录</summary><pre id="frame-context"></pre></details>
+        <p class="count-note">General 中间截图来自模型调用的明确观察引用，按调用顺序排列；模型提议不等于工具已执行。Jev 的 AX snapshot 是可访问性树，不是 PNG 图片。</p>
+      </section>
+      <section class="panel" aria-label="编排与执行详情">
+        <div class="heading"><h2 id="entry-title"></h2><span id="entry-status" class="pill"></span></div>
+        <div id="entry-warning" class="warning"></div>
+        <div id="entry-source" class="source"></div>
+        <div class="tabs" role="tablist" aria-label="记录详情">
+          <button id="tab-decision" role="tab" aria-controls="panel-decision">决策与子目标</button>
+          <button id="tab-tools" role="tab" aria-controls="panel-tools">工具执行</button>
+          <button id="tab-result" role="tab" aria-controls="panel-result">结果与验证</button>
+        </div>
+        <div id="panel-decision" role="tabpanel">
+          <div class="block"><h3>Slow 对当前状态的判断</h3><div id="decision-summary" class="prose"></div><h3 class="result-label">验证依据</h3><div id="verification" class="prose"></div><h3 class="result-label">决策理由</h3><div id="decision-reason" class="prose"></div></div>
+          <div class="block"><h3 id="contract-title">派发的子目标</h3><div id="goal" class="prose"></div><div id="contract-lists"></div></div>
+          <details><summary>完整 Slow 决策与推理</summary><pre id="decision-json"></pre><pre id="reasoning"></pre></details>
+        </div>
+        <div id="panel-tools" role="tabpanel" hidden>
+          <div id="jev-evidence" class="block" hidden><h3>Jev 保留动作（返回摘要）</h3><div id="jev-notes" class="warning"></div><select id="jev-turn" aria-label="选择 Jev 保留动作"></select><div class="row"><button id="prev-jev">← 上个动作</button><button id="next-jev">下个动作 →</button></div><pre id="jev-turn-detail"></pre></div>
+          <div id="attempt-summary" class="prose"></div>
+          <div class="tools-bar"><select id="action" aria-label="选择工具调用"></select><button id="prev-action">← 上个调用</button><button id="next-action">下个调用 →</button><span id="action-status" class="pill"></span></div>
+          <div id="action-warning" class="warning"></div>
+          <div class="block"><h3>调用参数 / 代码</h3><pre id="arguments"></pre><h3>执行返回</h3><pre id="tool-result"></pre><div id="tool-source" class="source"></div></div>
+        </div>
+        <div id="panel-result" role="tabpanel" hidden>
+          <div id="outcome" class="pill"></div>
+          <div class="block"><h3>子代理返回（代理声明）</h3><pre id="result-summary"></pre></div>
+          <div class="block"><h3>下一周期父代理的验证记录</h3><div id="next-verification" class="prose"></div></div>
+          <details><summary>完整子代理结果、用量与终止判断</summary><pre id="result-json"></pre></details>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+<script id="trajectory-data" type="application/json">__TRAJECTORY_DATA__</script>
+<script>
+'use strict';
+const DATA=JSON.parse(document.getElementById('trajectory-data').textContent),tasks=DATA.tasks;
+const $=id=>document.getElementById(id);
+const el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=String(text);if(cls)n.className=cls;return n;};
+const pretty=v=>v==null?'未记录':typeof v==='string'?v:JSON.stringify(v,null,2);
+const score=v=>v==null?'未评分':Number(v).toLocaleString(undefined,{maximumFractionDigits:5});
+const duration=s=>s==null?'未知':`${Math.floor(s/3600)}h ${Math.floor(s%3600/60)}m ${Math.round(s%60)}s`;
+const scoreClass=v=>v==null?'muted':v>0?'good':'bad';
+let taskIndex=0,entryIndex=0,actionIndex=0,actions=[],jevIndex=0,timer=null,tab='decision';
+const remembered=new Map();
+const task=()=>tasks[taskIndex],entry=()=>task().entries[entryIndex];
+function metric(label,value){const m=el('div',undefined,'metric');m.append(el('b',value),el('span',label));return m;}
+const scored=tasks.filter(t=>t.score!=null);
+$('batch-name').textContent='/ '+DATA.title;
+$('metrics').append(metric('执行记录',tasks.length),metric('已评分',scored.length),metric('平均 reward',score(scored.length?scored.reduce((n,t)=>n+t.score,0)/scored.length:null)),metric('编排周期',tasks.reduce((n,t)=>n+t.cycle_count,0)),metric('工具调用（开始事件）',tasks.reduce((n,t)=>n+t.tool_count,0)),metric('参数已脱敏的调用',tasks.reduce((n,t)=>n+t.redacted_count,0)));
+$('count-note').textContent=DATA.count_note;
+const missing=DATA.images.filter(i=>i.missing).length;
+$('image-warning').textContent=missing?`${missing} 个截图引用缺失，原位置会显示缺失提示。`:'';
+const table=el('table'),thead=el('thead'),tr=el('tr'),tbody=el('tbody');
+['题号','来源','reward','周期','工具调用','未配对开始','停止原因','耗时'].forEach(x=>tr.append(el('th',x)));thead.append(tr);table.append(thead,tbody);
+tasks.forEach((t,i)=>{const r=el('tr'),d=el('td'),b=el('button',t.id);b.onclick=()=>selectTask(i);d.append(b);r.append(d,el('td',t.source),el('td',score(t.score),scoreClass(t.score)),el('td',t.cycle_count),el('td',t.tool_count),el('td',t.unmatched_start_count),el('td',t.stop),el('td',duration(t.seconds)));tbody.append(r);});$('batch-table').append(table);
+const searchText=tasks.map(t=>[t.id,t.source,t.instruction,...t.entries.map(s=>pretty(s.decision))].join(' ').toLowerCase());
+function listTasks(){
+  const query=$('search').value.trim().toLowerCase(),filter=$('filter').value,list=$('task-list');list.replaceChildren();
+  const exactTask=tasks.some(t=>t.id.toLowerCase()===query);
+  tasks.forEach((t,i)=>{
+    const match=filter==='all'||(filter==='perfect'&&t.score===1)||(filter==='partial'&&t.score>0&&t.score<1)||(filter==='zero'&&t.score===0)||(filter==='unscored'&&t.score==null);
+    if(!match||(exactTask?t.id.toLowerCase()!==query:!searchText[i].includes(query)))return;
+    const b=el('button',undefined,'task-button'+(i===taskIndex?' active':'')),top=el('div',undefined,'task-top');
+    b.setAttribute('aria-current',String(i===taskIndex));top.append(el('span','任务 '+t.id),el('span',score(t.score),scoreClass(t.score)));
+    b.append(top,el('div',t.source,'source'),el('div',`${t.cycle_count} 周期 · ${t.tool_count} 工具调用`,'small'),el('div',t.stop,'small'));b.onclick=()=>selectTask(i);list.append(b);
+  });
+  if(!list.children.length)list.append(el('div','没有匹配的任务','empty'));
+}
+function selectTask(index,record){
+  stop();taskIndex=index;const t=task();
+  $('task-title').textContent='任务 '+t.id;$('model').textContent=t.model||'模型未记录';
+  $('task-meta').replaceChildren();
+  $('task-meta').append(el('span','来源 '+t.source,'source'));
+  [['reward',score(t.score)],['周期',t.cycle_count],['子代理尝试',t.attempt_count],['工具调用',t.tool_count],['General 模型观察',t.model_observation_count??0],['Jev 保留动作',t.jev_turn_count??0],['工具异常结束',t.failed_tool_count??0],['未配对开始',t.unmatched_start_count],['未配对返回',t.unmatched_result_count],['停止原因',t.stop],['耗时',duration(t.seconds)]].forEach(([k,v])=>{const n=el('span',k+' ');n.append(el('b',v));$('task-meta').append(n);});
+  $('task-warning').textContent=t.warnings.join('\n');$('instruction').replaceChildren(el('p',t.instruction||'任务要求未记录'));
+  t.phases.forEach(p=>$('instruction').append(el('h3','阶段 '+p.index),el('p',p.instruction)));
+  $('evaluation').textContent=pretty({score_source:t.score_source,evaluation:t.evaluation,phase_results:t.phase_results,episode_steps:t.reported_steps,trajectory_cycles:t.cycle_count});
+  listTasks();showEntry(record??remembered.get(index)??0);
+}
+function showTab(name){tab=name;for(const id of ['decision','tools','result']){$('panel-'+id).hidden=id!==name;$('tab-'+id).classList.toggle('active',id===name);$('tab-'+id).setAttribute('aria-selected',String(id===name));}saveHash();}
+function showEntry(index,playing=false){
+  if(!playing)stop();
+  const count=task().entries.length;
+  entryIndex=Math.max(0,Math.min(Number.isFinite(index)?Math.trunc(index):0,Math.max(0,count-1)));remembered.set(taskIndex,entryIndex);
+  if(entryIndex>=count-1)stop();
+  $('empty').hidden=!!count;$('entry-layout').hidden=!count;
+  $('first').disabled=$('prev').disabled=!count||entryIndex===0;$('last').disabled=$('next').disabled=!count||entryIndex===count-1;
+  for(const id of ['entry-number','slider']){$(id).max=Math.max(1,count);$(id).value=entryIndex+1;$(id).disabled=!count;}
+  $('entry-total').textContent='/ '+count;updatePlay();
+  if(!count){saveHash();return;}
+  const s=entry(),d=s.decision||{},c=d.contract||{};
+  $('entry-title').textContent=(s.phase!=null?`阶段 ${s.phase} · `:'')+(s.kind==='trace_only'?'未写入周期的执行':`周期 ${s.number}`);
+  $('entry-status').textContent=s.kind==='trace_only'?'仅有 trace':d.action||s.status||'未记录';
+  $('entry-warning').textContent=s.warnings.concat(s.attempts.flatMap(a=>a.warnings)).join('\n');
+  $('entry-source').textContent=s.source+(s.cycle_id?' · cycle_id='+s.cycle_id:'');
+  $('decision-summary').textContent=s.text||d.summary||'未记录 Slow 判断';$('verification').textContent=d.verification||'未记录';$('decision-reason').textContent=d.reason||'未记录';
+  $('contract-title').textContent=c.agent_id?`${c.agent_id} · ${c.subgoal_id||'未记录子目标 ID'}`:'本周期没有派发子目标';
+  $('goal').textContent=c.goal||'';$('contract-lists').replaceChildren();
+  for(const [key,label] of [['success_criteria','成功条件'],['constraints','约束']])if(c[key]?.length){const list=el('ul');for(const v of c[key])list.append(el('li',pretty(v)));$('contract-lists').append(el('h3',label,'result-label'),list);}
+  $('decision-json').textContent=pretty(d);$('reasoning').textContent=s.reasoning||'未记录单独推理文本';
+  $('outcome').textContent=s.result?.outcome?`${s.result.outcome} · ${s.result.exit_reason||''}`:'未记录子代理返回';
+  $('result-summary').textContent=pretty(s.summary);
+  $('next-verification').textContent=s.next_verification||'没有同阶段的下一周期验证记录；请结合终止判断和官方评测查看。';
+  $('result-json').textContent=pretty({subagent_result:s.result,usage:s.usage,exit_reason:s.exit_reason,terminal_decision:s.terminal});
+  actions=s.attempts.flatMap(a=>a.actions.map(x=>({...x,attempt:a.id,agent:a.contract?.agent_id})));actionIndex=0;
+  $('attempt-summary').textContent=s.attempts.length?s.attempts.map(a=>`${a.contract?.agent_id||'未知代理'} · attempt=${a.id||'缺失 ID'} · ${a.actions.length} 条工具记录`).join('\n'):'此记录没有关联的工具 trace。终止周期可能没有派发；缺失情况请看提示。';
+  $('tab-tools').textContent=`工具执行 (${actions.length})`;
+  const jev=s.jev;jevIndex=0;$('jev-evidence').hidden=!jev;$('jev-notes').textContent=jev?.notes.join('\n')||'';
+  const jevSelect=$('jev-turn');jevSelect.replaceChildren();(jev?.turns||[]).forEach((turn,i)=>{const o=el('option',`${i+1}/${jev.turns.length} · 原始步号 ${turn.step??'?'} · ${turn.operation||'未知'} · ${turn.target||''}`);o.value=i;jevSelect.append(o);});jevSelect.disabled=!jev?.turns.length;showJev(0);
+  const opts=$('action');opts.replaceChildren();actions.forEach((a,i)=>{const o=el('option',`${i+1}. ${a.name} · ${a.status}`);o.value=i;opts.append(o);});opts.disabled=!actions.length;showAction(0);
+  const frames=$('frame');frames.replaceChildren();s.frames.forEach((f,i)=>{const o=el('option',f.label);o.value=i;frames.append(o);});
+  if(!s.frames.length){const o=el('option','此记录无截图');o.value=0;frames.append(o);}frames.disabled=!s.frames.length;
+  showFrame();showTab(tab);
+}
+function showAction(index){
+  actionIndex=Math.max(0,Math.min(Number.isFinite(index)?Math.trunc(index):0,Math.max(0,actions.length-1)));const a=actions[actionIndex];
+  $('action').value=actionIndex;$('prev-action').disabled=!a||actionIndex===0;$('next-action').disabled=!a||actionIndex===actions.length-1;
+  $('action-status').textContent=a?`${a.status}${a.elapsed_seconds!=null?' · '+a.elapsed_seconds+'s':''}`:'无工具记录';
+  $('arguments').textContent=a?pretty(a.arguments):'未记录';$('tool-result').textContent=a?pretty(a.result):'未记录';
+  const warnings=[];
+  if(a?.arguments?.redacted)warnings.push('此外层工具事件的参数/返回被整体脱敏；返回摘要仍保留的操作见上方「Jev 保留动作」。输入文本可能脱敏，动作列表也可能截断。');
+  if(a?.status==='start_without_matched_result')warnings.push('该开始事件没有唯一配对的结束记录；重叠或缺失事件将单独展示，不据此判定执行失败。');
+  if(a?.status==='result_without_matched_start')warnings.push('没有唯一匹配的开始事件，未猜测调用参数。');
+  if(a?.failure||a?.result?.ok===false||a?.result?.error||a?.result?.timed_out)warnings.push('返回记录包含失败、错误或超时，请查看原始结果。');
+  $('action-warning').textContent=warnings.join('\n');$('tool-source').textContent=a?`attempt=${a.attempt||'未知'} · ${a.source}${a.result_source?' → '+a.result_source:''}`:'';saveHash();
+}
+function showJev(index){const turns=entry()?.jev?.turns||[];jevIndex=Math.max(0,Math.min(Number.isFinite(index)?Math.trunc(index):0,Math.max(0,turns.length-1)));$('jev-turn').value=jevIndex;$('prev-jev').disabled=!turns.length||jevIndex===0;$('next-jev').disabled=!turns.length||jevIndex===turns.length-1;$('jev-turn-detail').textContent=turns.length?pretty(turns[jevIndex]):'此摘要未保留动作明细。';saveHash();}
+function showFrame(){
+  const f=entry()?.frames[Number($('frame').value)],im=f?DATA.images[f.image]:null;
+  const index=Number($('frame').value),count=entry()?.frames.length||0;$('prev-frame').disabled=!count||index===0;$('next-frame').disabled=!count||index===count-1;$('frame-position').textContent=count?`截图 ${index+1} / ${count}`:'';
+  $('frame-context-details').hidden=!f?.context;$('frame-context').textContent=f?.context?pretty(f.context):'';
+  const img=el('img');img.id='screenshot';img.alt=f?.label||'无截图';img.hidden=true;$('screenshot').replaceWith(img);
+  $('screen-message').hidden=false;$('caption').textContent=im?f.label+' · '+im.name:'';$('open-image').hidden=!im?.src;
+  if(im?.src){$('open-image').href=im.src;$('screen-message').textContent='加载截图…';img.onload=()=>{if(img!==$('screenshot'))return;img.hidden=false;$('screen-message').hidden=true;};img.onerror=()=>{if(img!==$('screenshot'))return;$('screen-message').textContent='截图无法加载。请保留 HTML 与归档的相对位置，或使用 --embed-images。';};img.onclick=()=>{stop();img.classList.toggle('zoomed');};img.src=im.src;}
+  else{$('open-image').removeAttribute('href');$('screen-message').textContent=im?'截图文件缺失：'+im.name:'此记录未提供截图。';}
+  saveHash();
+}
+function updatePlay(){const active=timer!==null;$('play').textContent=active?'⏸ 暂停':'▶ 自动播放';$('play').setAttribute('aria-pressed',String(active));$('play').disabled=!active&&entryIndex>=task().entries.length-1;}
+function stop(){if(timer!==null){clearInterval(timer);timer=null;}updatePlay();}
+function play(){if(timer!==null){stop();return;}if(document.hidden||entryIndex>=task().entries.length-1)return;timer=setInterval(()=>showEntry(entryIndex+1,true),Number($('interval').value));updatePlay();}
+function saveHash(){const p=new URLSearchParams({task:task().id,source:task().source,entry:entryIndex+1,tab,action:actionIndex+1,jev:jevIndex+1,frame:$('frame').value||'0'});try{history.replaceState(null,'','#'+p.toString());}catch{}}
+function restoreHash(){const p=new URLSearchParams(location.hash.slice(1));let i=tasks.findIndex(t=>t.id===p.get('task')&&(!p.has('source')||t.source===p.get('source')));if(i<0)i=0;tab=['decision','tools','result'].includes(p.get('tab'))?p.get('tab'):'decision';selectTask(i,Number(p.get('entry')||1)-1);showAction(Number(p.get('action')||1)-1);showJev(Number(p.get('jev')||1)-1);const f=Number(p.get('frame')||0);if(Number.isInteger(f)&&f>=0&&f<(entry()?.frames.length||0)){$('frame').value=f;showFrame();}}
+$('search').oninput=listTasks;$('filter').onchange=listTasks;
+$('first').onclick=()=>showEntry(0);$('prev').onclick=()=>showEntry(entryIndex-1);$('next').onclick=()=>showEntry(entryIndex+1);$('last').onclick=()=>showEntry(task().entries.length-1);
+$('entry-number').onchange=()=>showEntry(Number($('entry-number').value)-1);$('slider').oninput=()=>showEntry(Number($('slider').value)-1);
+$('action').onchange=()=>{stop();showAction(Number($('action').value));};$('prev-action').onclick=()=>{stop();showAction(actionIndex-1);};$('next-action').onclick=()=>{stop();showAction(actionIndex+1);};
+$('frame').onchange=()=>{stop();showFrame();};$('play').onclick=play;$('interval').onchange=()=>{const active=timer!==null;stop();if(active)play();};
+$('prev-frame').onclick=()=>{stop();$('frame').value=Math.max(0,Number($('frame').value)-1);showFrame();};$('next-frame').onclick=()=>{stop();$('frame').value=Math.min(entry().frames.length-1,Number($('frame').value)+1);showFrame();};
+$('jev-turn').onchange=()=>{stop();showJev(Number($('jev-turn').value));};$('prev-jev').onclick=()=>{stop();showJev(jevIndex-1);};$('next-jev').onclick=()=>{stop();showJev(jevIndex+1);};
+for(const id of ['entry-number','slider','action','frame'])$(id).addEventListener('focus',stop);
+for(const name of ['decision','tools','result'])$('tab-'+name).onclick=()=>{stop();showTab(name);};
+document.addEventListener('keydown',e=>{if(e.altKey||e.ctrlKey||e.metaKey||e.target.isContentEditable||['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName))return;const action={ArrowLeft:()=>showEntry(entryIndex-1),ArrowRight:()=>showEntry(entryIndex+1),Home:()=>showEntry(0),End:()=>showEntry(task().entries.length-1)}[e.key];if(action){e.preventDefault();action();}});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)stop();});window.addEventListener('pagehide',stop);window.addEventListener('hashchange',restoreHash);restoreHash();
+</script>
+</body>
+</html>

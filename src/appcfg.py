@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
 from launch import API_KEY_ENV
@@ -14,7 +15,18 @@ from launch import API_KEY_ENV
 COORDINATE_SPACES = ("image_pixels", "normalized_1000")
 
 
-def agent_config(model: dict, harness: dict) -> dict:
+def execution_harness(harness: dict, actor_seconds: float) -> dict:
+    """Tell Slow the actual remaining acting time, including across task phases."""
+    scoped = deepcopy(harness)
+    orchestration = scoped.get("orchestration", {})
+    if orchestration.get("enabled"):
+        orchestration["max_seconds"] = min(
+            float(orchestration.get("max_seconds", actor_seconds)), max(1., float(actor_seconds)),
+        )
+    return scoped
+
+
+def agent_config(model: dict) -> dict:
     """配置里的模型凭据 + 行为旋钮 → NexAU agent 配置（OpenAI 兼容 Chat）。"""
     llm = {
         "model": model["model"],
@@ -25,6 +37,8 @@ def agent_config(model: dict, harness: dict) -> dict:
         "max_context_tokens": 128000,
         "max_retries": int(model.get("max_retries", 3)),
         "timeout": float(model.get("timeout_seconds", 600)),
+        "stream_idle_timeout_ms": int(float(model.get("timeout_seconds", 600)) * 1000),
+        "connect_timeout_ms": 15000,
         "stream": bool(model.get("stream", False)),
     }
     effort = model.get("reasoning_effort")
@@ -59,6 +73,7 @@ def app_config(*, vm_ip: str, server_port: int, max_steps: int, artifact_root: P
             "model_response_recovery": bool(execution.get("model_response_recovery", True)),
             "no_tool_call_attempts": int(execution.get("no_tool_call_attempts", 1)),
         },
+        "orchestration": dict(harness.get("orchestration", {})),
         "context_management": {"mode": harness.get("context_management", {}).get("mode", "off")},
         "evaluation": {"enabled": bool(harness.get("evaluation", {}).get("enabled", False))},
         "observation": {
@@ -99,7 +114,7 @@ def write_configs(directory: Path, *, model: dict, harness: dict, vm_ip: str, se
         raise ValueError(f"coordinate.input_space 应为 {' / '.join(COORDINATE_SPACES)}，收到 {input_space!r}")
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "agent.yaml").write_text(
-        json.dumps(agent_config(model, harness), ensure_ascii=False, indent=2), encoding="utf-8")
+        json.dumps(agent_config(model), ensure_ascii=False, indent=2), encoding="utf-8")
     app_path = directory / "app.yaml"
     app_path.write_text(json.dumps(app_config(
         vm_ip=vm_ip, server_port=server_port, max_steps=max_steps,
