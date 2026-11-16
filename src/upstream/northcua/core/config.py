@@ -14,6 +14,7 @@ from .config_base import (
     ArtifactConfig,
     CoordinatePolicyConfig,
     ExecutionConfig,
+    OrchestrationConfig,
     PromptPolicyConfig,
     WebSocketServerConfig,
     _default_desktop_coordinate_policy,
@@ -411,6 +412,7 @@ class NorthCUAAppConfig(BaseModel):
     artifacts: ArtifactConfig = Field(default_factory=ArtifactConfig)
     websocket: WebSocketServerConfig = Field(default_factory=WebSocketServerConfig)
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
+    orchestration: OrchestrationConfig = Field(default_factory=OrchestrationConfig)
     desktop: DesktopPolicyConfig = Field(default_factory=DesktopPolicyConfig)
     web: WebAgentConfig = Field(default_factory=WebAgentConfig)
     agents: dict[str, AgentKitAgentConfig] = Field(default_factory=dict)

@@ -12,6 +12,9 @@ import time
 from pathlib import Path
 from typing import Any
 
+from evaluator_dependencies import prepare_evaluator_dependencies
+from setup_transport import prepared_setup_transport
+
 
 class Vm:
     def __init__(self, *, task_root: str | Path, vm_path: str | Path,
@@ -55,7 +58,8 @@ class Vm:
                 continue
             kept.append(entry)
         sys.path[:] = kept
-        for name in [item for item in sys.modules if item == "desktop_env" or item.startswith("desktop_env.")]:
+        loaded = [item for item in sys.modules if item == "desktop_env" or item.startswith("desktop_env.")]
+        for name in loaded:
             module = sys.modules[name]
             origin = getattr(module, "__file__", "") or ""
             if origin and not Path(origin).is_relative_to(root):
@@ -120,7 +124,18 @@ class Vm:
             require_a11y_tree=True,
             cache_dir=str(self.run_root / "evaluation_cache"),
         )
-        self.env.reset(task_config=task)
+        runtime_module = sys.modules["desktop_env.desktop_env"]
+        previous_retries = runtime_module.MAX_RETRIES
+        runtime_module.MAX_RETRIES = 1
+        try:
+            with prepared_setup_transport(str(task["id"])):
+                self.env.reset(task_config=task)
+        finally:
+            runtime_module.MAX_RETRIES = previous_retries
+        prepare_evaluator_dependencies(
+            self.env.setup_controller, str(task["id"]),
+            self.run_root / "evaluation_dependencies" / f"{task['id']}.json",
+        )
         time.sleep(self.startup_wait_seconds)
 
     def execute(self, action: str, pause: int = 1) -> None:

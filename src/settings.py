@@ -7,12 +7,13 @@ worker 侧不 import 本模块——冻结的 OSWORLD_PYTHON 没有 PyYAML，
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import os
 from pathlib import Path
 
 import yaml
+
+from appcfg import require_orchestration
 
 TASK_IDS = tuple(f"{number:03d}" for number in range(1, 109))
 
@@ -28,6 +29,7 @@ def load(path: str | Path) -> dict:
     for section in ("project", "models", "harness", "pool", "cluster", "benchmark"):
         if section not in data:
             raise ConfigError(f"配置缺少段: {section}")
+    require_orchestration(data["harness"])
     return data
 
 
@@ -100,11 +102,12 @@ def render_spec(config: dict, *, run_id: str, job_id: int, tasks: list[str],
                 api_name: str, api: dict, run_root: Path) -> dict:
     benchmark = config["benchmark"]
     harness = config["harness"]
+    require_orchestration(harness)
     gitlab = ""
     token_file = benchmark.get("gitlab_token_file")
     if token_file and Path(token_file).is_file():
         gitlab = Path(token_file).read_text(encoding="utf-8").strip()
-    return {
+    result = {
         "run_id": run_id,
         "job_id": job_id,
         "output_root": str(run_root / "jobs" / f"job-{job_id:02d}"),
@@ -136,7 +139,18 @@ def render_spec(config: dict, *, run_id: str, job_id: int, tasks: list[str],
         "log": {"screenshots": bool(config["log"].get("screenshots", True)),
                 "llm_calls": bool(config["log"].get("llm_calls", True))},
         "secrets": {"gitlab_private_token": gitlab},
+        "subagent_env": {name: os.environ[name] for name in (
+            "TYPESAFE_API_KEY", "TYPESAFE_MODEL", "TYPESAFE_BASE_URL",
+        ) if name in os.environ},
     }
+    evaluator = config.get("evaluation_model")
+    if evaluator:
+        result["evaluation_model"] = {
+            **evaluator,
+            "api_key": _key(evaluator),
+        }
+        result["evaluation_model"].pop("api_key_env", None)
+    return result
 
 
 def write_spec(spec: dict, spec_dir: Path) -> Path:
@@ -158,9 +172,14 @@ def masked(spec: dict) -> dict:
     secrets = copy.get("secrets") or {}
     if secrets.get("gitlab_private_token"):
         secrets["gitlab_private_token"] = "***"
+    if (copy.get("evaluation_model") or {}).get("api_key"):
+        copy["evaluation_model"]["api_key"] = "***"
+    if (copy.get("subagent_env") or {}).get("TYPESAFE_API_KEY"):
+        copy["subagent_env"]["TYPESAFE_API_KEY"] = "***"
     return copy
 
 
 def describe(path: str | Path) -> str:
-    data = Path(path).read_bytes()
-    return hashlib.sha256(data).hexdigest()[:16]
+    """Metadata identifier only: do not compute a configuration checksum."""
+    stat = Path(path).stat()
+    return f"metadata:{stat.st_size}:{stat.st_mtime_ns}"
