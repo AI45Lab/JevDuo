@@ -126,11 +126,10 @@ class GeneralSubagentConfig(BaseModel):
 
 
 class OrchestrationConfig(BaseModel):
-    """Opt-in desktop orchestration; the production plugin registry starts empty."""
+    """Desktop orchestration budgets; the production plugin registry starts empty."""
 
     model_config = ConfigDict(extra="forbid")
 
-    enabled: bool = False
     max_cycles: int = Field(default=20, ge=1)
     max_seconds: float = Field(default=600, gt=0, allow_inf_nan=False)
     max_model_calls: int = Field(default=100, ge=1)

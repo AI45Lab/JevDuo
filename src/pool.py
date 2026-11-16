@@ -21,8 +21,7 @@ import settings
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def submit_argv(config: dict, *, run_id: str, job_id: int, spec_path: Path,
-                repo_root: Path | None = None) -> list[str]:
+def submit_argv(config: dict, *, run_id: str, job_id: int, spec_path: Path) -> list[str]:
     cluster = config["cluster"]
     name = rjob.job_name(run_id, job_id)
     argv = [
@@ -42,8 +41,7 @@ def submit_argv(config: dict, *, run_id: str, job_id: int, spec_path: Path,
     ]
     for mount in cluster.get("mounts", []):
         argv.append(f"--mount={mount['source']}:{mount['target']}")
-    root = ROOT if repo_root is None else repo_root
-    argv += ["--", "bash", str(root / "infra" / "worker.sh"), str(spec_path)]
+    argv += ["--", "bash", str(ROOT / "infra" / "worker.sh"), str(spec_path)]
     return argv
 
 
@@ -63,64 +61,94 @@ def collect(client: rjob.Client, name: str, job_dir: Path) -> dict:
 
 
 def run_one(config: dict, *, run_id: str, job_id: int, tasks: list[str], api_name: str,
-            api: dict, run_root: Path, keep: bool, client: rjob.Client,
-            adopt: bool = True) -> dict:
-    """跑一个 job。adopt=True 时，若同名 rjob 已在跑则接管等待，不重复提交。"""
-    spec = settings.render_spec(
-        config, run_id=run_id, job_id=job_id, tasks=tasks,
-        api_name=api_name, api=api, run_root=run_root)
-    spec_path = settings.write_spec(spec, run_root / "job_specs")
-    name = rjob.job_name(run_id, job_id)
+            api: dict, run_root: Path, keep: bool, client: rjob.Client) -> dict:
+    """Submit once, or observe an existing attempt using its saved platform identity."""
     job_dir = run_root / "jobs" / f"job-{job_id:02d}"
-    job_dir.mkdir(parents=True, exist_ok=True)
-    record = {"job_id": job_id, "rjob": name, "tasks": tasks,
+    try:
+        job_dir.mkdir(parents=True)
+        adopted = False
+    except FileExistsError:
+        adopted = True
+    record_path = job_dir / "job.json"
+    record = json.loads(record_path.read_text(encoding="utf-8")) if adopted else {
+              "job_id": job_id, "requested_name": rjob.job_name(run_id, job_id), "tasks": tasks,
+              "status": "preparing",
               "cpu": config["cluster"].get("cpu"), "memory": config["cluster"].get("memory"),
               "started_at": time.time()}
-    adopted = False
+    name = record.get("rjob")
     try:
-        if adopt and _is_running(client, name):
-            adopted = True
+        if adopted:
+            if not name:
+                raise rjob.RjobError("Submission identity unknown; inspect submit.log; do not resubmit")
             record["adopted"] = True
             print(f"[job-{job_id:02d}] 接管已在运行的 rjob {name}", flush=True)
         else:
-            try:
-                client.delete(name)
-            except rjob.RjobError:
-                pass
-            client.submit(submit_argv(config, run_id=run_id, job_id=job_id, spec_path=spec_path))
-        # 提交/接管后立刻落盘，进程被杀时也知道这个 job 已经发出去过
-        record["submitted_at"] = time.time()
+            spec = settings.render_spec(
+                config, run_id=run_id, job_id=job_id, tasks=tasks,
+                api_name=api_name, api=api, run_root=run_root)
+            spec_path = settings.write_spec(spec, run_root / "job_specs")
+            argv = submit_argv(config, run_id=run_id, job_id=job_id, spec_path=spec_path)
+            # Persist uncertainty before the side effect, including interrupted CLI calls.
+            record.update(status="submission_unknown", submission_started_at=time.time())
+            _write_job(job_dir, record)
+            output = client.submit(argv)
+            (job_dir / "submit.log").write_text(output, encoding="utf-8")
+            name = rjob.metadata_name(output)
+            if not name:
+                raise rjob.RjobError("Submission identity unknown; inspect submit.log; do not resubmit")
+            record.update(rjob=name, submitted_at=time.time(), status="submitted")
         _write_job(job_dir, record)
         status = rjob.watch(client, name, poll_seconds=float(config["cluster"].get("poll_seconds", 60)),
                             timeout_seconds=float(config["harness"]["max_wall_seconds"])
                             * max(1, len(tasks)) + 1800)
         record["status"] = status
-    except TimeoutError as error:
-        record["status"], record["error"] = "timeout", str(error)
-    except rjob.RjobError as error:
-        record["status"], record["error"] = "error", str(error)[:2000]
+    except Exception as error:
+        if record.get("status") == "preparing":
+            record["status"] = "pre_submit_error"
+        elif not name:
+            record["status"] = "submission_unknown"
+        else:
+            record["status"] = "timeout" if isinstance(error, TimeoutError) else "error"
+        record["error"] = f"{type(error).__name__}: {error}"[:2000]
     finally:
-        record.update(collect(client, name, job_dir))
+        if name:
+            record.update(collect(client, name, job_dir))
+            # An observer does not own cleanup of a previously submitted job.
+            record["cleanup"] = ({"stopped": False, "deleted": False, "adopted": True} if adopted
+                                 else rjob.cleanup(client, name,
+                                                   keep=keep or bool(config["cluster"].get("keep_job"))))
         record["finished_at"] = time.time()
-        # 接管的 job 不替原来的提交者做收尾
-        record["cleanup"] = ({"stopped": False, "deleted": False, "adopted": True} if adopted
-                             else rjob.cleanup(client, name,
-                                               keep=keep or bool(config["cluster"].get("keep_job"))))
         _write_job(job_dir, record)
     return record
 
 
-def _is_running(client: rjob.Client, name: str) -> bool:
-    """同名 rjob 是否确实在跑。
-
-    只有解析出明确的 running 才算「在跑」：rjob get 对不存在的 job 会返回空输出
-    并退出 0，解析结果是 unknown；若把 unknown 当在跑，新 run-id 会被误判为接管，
-    然后一直等下去。
-    """
-    try:
-        return rjob.parse_status(client.get(name)) == "running"
-    except rjob.RjobError:
-        return False
+def _plan_jobs(run_root: Path, pending: list[str], per_job: int) -> list[tuple[int, list[str]]]:
+    """Observe unfinished submissions; allocate fresh directories for explicit retries."""
+    if not pending:
+        return []
+    remaining = set(pending)
+    planned = []
+    next_id = 0
+    for directory in sorted((run_root / "jobs").glob("job-*")):
+        job_id = int(directory.name.removeprefix("job-"))
+        next_id = max(next_id, job_id + 1)
+        path = directory / "job.json"
+        if not path.is_file():
+            raise ValueError(f"Missing job record: {path}; inspect artifacts or use a new run ID")
+        record = json.loads(path.read_text(encoding="utf-8"))
+        tasks = record.get("tasks")
+        if tasks is None:
+            spec_path = run_root / "job_specs" / f"job-{job_id:02d}.json"
+            tasks = json.loads(spec_path.read_text(encoding="utf-8"))["tasks"]
+        cleanup = record.get("cleanup", {})
+        finished = (record.get("status") in rjob.TERMINAL_STATES | {"pre_submit_error"}
+                    or cleanup.get("stopped") or cleanup.get("deleted"))
+        if remaining.intersection(tasks) and not finished:
+            planned.append((job_id, tasks))
+            remaining.difference_update(tasks)
+    planned.extend((next_id + index, chunk) for index, chunk in enumerate(
+        settings.chunk([task for task in pending if task in remaining], per_job)))
+    return planned
 
 
 def _write_job(job_dir: Path, record: dict) -> None:
@@ -139,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--jobs", type=int, default=None, help="覆盖 pool.max_parallel")
     parser.add_argument("--per-job", type=int, default=None, help="覆盖 pool.tasks_per_job")
     parser.add_argument("--model", default=None)
-    parser.add_argument("--max-steps", type=int, default=None, help="覆盖 harness.max_steps")
+    parser.add_argument("--max-steps", type=int, default=None, help="覆盖编排轮次上限 harness.max_steps")
     parser.add_argument("--max-wall", type=float, default=None, help="单题墙钟上限（秒）")
     parser.add_argument("--resume", type=int, default=1,
                         help="续跑：跳过磁盘上已有 episode.json 的题（默认开）")
@@ -162,26 +190,26 @@ def main(argv: list[str] | None = None) -> int:
 
     done, retry = _resume_state(run_root, args)
     pending = [task for task in tasks if task not in done]
-    chunks = [chunk for chunk in settings.chunk(pending, per_job) if chunk]
+    jobs = _plan_jobs(run_root, pending, per_job)
 
     recorder.write_run(run_root, {
         "run_id": args.run_id, "benchmark": config["benchmark"], "harness": config["harness"],
     }, git_describe=_git_describe(), model_name=api_name,
         config_hash=settings.describe(args.config))
     print(f"run={args.run_id} model={api_name} tasks={len(tasks)} pending={len(pending)} "
-          f"done={len(done)} retry={len(retry)} jobs={len(chunks)} parallel={max_parallel} "
+          f"done={len(done)} retry={len(retry)} jobs={len(jobs)} parallel={max_parallel} "
           f"per_job={per_job}",
           flush=True)
 
     client = rjob.Client()
     records: list[dict] = []
-    if chunks:
-        with ThreadPoolExecutor(max_workers=max(1, min(max_parallel, len(chunks)))) as pool:
+    if jobs:
+        with ThreadPoolExecutor(max_workers=max(1, min(max_parallel, len(jobs)))) as pool:
             futures = {
                 pool.submit(run_one, config, run_id=args.run_id, job_id=index, tasks=chunk,
                             api_name=api_name, api=api, run_root=run_root,
                             keep=bool(args.keep), client=client): index
-                for index, chunk in enumerate(chunks)
+                for index, chunk in jobs
             }
             for future in as_completed(futures):
                 job_id = futures[future]
@@ -192,16 +220,19 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"[job-{job_id:02d}] {records[-1].get('status')}", flush=True)
 
     # 汇总以磁盘为准：续跑时历史 job 的结果也算进来
-    merged = recorder.merge_episodes(run_root, recorder.collect_episodes(run_root))
+    episodes = recorder.collect_episodes(run_root)
+    merged = recorder.merge_episodes(run_root, episodes)
+    missing_tasks = sorted(set(tasks) - {episode["task_id"] for episode in episodes})
     failed_jobs = [record for record in records if record.get("status") != "succeeded"]
     print(json.dumps({"total": merged["total"], "scored": merged["scored"],
                       "failed_unscored": merged["failed_unscored"],
                       "score_mean": merged["score_mean"],
                       "skipped": len(done),
+                      "missing_tasks": missing_tasks,
                       "failed_jobs": [record.get("job_id") for record in failed_jobs],
                       "run_root": str(run_root)}, ensure_ascii=False), flush=True)
     # job 没跑起来（镜像/环境失败）和题没跑成都要非零退出，避免误判为成功
-    return 0 if merged["failed_unscored"] == 0 and not failed_jobs else 1
+    return 0 if merged["failed_unscored"] == 0 and not failed_jobs and not missing_tasks else 1
 
 
 def _resume_state(run_root: Path, args) -> tuple[set[str], list[str]]:

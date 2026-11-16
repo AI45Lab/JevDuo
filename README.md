@@ -85,7 +85,9 @@ bash scripts/run.sh --run-id jv-osw21-shard1 --shard 1/6 --jobs 2 --per-job 9
 同一 run ID 默认跳过已有 `episode.json` 的题，包括 `failed_unscored`；
 显式加 `--retry-failed` 才重跑其中未评分的题，合法零分不会因此重跑。
 `--no-resume` 关闭这项跳过逻辑。配置切换使用 `--config`，actor 切换使用 `--model`。
-提交失败没有自动指数退避或自动重新提交；已在运行的同名 job 可由普通任务池接管等待。
+提交失败不会自动重新提交；结果不明时保留记录供人工核对，不按推导名操作平台任务。
+同一 run ID 可按保存的实际平台任务名接管等待；短暂状态查询失败继续等待，监控中不自动重启任务。
+显式重跑已结束的题会分配新的 job 目录，保留旧轨迹与日志。
 
 ## 当前预算与评分
 
@@ -102,6 +104,10 @@ bash scripts/run.sh --run-id jv-osw21-shard1 --shard 1/6 --jobs 2 --per-job 9
 | `orchestration.model_timeout_retries` | 每次模型推理超时最多重试 2 次，仍受总预算约束 |
 | `pool.max_parallel` / `tasks_per_job` | 1 / 1；仅在 rjob 级并发，job 内逐题串行 |
 | `cluster.cpu` / `memory` | 每 job 4 CPU / 16384 MB |
+
+Desktop 唯一执行模式为 Slow 编排，`orchestration.enabled` 总开关已删除。
+`harness.orchestration` 必须提供 `max_cycles`、`max_seconds`、`max_model_calls`、`max_tool_calls`；
+`gui_jev.enabled`、`general.enabled` 只控制插件注册。多阶段任务共用整题预算，并要求完整 usage。
 
 轮次上限应同时检查 `harness.max_steps` 和 `harness.orchestration.max_cycles`；
 `--max-steps` 只覆盖前者。`--max-wall` 覆盖单题墙钟上限，子任务仍受自身及编排时间预算限制。
@@ -136,7 +142,6 @@ bash scripts/run.sh --run-id jv-osw21-shard1 --shard 1/6 --jobs 2 --per-job 9
 | `src/evaluation_runtime.py` | 官方评分模型配置与按题隔离的模型故障检查 |
 | `src/evaluator_dependencies.py` / `src/setup_transport.py` | 评分依赖预检与一次投递的慢 setup 传输 |
 | `src/worker_limits.py` | 覆盖 setup、actor 和评分的整题硬截止 |
-| `src/recovery_batch.py` | 固定允许任务集的专用恢复 driver，使用不可变源码快照 |
 | `docs/ORCHESTRATION.md` | Slow、Jev、general 插件协议及行为说明 |
 | `tests/` | 本地逻辑与模拟传输回归，不启动真实 VM 或模型调用 |
 | `runs/<run_id>/` | 全部产物（gitignore） |
@@ -151,21 +156,18 @@ bash scripts/run.sh --run-id jv-osw21-shard1 --shard 1/6 --jobs 2 --per-job 9
 
 因此 `config.yaml` 只在开发机解析；worker 只接收 `settings.py` 渲染好的 `job_specs/*.json`。
 
-## 专用恢复入口
+## 补跑指定任务
 
-`recovery_batch` 仅接受源码 `TASKS` 中列出的任务，要求 20 轮、每子任务 50 次额度和 10800 秒预算。
-它为新 run 建立 `source-snapshot/`，提交时显式使用快照中的 worker，复用当前已安装的 venv。
-不会自动重放提交状态不明的请求，也不会自动重新启动停止的任务。
-
-显式选择允许任务后，使用新的 run ID 调用；此入口需自行加载凭据：
+补跑统一使用 `scripts/run.sh`。修改代码、模型或配置后，使用新的 run ID，并显式选择任务：
 
 ```bash
-set -a
-. ./.env.local
-set +a
-PYTHONPATH=src venv/bin/python -m recovery_batch \
-  --run-id jv-recovery-001 --tasks 005,018 --parallel 1
+bash scripts/run.sh --run-id jv-rerun-001 --tasks 005,018 --jobs 1 --per-job 1
 ```
+
+预算来自 `config.yaml`，支持普通入口的 `--config`、`--model`、`--max-steps` 和 `--max-wall`。
+同一 run ID 下重跑未评分题使用 `--retry-failed`，不包含已评分的零分题。
+任务直接使用当前共享工作区的 `src/`、`infra/` 和 `venv/`，不再复制源码或根目录说明文件；
+运行期间应保持这些代码和环境不变。补跑会新建 VM 执行，不从旧轨迹或旧 VM 状态继续。
 
 ## 产物
 
@@ -235,17 +237,6 @@ git diff --check
 `.env.local`、`runs/`、`venv/`、`job_specs/` 均已忽略。spec 含 actor、评分模型、Jev 和基准凭据，
 按私有文件处理；配置示例只引用环境变量。异常摘要会遮盖 `sk-` 前缀和 Bearer 格式的值，
 这是有限格式的脱敏，不代表原始模型、工具、截图等产物可以直接公开。
-
-## 冒烟基线（2026-11-08）
-
-题 001，`k3.1-pro`，100 步上限：
-
-```
-[job-00] succeeded
-{"total": 1, "scored": 1, "failed_unscored": 0, "score_mean": 0.3333}
-```
-
-这是历史 100 步模式的链路记录，不是当前 Slow/Jev/general 编排配置的验收结果。
 
 ## 上游源码（subtree）
 

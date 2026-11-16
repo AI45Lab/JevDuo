@@ -11,6 +11,7 @@ from pathlib import Path
 import evaluation_runtime
 import recorder
 from actor_run import run_actor
+from appcfg import require_orchestration
 
 
 def run_phases(
@@ -21,7 +22,9 @@ def run_phases(
     job_root = directory.parent.parent
     if evaluation_offset is None:
         evaluation_offset = evaluation_runtime.log_offset(job_root)
-    remaining_cycles = int(harness["max_steps"])
+    orchestration = require_orchestration(harness)
+    cycle_limit = min(int(harness["max_steps"]), int(orchestration["max_cycles"]))
+    remaining_cycles = cycle_limit
     usage = {"model_calls": 0, "tool_calls": 0, "cleanup_tool_calls": 0}
     results, info = [], {}
     stop_reason = None
@@ -108,7 +111,8 @@ def run_phases(
         raise RuntimeError("No official phase evaluation completed; task remains unscored")
     aggregate = dict(info)
     aggregate.update(
-        step_count=int(harness["max_steps"]) - remaining_cycles, usage=usage, phases_completed=len(results)
+        step_count=cycle_limit - remaining_cycles, usage=usage,
+        phases_completed=len(results),
     )
     aggregate["phase_stop_reason"] = stop_reason
     (directory / "agent_result.json").write_text(json.dumps(aggregate, ensure_ascii=False, indent=2))

@@ -1,17 +1,17 @@
 # Slow Orchestrator 框架
 
 提供编排框架、插件协议和可选的 `gui_jev`、`general` 适配器。Subagent Registry 默认空；
-按各插件配置显式注册。`game_jev` 尚未实现。配置模型默认使用旧 Desktop 模式，
-本工程根目录 `config.yaml` 已显式开启编排和两个插件。
+按各插件配置显式注册。`game_jev` 尚未实现。Desktop 唯一执行模式为编排模式；
+本工程根目录 `config.yaml` 配置了预算并启用两个插件。
 
-## 开启方式
+## 配置方式
 
-在评测工程的配置中增加以下字段，由 `src/appcfg.py` 传递给 NorthCUA：
+评测工程必须提供以下预算字段，由 `src/appcfg.py` 传递给 NorthCUA。
+`orchestration.enabled` 总开关已删除；旧配置须删除该字段，缺少预算或保留总开关都会明确报错：
 
 ```yaml
 harness:
   orchestration:
-    enabled: true
     max_cycles: 20
     max_seconds: 600
     max_model_calls: 100
@@ -23,7 +23,7 @@ harness:
 直接使用 NorthCUA app YAML 时，将 `orchestration` 放在顶层。当前仅支持本地
 Python `run_query` 入口，包括连接任务 VM 的 OSWorld 后端。需设置
 `evaluation.enabled: false`；OSWorld 外部官方评分不受此开关影响。
-远端 WebSocket、单步 `run_round` 和固定输入截图目前明确拒绝新模式。
+远端 WebSocket、单步 `run_round` 和固定输入截图不支持该执行链路，调用时明确报错。
 
 空池可以初始化、观察、调用 Slow 并输出轨迹。若任务已完成，Slow 可以根据当前
 Observation 返回 SUCCESS；需要执行时返回 `configuration_error / no_subagent_available`，
@@ -41,8 +41,8 @@ Observation → SlowContext → SlowDecision → Registry/Subagent → CycleReco
 ```
 
 一个外层 step 是一次 Slow 决策，加 CONTINUE 分支的一次有预算的 Subgoal 尝试。
-终态分支不调用 Subagent。新模式的 `max_cycles` 限制编排轮数；旧模式 `max_steps`
-含义不变。`agent_result.json.step_unit` 区分两种口径。新模式 step_count 是当前任务累计的
+终态分支不调用 Subagent。`max_cycles` 和评测入口 `max_steps` 都限制编排轮数，
+生成配置时取较小值；`agent_result.json.step_unit` 固定为 `orchestration_cycle`。step_count 是当前任务累计的
 实际编排轮数，包含恢复前保存的轮数，不包含运行前预算终态的 synthetic 记录。内部调用另行计量；
 model_calls 在框架最终 provider 调用边界计量，不保证覆盖底层 SDK 内部不可见的网络重试。
 tool_calls 计入 runtime.execute 的执行尝试，不包含 Observation 内部探针；环境观察同样受时间预算约束。
@@ -273,7 +273,6 @@ OSWorld 任务成功。
 ```yaml
 harness:
   orchestration:
-    enabled: true
     general:
       enabled: true
       mode: hybrid  # gui 只开放截图和 GUI 操作
@@ -281,7 +280,7 @@ harness:
       enabled: true
 ```
 
-本工程 `config.yaml` 已同时开启 `orchestration.enabled`、`gui_jev.enabled` 和 `general.enabled`，
+本工程 `config.yaml` 已同时开启 `gui_jev.enabled` 和 `general.enabled`，
 运行时两个插件一起注册，由 Slow 选择每轮执行者。当前默认模型为 `k3.1-pro`，general 继承
 该模型配置，与父 Slow 共用。NorthCUA app 示例和配置模型中插件仍默认关闭。
 当前只支持 `desktop.backend: osworld`，所有 GUI/Python/Bash 都发往当前任务 VM 的

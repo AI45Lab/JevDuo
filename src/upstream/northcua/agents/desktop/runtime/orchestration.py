@@ -82,6 +82,8 @@ class OrchestrationStateStore(DesktopRuntimeStateStore):
             step = StepLogRecord.model_validate(payload)
             records[step.round_num, step.session_step] = step
         state.step_logs = sorted(records.values(), key=lambda s: (s.round_num, s.session_step))
+        if any(step.orchestration is None for step in state.step_logs):
+            raise ValueError("Legacy Desktop sessions cannot be resumed; use a new orchestration session")
         memory = WorkingMemoryStore(self.artifact_store.root)
         for step in state.step_logs:
             if step.orchestration is not None and step.orchestration.decision is not None:

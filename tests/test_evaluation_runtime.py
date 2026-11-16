@@ -79,7 +79,9 @@ class EvaluatorRuntimeTest(unittest.TestCase):
                     "run_id": "judge-isolation", "job_id": 0, "output_root": str(root),
                     "tasks": ["001", "002", "003", "004"],
                     "benchmark": {"task_root": "/unused", "vm": "/unused"},
-                    "harness": {"max_steps": 1, "max_wall_seconds": 60},
+                    "harness": {"max_steps": 1, "max_wall_seconds": 60,
+                                "orchestration": {"max_cycles": 1, "max_seconds": 60,
+                                                  "max_model_calls": 1300, "max_tool_calls": 1000}},
                     "model": {"name": "scripted", "api_key": "test-only"}, "log": {},
                     "evaluation_model": {
                         "provider": "openai_compatible", "model": "scripted",

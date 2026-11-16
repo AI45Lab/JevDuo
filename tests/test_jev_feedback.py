@@ -31,10 +31,15 @@ class FeedbackTests(unittest.TestCase):
             execution_diagnostics=[diagnostic] * 20,
         )
         value["turns"] = [{"target": "x" * 2000}] * 200
+        receipt = {"operation": "TYPE_TEXT", "delivery": "delivery_uncertain", "window_id": "w1"}
+        value["interrupted_action"] = receipt
+        value["unresolved_delivery"] = True
         self.assertEqual(value["recovery"]["snapshot_timeout_ms"], 60000)
         summary = json.loads(bounded_json(value))
         self.assertEqual(summary["execution_diagnostics"], [diagnostic] * 8)
         self.assertEqual(summary["blocked_reason"], "REMOTE_EXECUTION_UNCONFIRMED")
+        self.assertEqual(summary["interrupted_action"], receipt)
+        self.assertTrue(summary["unresolved_delivery"])
 
     def test_non_object_historical_summaries_do_not_crash_recovery(self):
         for value in (None, [], 42, "message"):

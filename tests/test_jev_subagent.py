@@ -605,9 +605,12 @@ class JevTest(unittest.IsolatedAsyncioTestCase):
         task = asyncio.create_task(self.agent.run(self.request, self.scoped))
         await asyncio.wait_for(self.http.model_ready.wait(), 3)
         task.cancel()
-        with self.assertRaises(asyncio.CancelledError):
+        with self.assertRaises(asyncio.CancelledError) as caught:
             await asyncio.wait_for(task, 3)
         self.assertFalse(any(c[0] in ("launch", "focus-window", "snapshot") for c in self.http.commands))
+        summary = json.loads(caught.exception.subagent_result.summary)
+        self.assertFalse(summary["unresolved_delivery"])
+        self.assertEqual(summary["unsafe_to_replay"], [])
 
     async def test_cancel_during_launch_joins_delivery_and_does_not_continue(self):
         self.request.contract.agent_input = {}
@@ -619,9 +622,17 @@ class JevTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.03)
         self.assertFalse(task.done())
         self.http.launch_release.set()
-        with self.assertRaises(asyncio.CancelledError):
+        with self.assertRaises(asyncio.CancelledError) as caught:
             await asyncio.wait_for(task, 3)
         self.assertEqual(self.http.commands[-1][0], "launch")
+        self.assertEqual(sum(c[0] == "launch" for c in self.http.commands), 1)
+        partial = caught.exception.subagent_result
+        self.assertEqual(json.loads(partial.summary)["interrupted_action"]["operation"], "LAUNCH")
+        self.request.history = [{"subagent_result": partial.model_dump(mode="json")}]
+        self.request.contract.subgoal_id = "new-launch-after-cancel"
+        self.http.application_choices = iter(["app_1"])
+        result = await self.agent.run(self.request, self.scoped)
+        self.assertEqual(result.exit_reason, "unsafe_launch_replay_blocked")
         self.assertEqual(sum(c[0] == "launch" for c in self.http.commands), 1)
 
     async def test_changed_field_after_text_generation_stops_before_write(self):
@@ -684,13 +695,16 @@ class JevTest(unittest.IsolatedAsyncioTestCase):
         task = asyncio.create_task(self.agent.run(self.request, self.scoped))
         await asyncio.wait_for(self.http.model_ready.wait(), 3)
         task.cancel()
-        with self.assertRaises(asyncio.CancelledError):
+        with self.assertRaises(asyncio.CancelledError) as caught:
             await asyncio.wait_for(task, 3)
         self.assertEqual(self.http.commands[-1], ["cursor-overlay", "disable"])
         commands = list(self.http.commands)
         self.http.model_release.set()
         await asyncio.sleep(0)
         self.assertEqual(self.http.commands, commands)
+        summary = json.loads(caught.exception.subagent_result.summary)
+        self.assertEqual(summary["turns"][-1]["operation"], "TYPE_TEXT")
+        self.assertFalse(summary["unresolved_delivery"])
 
     async def test_cancel_waits_for_submitted_write_before_teardown(self):
         self.http.write_ready, self.http.write_release = asyncio.Event(), asyncio.Event()
@@ -700,10 +714,96 @@ class JevTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         self.assertFalse(task.done())
         self.http.write_release.set()
-        with self.assertRaises(asyncio.CancelledError):
+        with self.assertRaises(asyncio.CancelledError) as caught:
             await asyncio.wait_for(task, 3)
         self.assertEqual([c[0] for c in self.http.commands].count("set-value"), 1)
         self.assertEqual(self.http.commands[-1][0], "set-value")
+        partial = caught.exception.subagent_result
+        summary = json.loads(partial.summary)
+        self.assertTrue(summary["unresolved_delivery"])
+        self.assertEqual(summary["interrupted_action"]["delivery"], "delivered_verified")
+        self.assertNotIn("中文", partial.summary)
+
+    async def expire_during_write(self, run):
+        self.http.write_ready, self.http.write_release = asyncio.Event(), asyncio.Event()
+        owner = asyncio.current_task()
+        timeout = asyncio.timeout(None)
+
+        async def expire_during_write():
+            await self.http.write_ready.wait()
+            timeout.reschedule(asyncio.get_running_loop().time() - 1)
+            while not owner.cancelling():
+                await asyncio.sleep(0)
+            self.http.write_release.set()
+
+        trigger = asyncio.create_task(expire_during_write())
+        try:
+            async with timeout:
+                return await run()
+        finally:
+            self.http.write_release.set()
+            trigger.cancel()
+            await asyncio.gather(trigger, return_exceptions=True)
+
+    async def test_timeout_preserves_delivery_and_blocks_new_subgoal_write(self):
+        with self.assertRaises(TimeoutError) as caught:
+            await self.expire_during_write(lambda: self.agent.run(self.request, self.scoped))
+        partial = caught.exception.__cause__.subagent_result
+        summary = json.loads(partial.summary)
+        self.assertTrue(summary["unsafe_to_replay"])
+        request = self.request.model_copy(deep=True)
+        request.attempt_id = "new-attempt"
+        request.contract.subgoal_id = "new-subgoal"
+        request.history = [{"subagent_result": partial.model_dump(mode="json")}]
+        scoped = ScopedRuntime(
+            request, self.budget, self.scoped._observe, self.scoped._execute,
+            self.scoped._infer, self.scoped._cleanup,
+        )
+        self.addAsyncCleanup(scoped.close)
+        self.http.choices = iter(["1", "TYPE_TEXT", "DONE"])
+        result = await self.agent.run(request, scoped)
+        self.assertEqual(result.exit_reason, "unsafe_write_replay_blocked")
+        self.assertEqual([c[0] for c in self.http.commands].count("set-value"), 1)
+
+    async def test_timeout_preserves_native_uncertain_and_explicit_non_delivery(self):
+        for safe in (False, True):
+            with self.subTest(safe=safe):
+                self.http.choices = iter(["1", "TYPE_TEXT", "DONE"])
+                self.http.set_failure = failure(safe=safe)
+                with self.assertRaises(TimeoutError) as caught:
+                    await self.expire_during_write(lambda: self.agent.run(self.request, self.scoped))
+                summary = json.loads(caught.exception.__cause__.subagent_result.summary)
+                self.assertEqual(summary["interrupted_action"]["delivery"],
+                                 "not_delivered" if safe else "delivery_uncertain")
+                self.assertEqual(summary["unresolved_delivery"], not safe)
+
+    async def test_slow_receives_timeout_evidence_and_new_contract_cannot_repeat_write(self):
+        original = jev.JevSubagent.run
+        calls = 0
+
+        async def run(agent, request, runtime):
+            nonlocal calls
+            calls += 1
+
+            def call():
+                return original(agent, request, runtime)
+
+            return await self.expire_during_write(call) if calls == 1 else await call()
+
+        first = self.request.contract.model_dump()
+        second = {**first, "subgoal_id": "new-subgoal-after-timeout"}
+        self.http.choices = iter(["1", "TYPE_TEXT", "1", "TYPE_TEXT"])
+        with patch.object(jev.JevSubagent, "run", run):
+            harness, _ = await self.run_pipeline(decisions=[
+                {"action": "CONTINUE", "contract": first},
+                {"action": "CONTINUE", "contract": second},
+                {"action": "SUCCESS"},
+            ])
+        previous = harness.model.contexts[1]["previous_result"]
+        self.assertTrue(json.loads(previous["summary"])["unresolved_delivery"])
+        self.assertEqual(harness.model.contexts[2]["previous_result"]["exit_reason"],
+                         "unsafe_write_replay_blocked")
+        self.assertEqual([c[0] for c in self.http.commands].count("set-value"), 1)
 
     async def test_cursor_setup_budget_failure_can_disable_overlay(self):
         self.agent = self.make_agent(options={"cursor": True})
@@ -743,7 +843,7 @@ class JevTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.http.decisions), 1)
         self.assertEqual(self.scoped.usage.model_calls, 1)
 
-    async def run_pipeline(self, *, max_model_calls=100):
+    async def run_pipeline(self, *, max_model_calls=100, decisions=None):
         harness = fixtures.OrchestrationTest()
         await harness.asyncSetUp()
         self.addCleanup(harness.doCleanups)
@@ -762,7 +862,7 @@ class JevTest(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(fixtures.ScriptedModel, "run_step", with_writer):
             result = await harness.run_script(
-                [
+                decisions or [
                     {"action": "CONTINUE", "contract": self.request.contract.model_dump()},
                     {"action": "SUCCESS"},
                 ]

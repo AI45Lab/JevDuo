@@ -10,13 +10,14 @@ import re
 import subprocess
 import time
 
-TERMINAL_STATES = {"succeeded", "failed", "deleted"}
+TERMINAL_STATES = {"succeeded", "failed", "stopped", "deleted"}
 
 # rjob get 的任务计数字典（{'active': 0, ...}）含状态词，匹配前先剔除
 _COUNT_DICT_RE = re.compile(r"['\"]\w+['\"]\s*:\s*\d+")
-_STATUS_LINE_RE = re.compile(r"(?i)\b(?:rjob|replica)\s+\S+:\s*([a-z_]+)")
+_STATUS_LINE_RE = re.compile(r"(?i)\b(?:rjob|replica)\s+(\S+?)(?:\s+\(showname=[^)]*\))?:\s*([a-z_]+)")
 _PATTERNS = [
     ("deleted", re.compile(r"(?i)\bdeleted\b|已删除")),
+    ("stopped", re.compile(r"(?i)\bstopped\b|已停止")),
     ("succeeded", re.compile(r"(?i)\b(succeeded|succeed)\b|成功")),
     ("failed", re.compile(r"(?i)\b(failed|error)\b|失败")),
     ("running", re.compile(
@@ -38,7 +39,10 @@ class Client:
         self._run = command_runner or _run_subprocess
 
     def _call(self, *args: str) -> str:
-        code, output = self._run(["rjob", *args])
+        try:
+            code, output = self._run(["rjob", *args])
+        except subprocess.TimeoutExpired as error:
+            raise RjobError(f"rjob {args[0]} CLI timed out; outcome unknown") from error
         if code != 0:
             raise RjobError(f"rjob {' '.join(args)} 退出码 {code}:\n{output[-2000:]}")
         return output
@@ -68,7 +72,7 @@ def _run_subprocess(argv: list[str]) -> tuple[int, str]:
 def parse_status(output: str) -> str:
     line = _STATUS_LINE_RE.search(output)
     if line:
-        word = line.group(1).lower()
+        word = line.group(2).lower()
         for status, pattern in _PATTERNS:
             if pattern.search(word):
                 return status
@@ -80,6 +84,12 @@ def parse_status(output: str) -> str:
     return "unknown"
 
 
+def metadata_name(output: str) -> str | None:
+    """Use the platform's submission receipt, never infer a name from --name."""
+    created = re.search(r"created rjob_name:\s*(\S+)", output)
+    return created.group(1) if created else None
+
+
 def job_name(run_id: str, job_id: int) -> str:
     return f"jevduo-{run_id}-{job_id:02d}"
 
@@ -88,7 +98,10 @@ def watch(client: Client, name: str, *, poll_seconds: float = 60,
           timeout_seconds: float | None = None, sleep=time.sleep) -> str:
     started = time.monotonic()
     while True:
-        status = parse_status(client.get(name))
+        try:
+            status = parse_status(client.get(name))
+        except RjobError:
+            status = "query_error"
         if status in TERMINAL_STATES:
             return status
         if timeout_seconds is not None and time.monotonic() - started >= timeout_seconds:

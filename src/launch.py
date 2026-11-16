@@ -29,8 +29,7 @@ def agent_env(api_key: str, *, direct_api: bool) -> dict[str, str]:
     }
     env["PATH"] = str(AGENT_PYTHON.parent) + os.pathsep + env.get("PATH", "")
     env[API_KEY_ENV] = api_key
-    # Each retry runs an immutable source snapshot with a shared installed venv.
-    # Its source must win over the venv's editable development-checkout mapping.
+    # Use this checkout's source ahead of any editable mapping in the installed venv.
     env["PYTHONPATH"] = os.pathsep.join([str(ROOT / "src"), str(ROOT / "src" / "upstream")])
     env["PYTHONUNBUFFERED"] = "1"
     return env

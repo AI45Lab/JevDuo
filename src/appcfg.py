@@ -15,14 +15,26 @@ from launch import API_KEY_ENV
 COORDINATE_SPACES = ("image_pixels", "normalized_1000")
 
 
+def require_orchestration(harness: dict) -> dict:
+    """Validate the sole execution mode before creating configs, VMs or jobs."""
+    config = harness.get("orchestration")
+    if not isinstance(config, dict):
+        raise ValueError("harness.orchestration is required; Desktop supports orchestration only")
+    if "enabled" in config:
+        raise ValueError(
+            "harness.orchestration.enabled was removed; orchestration is the only execution mode"
+        )
+    for key in ("max_cycles", "max_seconds", "max_model_calls", "max_tool_calls"):
+        if key not in config:
+            raise ValueError(f"harness.orchestration.{key} is required")
+    return config
+
+
 def execution_harness(harness: dict, actor_seconds: float) -> dict:
     """Tell Slow the actual remaining acting time, including across task phases."""
     scoped = deepcopy(harness)
-    orchestration = scoped.get("orchestration", {})
-    if orchestration.get("enabled"):
-        orchestration["max_seconds"] = min(
-            float(orchestration.get("max_seconds", actor_seconds)), max(1., float(actor_seconds)),
-        )
+    orchestration = require_orchestration(scoped)
+    orchestration["max_seconds"] = min(float(orchestration["max_seconds"]), max(1., float(actor_seconds)))
     return scoped
 
 
@@ -64,6 +76,8 @@ def app_config(*, vm_ip: str, server_port: int, max_steps: int, artifact_root: P
     coordinate = harness.get("coordinate", {})
     prompt = harness.get("prompt", {})
     execution = harness.get("execution", {})
+    orchestration = dict(require_orchestration(harness))
+    orchestration["max_cycles"] = min(int(orchestration["max_cycles"]), int(max_steps))
     return {
         "agent_config_path": "agent.yaml",
         "artifacts": {"root_dir": str(artifact_root)},
@@ -73,7 +87,7 @@ def app_config(*, vm_ip: str, server_port: int, max_steps: int, artifact_root: P
             "model_response_recovery": bool(execution.get("model_response_recovery", True)),
             "no_tool_call_attempts": int(execution.get("no_tool_call_attempts", 1)),
         },
-        "orchestration": dict(harness.get("orchestration", {})),
+        "orchestration": orchestration,
         "context_management": {"mode": harness.get("context_management", {}).get("mode", "off")},
         "evaluation": {"enabled": bool(harness.get("evaluation", {}).get("enabled", False))},
         "observation": {

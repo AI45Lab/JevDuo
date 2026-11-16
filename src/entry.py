@@ -19,6 +19,7 @@ import recorder
 import scoring
 import worker_limits
 from actor_run import ActorError, run_actor
+from appcfg import require_orchestration
 from launch import classify
 from phase_run import run_phases
 from vm import Vm
@@ -109,6 +110,7 @@ def run_task(vm: Vm, spec: dict, task: dict, job_root: Path) -> dict:
 
 
 def run_job(spec: dict) -> dict:
+    require_orchestration(spec["harness"])
     for name in ("TYPESAFE_API_KEY", "TYPESAFE_MODEL", "TYPESAFE_BASE_URL"):
         if name in spec.get("subagent_env", {}):
             os.environ[name] = str(spec["subagent_env"][name])

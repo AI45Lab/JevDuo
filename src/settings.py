@@ -13,6 +13,8 @@ from pathlib import Path
 
 import yaml
 
+from appcfg import require_orchestration
+
 TASK_IDS = tuple(f"{number:03d}" for number in range(1, 109))
 
 
@@ -27,6 +29,7 @@ def load(path: str | Path) -> dict:
     for section in ("project", "models", "harness", "pool", "cluster", "benchmark"):
         if section not in data:
             raise ConfigError(f"配置缺少段: {section}")
+    require_orchestration(data["harness"])
     return data
 
 
@@ -99,6 +102,7 @@ def render_spec(config: dict, *, run_id: str, job_id: int, tasks: list[str],
                 api_name: str, api: dict, run_root: Path) -> dict:
     benchmark = config["benchmark"]
     harness = config["harness"]
+    require_orchestration(harness)
     gitlab = ""
     token_file = benchmark.get("gitlab_token_file")
     if token_file and Path(token_file).is_file():

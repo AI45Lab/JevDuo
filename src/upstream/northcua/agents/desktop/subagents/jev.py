@@ -15,6 +15,7 @@ from typing import Literal
 import httpx
 from jev_desktop import AgentDesktop, DesktopConfig, JevLoop, Limits, RunOptions, Scope, TypeSafeModel
 from jev_desktop.desktop import CATALOG
+from jev_desktop.desktop import delivery_evidence
 from jev_desktop.text_model import INSTRUCTIONS
 from pydantic import Field, StrictBool, StrictInt
 
@@ -25,6 +26,7 @@ from northcua.agentkit.orchestration.contracts import (
     SubagentRuntime,
     SubagentSpec,
 )
+from northcua.agentkit.orchestration.runtime import BudgetExceeded
 from northcua.core.config import DesktopPolicyConfig
 from northcua.core.config_base import GuiJevConfig
 
@@ -54,7 +56,9 @@ class JevOptions(ContractModel):
 
 
 class _Stopped(RuntimeError):
-    pass
+    def __init__(self, message, *, result=None, dispatched=False):
+        super().__init__(message)
+        self.result, self.dispatched = result, dispatched
 
 
 class _Bridge:
@@ -64,6 +68,7 @@ class _Bridge:
         self.cleaning = False
         self.active = None
         self.execution_diagnostics = []
+        self.pending_action = None
 
     def call(self, factory, *, kind="model", cleanup=False):
         async def guarded():
@@ -78,11 +83,11 @@ class _Bridge:
         try:
             value = future.result()
         except concurrent.futures.CancelledError:
-            raise _Stopped("gui_jev interrupted") from None
+            raise _Stopped("gui_jev interrupted", dispatched=True) from None
         finally:
             self.active = None
         if self.stopping.is_set() and not cleanup:
-            raise _Stopped("gui_jev interrupted")
+            raise _Stopped("gui_jev interrupted", result=value, dispatched=True)
         return value
 
     def stop(self):
@@ -114,11 +119,49 @@ class _Desktop(AgentDesktop):
         self.bridge = bridge
         self.app_inventory = {}
 
+    def _action(self, operation, call, *, window_id=None, ref=None, native=False):
+        receipt = None
+        try:
+            result = call()
+            receipt = delivery_evidence(result) if native else result
+            return result
+        except BudgetExceeded:
+            raise  # ScopedRuntime rejects exhausted budgets before issuing the tool call.
+        except BaseException as error:
+            if isinstance(error, _Stopped) and not error.dispatched:
+                raise
+            raw = getattr(error, "result", None)
+            receipt = delivery_evidence(raw) if isinstance(raw, dict) else {"delivery": "delivery_uncertain"}
+            raise
+        finally:
+            if receipt is not None:
+                # Do not retain argv/text or unredacted native response bodies. Without a
+                # yielded turn, the target is deliberately unresolved within this window.
+                self.bridge.pending_action = {
+                    "operation": operation, "target": "*", "ref": ref, "window_id": window_id,
+                    "ok": receipt.get("ok", False),
+                    "delivery": receipt.get("delivery") or "delivery_uncertain",
+                    "error_code": (receipt.get("error") or {}).get("code"),
+                }
+
+    def execute(self, scope, operation, node, text):
+        execute = super().execute
+        if operation in ("WAIT", "DRILL", "WIDEN"):
+            return execute(scope, operation, node, text)
+        return self._action(
+            operation, lambda: execute(scope, operation, node, text),
+            window_id=scope.window_id, ref=node.get("ref_id") if node else None,
+        )
+
     def cli(self, *argv):
         previous = self.bridge.cleaning
         self.bridge.cleaning |= argv == ("cursor-overlay", "disable")
         try:
-            result = super().cli(*argv)
+            cli = super().cli
+            if argv and argv[0] == "launch":
+                result = self._action("LAUNCH", lambda: cli(*argv), native=True)
+            else:
+                result = cli(*argv)
             if self.bridge.cleaning and not result.get("ok"):
                 raise RuntimeError("gui_jev cursor cleanup failed")
             if argv == ("list-apps",) and result.get("ok"):
@@ -270,6 +313,7 @@ class JevSubagent:
                 ),
                 events=events,
             )
+            bridge.pending_action = None  # Application-selection turns are already in events.
             if selected is None:
                 return events
             if calls >= self.limits.calls:
@@ -280,7 +324,28 @@ class JevSubagent:
             with closing(loop.run(goal, replace(options, scope=selected))) as iterator:
                 for event in iterator:
                     events.append(event)
+                    if "turn" in event:
+                        bridge.pending_action = None
             return events
+
+        def partial_result(error):
+            summary = feedback(events, execution_diagnostics=bridge.execution_diagnostics)
+            action = bridge.pending_action
+            if action is not None:
+                summary["interrupted_action"] = action
+                if action["delivery"] != "not_delivered":
+                    summary["unsafe_to_replay"].append(action)
+                    summary["unresolved_delivery"] = True
+                    if action["window_id"] is not None:
+                        summary["screen"]["window_id"] = action["window_id"]
+                    summary["recovery"]["must_reobserve"] = True
+            return SubagentResult(
+                subgoal_id=request.contract.subgoal_id,
+                attempt_id=request.attempt_id,
+                outcome="failed",
+                exit_reason=type(error).__name__,
+                summary=bounded_json(summary),
+            )
 
         worker = asyncio.create_task(asyncio.to_thread(run))
         try:
@@ -296,15 +361,9 @@ class JevSubagent:
                     },
                 }
             )
-            error.subagent_result = SubagentResult(
-                subgoal_id=request.contract.subgoal_id,
-                attempt_id=request.attempt_id,
-                outcome="failed",
-                exit_reason=type(error).__name__,
-                summary=bounded_json(feedback(events, execution_diagnostics=bridge.execution_diagnostics)),
-            )
+            error.subagent_result = partial_result(error)
             raise
-        except BaseException:
+        except BaseException as error:
             bridge.stop()
             # A cancelled wrapper must not return while the synchronous loop can still act.
             while not worker.done():
@@ -312,6 +371,8 @@ class JevSubagent:
                     await asyncio.shield(worker)
             with suppress(BaseException):
                 worker.result()
+            events.append({"stop": "cancelled", "error": {"code": type(error).__name__}})
+            error.subagent_result = partial_result(error)
             raise
         terminal = events[-1] if events else {}
         stop = terminal.get("stop", "no_terminal_event")

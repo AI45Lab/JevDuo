@@ -47,7 +47,7 @@ from northcua.core.budget import AgentStepBudget
 from northcua.core.config import NorthCUAAppConfig
 from northcua.core.coordinates import CoordinateTarget, coordinate_policy_context_values, policy_from_config
 from northcua.core.enums import CoordinateSpace, ResultStatus
-from northcua.core.models import CommandExecutionResultRecord, ObservationContext
+from northcua.core.models import CommandExecutionResultRecord, ObservationContext, RoundInput
 from northcua.core.protocol import CommandResultPayload
 from northcua.core.terminal import AgentTerminalDecision
 from northcua.platforms.desktop import DesktopPlatformRuntime
@@ -239,6 +239,39 @@ class ScriptedTransport:
 
 
 class OrchestrationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_default_desktop_runtime_is_always_orchestrated(self):
+        self.config = NorthCUAAppConfig(agent_config_path="unused", evaluation={"enabled": False})
+        self.service.app_config = self.config
+        result = await self.run_script([{"action": "SUCCESS"}])
+        self.assertEqual(result.steps[0].orchestration.decision.action, "SUCCESS")
+        self.assertEqual(self.device.calls, [])
+
+    def test_removed_execution_switch_is_rejected(self):
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled), self.assertRaises(ValueError):
+                NorthCUAAppConfig(agent_config_path="unused", orchestration={"enabled": enabled})
+
+    async def test_single_step_entry_never_runs_a_legacy_executor(self):
+        from northcua.agents.desktop.round_execution.service import RoundExecutionService
+
+        service = object.__new__(RoundExecutionService)
+        service.app_config = NorthCUAAppConfig(agent_config_path="unused")
+        with self.assertRaisesRegex(ValueError, "run_query"):
+            await service.run_round(RoundInput(query="test"))
+
+    async def test_legacy_steps_on_disk_are_rejected_before_model_or_observation(self):
+        await self.run_script([{"action": "SUCCESS"}])
+        old_step = self.rounds.state.step_logs[0].model_copy(update={"orchestration": None})
+        self.store.step_log_path.write_text(old_step.model_dump_json() + "\n")
+        self.rounds.state.step_logs.clear()
+        await self.state_store.save(self.rounds.state, storage=GlobalStorage())
+        observations = self.observer.calls
+        runtime = self.make_runtime([])
+        with self.assertRaisesRegex(ValueError, "Legacy Desktop sessions"):
+            await runtime.session_runtime.hydrate()
+        self.assertEqual(self.observer.calls, observations)
+        self.assertEqual(self.model.contexts, [])
+
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -246,7 +279,7 @@ class OrchestrationTest(unittest.IsolatedAsyncioTestCase):
         self.config = NorthCUAAppConfig(
             agent_config_path="unused",
             evaluation={"enabled": False},
-            orchestration={"enabled": True, "max_cycles": 4, "min_subagent_steps": 0},
+            orchestration={"max_cycles": 4, "min_subagent_steps": 0},
         )
         self.store = NorthCUAArtifactStore(self.root, self.config.artifacts, session_id="test")
         self.rounds = NorthCUARoundCoordinator("test")
@@ -283,7 +316,7 @@ class OrchestrationTest(unittest.IsolatedAsyncioTestCase):
             user_id="test",
             llm_trace_writer=LLMTraceLogWriter(self.store.llm_trace_log_path),
         )
-        self.factory = DesktopRuntimeFactory(self.store, self.rounds, self.service, None)
+        self.factory = DesktopRuntimeFactory(self.store, self.rounds, self.service)
 
     def make_runtime(self, actions):
         runtime = self.factory.build_round_runtime(options=DesktopRuntimeOptions())
@@ -855,7 +888,8 @@ class OrchestrationTest(unittest.IsolatedAsyncioTestCase):
             server_port=5000,
             max_steps=99,
             artifact_root=self.root,
-            harness={"orchestration": {"enabled": True, "max_cycles": 3}},
+            harness={"orchestration": {"max_cycles": 3, "max_seconds": 60,
+                                       "max_model_calls": 100, "max_tool_calls": 1000}},
         )
         self.assertEqual(generated["orchestration"]["max_cycles"], 3)
         self.assertEqual(generated["execution"]["max_agent_iterations_per_round"], 99)
@@ -891,14 +925,14 @@ class OrchestrationTest(unittest.IsolatedAsyncioTestCase):
         facade.rounds, facade.state_store = self.rounds, self.state_store
         facade.runtime_factory, facade.round_execution_service = self.factory, self.service
         self.service.drain_background_tasks = AsyncMock()
-        original = DesktopRuntimeFactory._build_orchestration
+        original = DesktopRuntimeFactory.build_round_runtime
 
-        def build(factory, options):
-            runtime = original(factory, options)
+        def build(factory, *, options):
+            runtime = original(factory, options=options)
             runtime.step_runtime.step_executor.model = ScriptedModel([{"action": "SUCCESS"}])
             return runtime
 
-        patcher = patch.object(DesktopRuntimeFactory, "_build_orchestration", build)
+        patcher = patch.object(DesktopRuntimeFactory, "build_round_runtime", build)
         patcher.start()
         self.addCleanup(patcher.stop)
         return facade

@@ -17,7 +17,9 @@ class WorkerStepRecoveryTest(unittest.TestCase):
                 root = Path(directory)
                 vm = Mock(vm_ip="test-vm", server_port=5000)
                 vm.execute.side_effect = RuntimeError(message)
-                spec = {"run_id": "error", "harness": {"max_steps": 10, "max_wall_seconds": 60},
+                spec = {"run_id": "error", "harness": {"max_steps": 10, "max_wall_seconds": 60,
+                                "orchestration": {"max_cycles": 10, "max_seconds": 60,
+                                                  "max_model_calls": 1300, "max_tool_calls": 1000}},
                         "model": {"name": "scripted", "api_key": "test-only"}, "log": {}}
                 with (
                     patch.object(actor_run, "run_agent", return_value={
@@ -63,7 +65,9 @@ class WorkerStepRecoveryTest(unittest.TestCase):
                 return 0.25
 
             vm = SimpleNamespace(reset=lambda task: None, vm_ip="test-vm", server_port=5000, score=score)
-            spec = {"run_id": "scripted-wall", "harness": {"max_steps": 500, "max_wall_seconds": 10800},
+            spec = {"run_id": "scripted-wall", "harness": {"max_steps": 500, "max_wall_seconds": 10800,
+                                "orchestration": {"max_cycles": 500, "max_seconds": 10800,
+                                                  "max_model_calls": 1300, "max_tool_calls": 1000}},
                     "model": {"name": "scripted", "api_key": "test-only"}, "log": {}}
             with (
                 patch.object(actor_run, "run_agent", run_agent),

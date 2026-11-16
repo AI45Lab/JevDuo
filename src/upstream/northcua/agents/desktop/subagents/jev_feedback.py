@@ -82,6 +82,7 @@ def bounded_json(value: dict, limit: int = 32000) -> str:
                 "stop",
                 "blocked_reason",
                 "last_operation",
+                "interrupted_action",
                 "unsafe_to_replay",
                 "unresolved_delivery",
                 "execution_diagnostics",

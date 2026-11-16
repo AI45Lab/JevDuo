@@ -14,6 +14,45 @@ import phase_run
 
 
 class PhaseRunTest(unittest.TestCase):
+    def test_missing_budget_or_removed_mode_switch_fails_before_setup_or_actor(self):
+        for config in (None, {"enabled": False}, {"enabled": True}, {}):
+            with self.subTest(config=config), tempfile.TemporaryDirectory() as tmp:
+                directory = Path(tmp)
+                spec, vm, phases, _, setups, _ = self.setup_case(directory)
+                if config is None:
+                    del spec["harness"]["orchestration"]
+                else:
+                    spec["harness"]["orchestration"] = config
+                with patch.object(actor_run, "run_agent") as run:
+                    with self.assertRaisesRegex(ValueError, "orchestration"):
+                        phase_run.run_phases(vm, spec, {"id": "069"}, directory, time.perf_counter(), phases)
+                run.assert_not_called()
+                self.assertEqual(setups, [])
+
+    def test_orchestration_requires_usage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            spec, vm, phases, _, _, _ = self.setup_case(directory)
+            with patch.object(actor_run, "run_agent", return_value={
+                "returncode": 0, "terminal_status": "finish", "step_count": 1,
+            }):
+                with self.assertRaises((RuntimeError, FileNotFoundError)):
+                    phase_run.run_phases(vm, spec, {"id": "069"}, directory, time.perf_counter(), phases)
+
+    def test_orchestration_cycle_limit_remains_shared_when_smaller_than_max_steps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            spec, vm, phases, calls, setups, run = self.setup_case(directory)
+            spec["harness"]["orchestration"]["max_cycles"] = 2
+            with patch.object(actor_run, "run_agent", side_effect=run):
+                info, _ = phase_run.run_phases(
+                    vm, spec, {"id": "069"}, directory, time.perf_counter(), phases,
+                )
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(info["step_count"], 2)
+            self.assertEqual(info["phase_stop_reason"], "phase_cycle_budget_exhausted")
+            self.assertEqual(setups, [])
+
     def setup_case(self, directory):
         spec = {
             "run_id": "phased",
@@ -23,8 +62,8 @@ class PhaseRunTest(unittest.TestCase):
                 "max_wall_seconds": 10800,
                 "evaluation_reserve_seconds": 600,
                 "orchestration": {
-                    "enabled": True,
                     "max_cycles": 20,
+                    "max_seconds": 10800,
                     "subagent_steps_per_cycle": 50,
                     "max_model_calls": 1300,
                     "max_tool_calls": 1000,

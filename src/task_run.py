@@ -190,6 +190,12 @@ async def run(args: argparse.Namespace) -> dict:
         result = await app.run_query(DesktopRunRequest(
             session_id=args.session_id, query=args.query,
             max_steps=args.max_steps, max_session_steps=0))
+        metadata = dict(result.terminal_decision).get("metadata", {})
+        usage = metadata.get("usage")
+        if metadata.get("step_unit") != "orchestration_cycle" or not isinstance(usage, dict) or any(
+            kind not in usage for kind in ("model_calls", "tool_calls", "cleanup_tool_calls")
+        ):
+            raise RuntimeError("Desktop actor must return orchestration_cycle metadata and complete usage")
         info.update(
             terminal_status=result.terminal_status,
             hit_step_limit=result.hit_step_limit,
@@ -197,8 +203,8 @@ async def run(args: argparse.Namespace) -> dict:
             terminal_decision=dict(result.terminal_decision),
             step_log_path=str(result.step_log_path),
             runtime_log_path=str(result.runtime_log_path),
-            step_unit=dict(result.terminal_decision).get("metadata", {}).get("step_unit", "model_tool_step"),
-            usage=dict(result.terminal_decision).get("metadata", {}).get("usage", {}),
+            step_unit="orchestration_cycle",
+            usage=usage,
         )
     finally:
         await app.stop()

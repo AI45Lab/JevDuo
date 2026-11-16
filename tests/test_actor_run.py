@@ -25,7 +25,8 @@ class ActorRunTest(unittest.TestCase):
                 vm = Mock(vm_ip="vm", server_port=5000)
                 info = {"returncode": 0, "step_count": 2, **result}
                 harness = {"max_steps": 6, "max_wall_seconds": 100, "evaluation_reserve_seconds": 20,
-                           "orchestration": {"enabled": True, "max_seconds": 100}}
+                           "orchestration": {"max_cycles": 6, "max_seconds": 100,
+                                             "max_model_calls": 100, "max_tool_calls": 1000}}
                 with (
                     patch.object(actor_run, "run_agent", return_value=info) as run,
                     patch.object(actor_run.time, "perf_counter", side_effect=[10, 12]),

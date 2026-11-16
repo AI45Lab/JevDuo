@@ -90,7 +90,6 @@ class NorthCUAAgentFacade(SessionScopedAgentFacade[NorthCUAArtifactStore]):
             artifact_store=artifact_store,
             round_coordinator=self.rounds,
             round_execution_service=self.round_execution_service,
-            terminal_facade=self,
         )
 
     async def run_round(
@@ -101,19 +100,7 @@ class NorthCUAAgentFacade(SessionScopedAgentFacade[NorthCUAArtifactStore]):
         observation_context: ObservationContext | None = None,
         remote_tool_dispatcher: ExternalToolDispatcher | None = None,
     ) -> StepLogRecord:
-        """Run a single queued desktop CUA round.
-
-        Args:
-            round_input: User request and metadata for the round.
-            snapshot: Optional pre-collected desktop snapshot.
-            observation_context: Optional structured observation context.
-            remote_tool_dispatcher: Optional remote callback for externally
-                dispatched desktop tool calls.
-
-        Returns:
-            Persisted step log record for the completed round.
-        """
-        await self.hydrate_state()
+        """Reject the removed single-step entry; Desktop tasks use run_query."""
         return await self.round_execution_service.run_round(
             round_input,
             snapshot=snapshot,
@@ -309,7 +296,7 @@ class NorthCUAAgentFacade(SessionScopedAgentFacade[NorthCUAArtifactStore]):
         if request.session_id != self.session_id:
             raise ValueError(f"Desktop facade session mismatch: expected {self.session_id}, got {request.session_id}")
         runner = DesktopTaskRuntime(self)
-        if request.metadata.get("resume") and self.app_config.orchestration.enabled:
+        if request.metadata.get("resume"):
             await self.hydrate_state()
             if request.query != self.rounds.state.latest_request or self.rounds.state.round_num <= 0:
                 raise ValueError("Resume must refer to the existing task in the same session")
@@ -353,8 +340,6 @@ class NorthCUAAgentFacade(SessionScopedAgentFacade[NorthCUAArtifactStore]):
                     and not step.orchestration.synthetic
                     for step in self.rounds.state.step_logs
                 )
-                if self.app_config.orchestration.enabled
-                else len(result.steps)
             ),
             step_log_path=self.artifact_store.step_log_path,
             runtime_log_path=self.artifact_store.runtime_log_path,
