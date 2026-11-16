@@ -19,7 +19,7 @@ import pytest
 pytest.importorskip("jev_desktop", reason="optional gui_jev integration requires agent-desktop/jev")
 
 from northcua.agentkit.orchestration.contracts import OrchestrationState, SubagentRequest
-from northcua.agentkit.orchestration.runtime import Journal, RunBudget, ScopedRuntime
+from northcua.agentkit.orchestration.runtime import Journal, RunBudget, ScopedRuntime, read_records
 from northcua.agents.desktop.subagents import jev
 from northcua.core.config import DesktopPolicyConfig
 from northcua.core.config_base import GuiJevConfig, OrchestrationConfig
@@ -804,6 +804,71 @@ class JevTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(harness.model.contexts[2]["previous_result"]["exit_reason"],
                          "unsafe_write_replay_blocked")
         self.assertEqual([c[0] for c in self.http.commands].count("set-value"), 1)
+
+    async def test_cancelled_write_survives_disk_resume_and_blocks_new_subgoal(self):
+        await self.cancel_and_resume_write()
+
+    async def test_cancelled_write_remains_blocked_after_an_intervening_cycle(self):
+        await self.cancel_and_resume_write(intervene=True)
+
+    async def test_cancelled_explicit_non_delivery_remains_retryable_after_resume(self):
+        await self.cancel_and_resume_write(safe=True)
+
+    async def cancel_and_resume_write(self, *, intervene=False, safe=False):
+        harness = fixtures.OrchestrationTest()
+        await harness.asyncSetUp()
+        self.addCleanup(harness.doCleanups)
+        harness.config.desktop.backend = "osworld"
+        harness.config.desktop.osworld.vm_ip = "current-vm"
+        harness.config.orchestration.gui_jev.enabled = True
+        first = self.request.contract.model_copy(deep=True)
+        first.agent_input["text"] = ["cancelled write"]
+        self.http.write_ready, self.http.write_release = asyncio.Event(), asyncio.Event()
+        self.http.set_failure = failure(safe=True) if safe else None
+        task = asyncio.create_task(harness.run_script([
+            {"action": "CONTINUE", "contract": first.model_dump()},
+        ]))
+        try:
+            await asyncio.wait_for(self.http.write_ready.wait(), 3)
+            task.cancel()
+            await asyncio.sleep(0)
+            self.assertFalse(task.done())
+            self.http.write_release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 3)
+        finally:
+            self.http.write_release.set()
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        cancelled = list(read_records(harness.store.query_dir() / "orchestration.jsonl"))[-1]["state"]
+        before_resume = harness.rounds.state
+        # The session checkpoint predates the interrupted dispatch. Recovery must read the journal.
+        self.assertIsNone(harness.sessions.session.context["orchestration"])
+        self.http.write_ready = self.http.write_release = None
+        self.http.set_failure = None
+        self.http.choices = iter(["1", "TYPE_TEXT", "DONE"])
+        second = first.model_copy(deep=True)
+        second.subgoal_id = "new-subgoal-after-cancellation"
+        actions = []
+        if intervene:
+            harness.factory.subagents.register(fixtures.FakeSubagent())
+            actions.append({"action": "CONTINUE", "contract": fixtures.contract(
+                subgoal_id="intervening-cycle").model_dump()})
+        actions.extend([{"action": "CONTINUE", "contract": second.model_dump()}, {"action": "SUCCESS"}])
+        resumed = await harness.run_script(actions)
+        self.assertEqual(resumed.status.value, "success")
+        self.assertIsNot(harness.rounds.state, before_resume)
+        self.assertEqual([c[0] for c in self.http.commands].count("set-value"), 2 if safe else 1)
+        previous = harness.model.contexts[0]["previous_result"]
+        self.assertEqual(previous["exit_reason"], "CancelledError")
+        self.assertEqual(previous["attempt_id"], cancelled["pending"]["attempt_id"])
+        self.assertEqual(cancelled["previous_result"]["summary"], previous["summary"])
+        self.assertEqual(previous["usage"], cancelled["pending_usage"])
+        self.assertNotIn("cancelled write", previous["summary"])
+        self.assertEqual(json.loads(previous["summary"])["unresolved_delivery"], not safe)
+        self.assertEqual(harness.model.contexts[-1]["previous_result"]["exit_reason"],
+                         "done" if safe else "unsafe_write_replay_blocked")
 
     async def test_cursor_setup_budget_failure_can_disable_overlay(self):
         self.agent = self.make_agent(options={"cursor": True})

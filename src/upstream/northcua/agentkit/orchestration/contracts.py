@@ -89,17 +89,6 @@ class SubagentRequest(ContractModel):
     history: list[JsonObject] = Field(default_factory=list)
 
 
-class OrchestrationState(ContractModel):
-    round_num: int
-    started_at: float
-    usage: Usage = Field(default_factory=Usage)
-    pending: SubagentRequest | None = None
-    pending_usage: Usage = Field(default_factory=Usage)
-    previous_result: SubagentResult | None = None
-    attempted_subgoals: list[str] = Field(default_factory=list)
-    terminal: bool = False
-
-
 class CycleRecord(ContractModel):
     cycle_id: str
     synthetic: bool = False
@@ -109,6 +98,19 @@ class CycleRecord(ContractModel):
     subagent_result: SubagentResult | None = None
     usage: Usage = Field(default_factory=Usage)
     exit_reason: str = ""
+
+
+class OrchestrationState(ContractModel):
+    round_num: int
+    started_at: float
+    usage: Usage = Field(default_factory=Usage)
+    pending: SubagentRequest | None = None
+    pending_usage: Usage = Field(default_factory=Usage)
+    previous_result: SubagentResult | None = None
+    # Cancelled attempts precede the next completed cycle at this session step.
+    interrupted_cycles: dict[int, list[CycleRecord]] = Field(default_factory=dict)
+    attempted_subgoals: list[str] = Field(default_factory=list)
+    terminal: bool = False
 
 
 class SlowContext(ContractModel):

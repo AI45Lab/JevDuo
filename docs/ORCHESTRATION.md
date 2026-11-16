@@ -124,8 +124,11 @@ RoundState 与原 SessionManager 保存编排状态，只有外层 Runtime 推�
 跨进程恢复；Session backend 本身为 memory 时，不能把进程退出后的 Session 视为仍可用。
 已存在的持久化 Session 可以用相同 query、session_id 和
 `DesktopRunRequest(metadata={"resume": True})` 显式恢复。
-恢复会对账主步骤，重新观察，将未完成 attempt 标为 interrupted 后交回 Slow；不会自动
-重放子目标。已终止任务不能 resume，应创建新轮次或 Session。
+恢复会对账主步骤并重新观察。若取消时取得了身份匹配的子代理部分结果，会保留原始
+退出原因与投递标记；无部分结果的未完成 attempt 才标为 interrupted。取消回执作为独立
+恢复历史持久化，传给 Slow 和后续子代理，即使中间又执行了其他周期也不会丢失；这些
+记录不推进已完成周期计数，已消耗的调用额度仍保留。不会自动重放子目标。
+已终止任务不能 resume，应创建新轮次或 Session。
 
 环境动作与本地状态不是原子事务，不保证 exactly-once。日志损坏或尾部撕裂会明确拒绝恢复，
 不会覆盖或接续写入坏记录，应保留证据并使用新 Session。

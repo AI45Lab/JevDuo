@@ -222,7 +222,7 @@ class DesktopOrchestrationPorts:
             previous = self.state.previous_result
             if not (
                 previous is not None and previous.attempt_id == pending.attempt_id
-                and previous.exit_reason == "unsafe_to_replay"
+                and previous.subgoal_id == pending.contract.subgoal_id
             ):
                 self.state.previous_result = SubagentResult(
                     subgoal_id=pending.contract.subgoal_id,
@@ -284,17 +284,22 @@ class DesktopOrchestrationPorts:
             "platform": snapshot.platform_name,
         }
 
+    def cycle_history(self, round_num: int) -> list[CycleRecord]:
+        history = {
+            step.session_step: [step.orchestration]
+            for step in self.coordinator.state.step_logs
+            if step.round_num == round_num and step.orchestration is not None
+        }
+        for session_step, interrupted in self.state.interrupted_cycles.items():
+            history[session_step] = [*interrupted, *history.get(session_step, [])]
+        return [cycle for session_step in sorted(history) for cycle in history[session_step]]
+
     def project(self, context):
         assert self.observation is not None
-        history = [
-            step.orchestration
-            for step in self.coordinator.state.step_logs
-            if step.round_num == context.cursor.round_num and step.orchestration is not None
-        ]
         payload = SlowContext(
             task=context.query,
             observation=self.observation_ref(),
-            history=history,
+            history=self.cycle_history(context.cursor.round_num),
             notes=self.memory.active_entries(context.cursor.round_num),
             previous_result=self.state.previous_result,
             usage=self.state.usage,
@@ -546,9 +551,7 @@ class DesktopOrchestrationPorts:
             observation=self.observation_ref(),
             notes=self.memory.active_entries(context.cursor.round_num),
             history=[
-                step.orchestration.model_dump(mode="json")
-                for step in self.coordinator.state.step_logs
-                if step.round_num == context.cursor.round_num and step.orchestration is not None
+                cycle.model_dump(mode="json") for cycle in self.cycle_history(context.cursor.round_num)
             ],
         )
 
@@ -652,24 +655,28 @@ class DesktopOrchestrationPorts:
         self.state.pending_usage = scoped.usage
         self.state.attempted_subgoals.append(contract.subgoal_id)
         self.journal.write("dispatch_started", self.state, cycle_id=self.cycle_id)
+
+        def partial_result(error):
+            partial = (
+                interrupted_general_result or getattr(error, "subagent_result", None)
+                or getattr(error.__cause__, "subagent_result", None)
+            )
+            if (isinstance(partial, SubagentResult) and partial.subgoal_id == contract.subgoal_id
+                    and partial.attempt_id == request.attempt_id):
+                return partial
+            return None
+
+        cancelled = None
         try:
             async with asyncio.timeout(scoped.remaining_budget().max_seconds):
                 result = SubagentResult.model_validate(await agent.run(request, scoped))
             if result.subgoal_id != contract.subgoal_id or result.attempt_id != request.attempt_id:
                 raise ValueError("subagent_result_identity_mismatch")
-        except asyncio.CancelledError:
-            with suppress(Exception):
-                self.journal.write("dispatch_cancelled", self.state, cycle_id=self.cycle_id)
+        except asyncio.CancelledError as error:
+            cancelled = error
             raise
         except Exception as exc:
-            partial = (
-                interrupted_general_result or getattr(exc, "subagent_result", None)
-                or getattr(exc.__cause__, "subagent_result", None)
-            )
-            result = partial if (
-                isinstance(partial, SubagentResult)
-                and partial.subgoal_id == contract.subgoal_id and partial.attempt_id == request.attempt_id
-            ) else SubagentResult(
+            result = partial_result(exc) or SubagentResult(
                 subgoal_id=contract.subgoal_id,
                 attempt_id=request.attempt_id,
                 outcome="failed",
@@ -678,6 +685,21 @@ class DesktopOrchestrationPorts:
             )
         finally:
             abandoned_operations = await scoped.close()
+            if cancelled is not None:
+                partial = partial_result(cancelled)
+                if partial is not None:
+                    partial = partial.model_copy(deep=True)
+                    partial.usage = scoped.usage.model_copy()
+                    partial.last_observation = scoped.last_observation
+                    partial.trace_ref = str(self.journal.path)
+                    self.state.previous_result = partial
+                    self.state.interrupted_cycles.setdefault(context.cursor.session_step, []).append(CycleRecord(
+                        cycle_id=self.cycle_id, synthetic=True, observation_id=decision.observation_id,
+                        decision=decision, subagent_result=partial, usage=self.state.usage.model_copy(),
+                        exit_reason="cancelled",
+                    ))
+                with suppress(Exception):
+                    self.journal.write("dispatch_cancelled", self.state, cycle_id=self.cycle_id)
         if abandoned_operations:
             result.outcome, result.exit_reason = "yielded", "background_operations_cancelled"
         result.usage = scoped.usage.model_copy()

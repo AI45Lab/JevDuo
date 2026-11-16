@@ -431,6 +431,68 @@ class OrchestrationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.rounds.state.orchestration.usage.tool_calls, 1)
         self.assertEqual(self.rounds.state.orchestration.usage.model_calls, 2)
 
+    async def test_cancellation_rejects_partial_results_from_other_attempts_or_subgoals(self):
+        for field in ("attempt_id", "subgoal_id"):
+            with self.subTest(field=field):
+                harness = OrchestrationTest()
+                await harness.asyncSetUp()
+                self.addCleanup(harness.doCleanups)
+
+                class ForeignPartial(FakeSubagent):
+                    async def run(self, request, runtime, field=field):
+                        await runtime.execute("click", {})
+                        error = asyncio.CancelledError()
+                        values = {"attempt_id": request.attempt_id, "subgoal_id": request.contract.subgoal_id}
+                        values[field] = "foreign-identity"
+                        error.subagent_result = SubagentResult(
+                            **values, outcome="failed", exit_reason="CancelledError",
+                            summary='{"unresolved_delivery":true}',
+                        )
+                        raise error
+
+                harness.factory.subagents.register(ForeignPartial())
+                with self.assertRaises(asyncio.CancelledError):
+                    await harness.run_script([{"action": "CONTINUE", "contract": contract().model_dump()}])
+                self.assertIsNone(harness.rounds.state.orchestration.previous_result)
+                self.assertEqual(harness.rounds.state.orchestration.interrupted_cycles, {})
+                await harness.run_script([{"action": "SUCCESS"}])
+                self.assertEqual(harness.model.contexts[0]["previous_result"]["exit_reason"], "interrupted")
+
+    async def test_multiple_cancelled_receipts_survive_history_and_do_not_advance_cycles(self):
+        class PartialAgent(FakeSubagent):
+            async def run(self, request, runtime):
+                self.calls += 1
+                await runtime.execute("click", {})
+                result = SubagentResult(
+                    subgoal_id=request.contract.subgoal_id, attempt_id=request.attempt_id,
+                    outcome="failed", exit_reason="CancelledError", summary='{"unresolved_delivery":true}',
+                )
+                if self.calls <= 2:
+                    error = asyncio.CancelledError()
+                    error.subagent_result = result
+                    raise error
+                return result.model_copy(update={"outcome": "achieved", "exit_reason": "claimed"})
+
+        agent = PartialAgent()
+        self.factory.subagents.register(agent)
+        for subgoal_id in ("cancelled-first", "cancelled-second"):
+            with self.assertRaises(asyncio.CancelledError):
+                await self.run_script([{"action": "CONTINUE", "contract": contract(
+                    subgoal_id=subgoal_id).model_dump()}])
+        self.assertEqual(self.rounds.state.step_logs, [])
+        self.assertEqual(len(self.rounds.state.orchestration.interrupted_cycles[1]), 2)
+        await self.run_script([
+            {"action": "CONTINUE", "contract": contract(subgoal_id="completed-third").model_dump()},
+            {"action": "SUCCESS"},
+        ])
+        history = self.model.contexts[-1]["history"]
+        self.assertEqual([cycle["subagent_result"]["subgoal_id"] for cycle in history],
+                         ["cancelled-first", "cancelled-second", "completed-third"])
+        self.assertEqual([cycle["synthetic"] for cycle in history], [True, True, False])
+        self.assertEqual(self.rounds.state.session_step, 3)
+        self.assertEqual(self.rounds.state.orchestration.usage.tool_calls, 3)
+        self.assertEqual(self.rounds.state.orchestration.usage.model_calls, 4)
+
     async def test_subagent_budget_stops_before_second_effect(self):
         agent = FakeSubagent("overrun")
         self.factory.subagents.register(agent)
