@@ -1,0 +1,6 @@
+# Exact historical machine-SID findings in the Windows E2E plan. These
+# machine identifiers are absent from the current tree and are not credentials.
+# This only acknowledges the two existing history occurrences; it does not
+# remove them or exempt later commits or other privacy findings.
+483a31d036175f54c34ce1fbd2cea762560ab78c:docs/plans/2026-08-16-001-feat-windows-2-12-fixture-e2e-harness-plan.md:ad-windows-account-sid:68
+483a31d036175f54c34ce1fbd2cea762560ab78c:docs/plans/2026-08-16-001-feat-windows-2-12-fixture-e2e-harness-plan.md:ad-windows-account-sid:167

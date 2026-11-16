@@ -1,0 +1,190 @@
+---
+title: Mouse commands
+navTitle: Mouse
+description: Reference for hover, drag, mouse-move, mouse-click, mouse-down, mouse-up, and mouse-wheel. Cursor movement needs --headed, and the held-button commands fail closed.
+---
+
+Every mouse command moves the real cursor, so each one needs the global `--headed` flag. Without it the command returns `POLICY_DENIED` with `not_delivered` and sends nothing:
+
+```json
+{
+  "code": "POLICY_DENIED",
+  "message": "hover moves the cursor and is disabled in headless mode",
+  "recovery": { "strategy": "request_explicit_policy_then_retry_original", "retryable": true, "requires_fresh_snapshot": false },
+  "disposition": { "delivery": "not_delivered", "retry": "safe" }
+}
+```
+
+Read [Headed mode](/desktop/guides/headed-mode) before you add the flag. Coordinates are absolute screen points written `x,y`; write a negative value with `=` so the shell does not read it as a flag (`--xy=-100,50`). Raw coordinates carry no window identity and never focus an app; a ref target focuses its exact window first. The pointer commands return an [OperationReport](/desktop/json-output#operationreport) with a `pointer` target. The examples are real output from Linux X11.
+
+## hover
+
+Moves the cursor to an element's center or to a point.
+
+```bash
+agent-desktop --headed hover @s8f3k2p9:e5
+agent-desktop --headed hover --xy 640,400
+```
+
+<table>
+  <thead>
+    <tr><th>Flag or argument</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>REF</code></td><td>none</td><td>Qualified ref. Wins over <code>--xy</code>.</td></tr>
+    <tr><td><code>--xy X,Y</code></td><td>none</td><td>Absolute coordinates. One of <code>REF</code> or <code>--xy</code> is required.</td></tr>
+    <tr><td><code>--duration MS</code></td><td>none</td><td>Reserved. A positive value is rejected; run <code>hover</code>, then <code>wait MS</code>.</td></tr>
+    <tr><td><code>--timeout-ms MS</code></td><td><code>5000</code></td><td>Budget for the ref to resolve and become actionable.</td></tr>
+  </tbody>
+</table>
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "hover",
+  "data": {
+    "action": "mouse-move",
+    "details": { "delivered_events": 1 },
+    "disposition": { "delivery": "delivered_unverified", "retry": "unsafe" },
+    "steps": [{ "label": "pointer_move", "mechanism": "physical_synthetic", "outcome": "succeeded" }],
+    "target": { "kind": "pointer", "point": { "x": 640.0, "y": 400.0 } },
+    "x": 640.0,
+    "y": 400.0
+  }
+}
+```
+
+For a ref, the cursor goes to the center of the live bounds after visibility, stability, and hit-test checks. On macOS the position is read back and the result is `delivered_verified`. Errors: `INVALID_ARGS` for a missing target or bad coordinates; `ACTION_NOT_SUPPORTED` with cause `wayland_session` on Linux Wayland; `ACTION_FAILED` when another element covers the target; the ref errors `STALE_REF`, `AMBIGUOUS_TARGET`, and `SNAPSHOT_NOT_FOUND`.
+
+## drag
+
+Presses at one point, moves to another, and releases.
+
+```bash
+agent-desktop --headed drag --from @s8f3k2p9:e1 --to @s8f3k2p9:e5
+agent-desktop --headed drag --from-xy 100,200 --to-xy 400,500 --drop-delay 800
+```
+
+<table>
+  <thead>
+    <tr><th>Flag</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>--from REF</code>, <code>--from-xy X,Y</code></td><td>required, one of</td><td>Source element or point.</td></tr>
+    <tr><td><code>--to REF</code>, <code>--to-xy X,Y</code></td><td>required, one of</td><td>Destination element or point. The two kinds can be mixed.</td></tr>
+    <tr><td><code>--duration MS</code></td><td>platform default</td><td>Length of the movement, at most 60000.</td></tr>
+    <tr><td><code>--drop-delay MS</code></td><td><code>500</code> (<code>150</code> on Linux)</td><td>Hold over the destination before releasing, so the drop target activates. At most 10000.</td></tr>
+    <tr><td><code>--timeout-ms MS</code></td><td><code>5000</code></td><td>Budget for the whole gesture. <code>--duration</code> plus <code>--drop-delay</code> must be below it.</td></tr>
+    <tr><td><code>--wait-for-scope to|from</code></td><td><code>to</code></td><td>Which endpoint's window a post-action <code>--wait-for</code> polls.</td></tr>
+  </tbody>
+</table>
+
+The destination app is never focused first, because raising it could cover the source. The report describes the gesture (`target.kind: "drag"` with `from` and `to`), not its outcome, so verify the moved item with a fresh snapshot. Native cross-app drag and drop can ignore synthetic events. Errors: `INVALID_ARGS` for a missing endpoint or timing that does not fit `--timeout-ms`, `TIMEOUT` when preparation used up the budget, and the errors listed under [`hover`](#hover).
+
+## mouse-move
+
+Moves the cursor to absolute coordinates.
+
+```bash
+agent-desktop --headed mouse-move --xy 700,450
+```
+
+The report matches the [`hover`](#hover) example. On macOS the position is read back (`details.verification_scope: "pointer_position"`).
+
+## mouse-click
+
+Clicks at absolute coordinates.
+
+```bash
+agent-desktop --headed mouse-click --xy 500,300 [--button left|right|middle] [--count N] [--modifiers NAME]...
+```
+
+<table>
+  <thead>
+    <tr><th>Flag</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>--xy X,Y</code></td><td>required</td><td>Absolute coordinates.</td></tr>
+    <tr><td><code>--button</code></td><td><code>left</code></td><td><code>left</code>, <code>right</code>, or <code>middle</code>.</td></tr>
+    <tr><td><code>--count N</code></td><td><code>1</code></td><td>Clicks, 1 to 100. Use 2 for a double click and 3 for a triple click.</td></tr>
+    <tr><td><code>--modifiers NAME</code></td><td>none</td><td>A modifier held during the click: <code>shift</code>, <code>meta</code>, <code>ctrl</code>, <code>alt</code>. Repeat the flag for several.</td></tr>
+  </tbody>
+</table>
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "mouse-click",
+  "data": {
+    "action": "mouse-click",
+    "count": 1,
+    "details": { "delivered_events": 3 },
+    "disposition": { "delivery": "delivered_unverified", "retry": "unsafe" },
+    "steps": [{ "label": "pointer_click", "mechanism": "physical_synthetic", "outcome": "succeeded" }],
+    "target": { "kind": "pointer", "point": { "x": 1300.0, "y": 880.0 } },
+    "x": 1300.0,
+    "y": 880.0
+  }
+}
+```
+
+`target.point` is where the click was dispatched; it does not prove which app received it. Before you click at bounds read from a snapshot, check `get --property bounds` and its `live` flag.
+
+## mouse-down
+
+Reserved name for pressing and holding a button. It never sends input.
+
+```bash
+agent-desktop --headed mouse-down --xy 500,300 [--button NAME] [--modifiers NAME]...
+```
+
+The first failing check decides the error: a bad argument is `INVALID_ARGS`; headless is `POLICY_DENIED` (`not_delivered`); Linux Wayland is `ACTION_NOT_SUPPORTED` with cause `wayland_session`; everywhere else, `--headed` ends in `ACTION_NOT_SUPPORTED`, `mouse-down is unavailable in stateless mode`, with a disposition of `unknown` and no event sent. Use [`mouse-click`](#mouse-click) or [`drag`](#drag).
+
+## mouse-up
+
+Reserved name for releasing a held button. It fails closed through the same checks as [`mouse-down`](#mouse-down).
+
+```bash
+agent-desktop --headed mouse-up --xy 500,300
+```
+
+## mouse-wheel
+
+Scrolls the mouse wheel at absolute coordinates. Use it for canvases and custom surfaces with no accessibility scroll action; for a scroll area with a ref, use [`scroll`](/desktop/commands/scroll#scroll).
+
+```bash
+agent-desktop --headed mouse-wheel --x 700 --y 400 --dy -2
+```
+
+<table>
+  <thead>
+    <tr><th>Flag</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>--x X</code>, <code>--y Y</code></td><td>required</td><td>Absolute coordinates.</td></tr>
+    <tr><td><code>--dy LINES</code></td><td><code>-3</code> when <code>--dx</code> is 0, else 0</td><td>Vertical lines. Positive scrolls up, negative scrolls down.</td></tr>
+    <tr><td><code>--dx LINES</code></td><td><code>0</code></td><td>Horizontal lines. Positive scrolls right.</td></tr>
+    <tr><td><code>--modifiers NAME</code></td><td>none</td><td>Modifiers held during the scroll; repeatable.</td></tr>
+  </tbody>
+</table>
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "mouse-wheel",
+  "data": {
+    "action": "mouse-wheel",
+    "details": { "delivered_events": 5 },
+    "disposition": { "delivery": "delivered_unverified", "retry": "unsafe" },
+    "dx": 0.0,
+    "dy": -2.0,
+    "steps": [{ "label": "pointer_wheel", "mechanism": "physical_synthetic", "outcome": "succeeded" }],
+    "target": { "kind": "pointer", "point": { "x": 700.0, "y": 400.0 } }
+  }
+}
+```
+
+Platform limits for all mouse commands: Linux needs X11. See [macOS](/desktop/platforms/macos), [Windows](/desktop/platforms/windows), and [Linux](/desktop/platforms/linux).

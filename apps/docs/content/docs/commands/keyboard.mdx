@@ -1,0 +1,91 @@
+---
+title: Keyboard commands
+navTitle: Keyboard
+description: Reference for press, key-down, and key-up. press sends key combos; the held-input commands fail closed on every platform.
+---
+
+`press` is the only command that delivers keys. `key-down` and `key-up` are reserved names: they validate their argument and then refuse. To insert text into a field, use [`type`](/desktop/commands/interaction#type) or [`set-value`](/desktop/commands/interaction#set-value).
+
+## press
+
+Sends a key combo to the focused window, or to one app.
+
+```bash
+agent-desktop press COMBO [--app NAME] [--window-id ID] [--force]
+agent-desktop press ctrl+shift+z
+agent-desktop press return --app gnome-calculator
+```
+
+<table>
+  <thead>
+    <tr><th>Flag or argument</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>COMBO</code></td><td>required</td><td>Keys joined with <code>+</code>. The last part is the key; the parts before it are modifiers.</td></tr>
+    <tr><td><code>--app NAME</code></td><td>focused window</td><td>Send the keys to this application. With <code>--headed</code>, its window is focused first. Several instances with the same name return <code>AMBIGUOUS_TARGET</code>.</td></tr>
+    <tr><td><code>--window-id ID</code></td><td>none</td><td>Target the instance that owns this window.</td></tr>
+    <tr><td><code>--force</code></td><td>off</td><td>Send a combo the platform blocks as dangerous, such as a quit or lock shortcut.</td></tr>
+  </tbody>
+</table>
+
+The combo is lowercased and stripped of spaces, so `Ctrl + A` is `ctrl+a`. Modifiers are `meta` (aliases `cmd`, `command`, `super`, `win`: Command on macOS, the Windows key on Windows, Super on Linux), `ctrl` (`control`), `alt` (`option`), and `shift`. A bare uppercase letter adds Shift. Key names that work everywhere are `return`, `escape`, `tab`, `space`, `delete`, `up`, `down`, `left`, `right`, and `f1` to `f12`. Copy is `cmd+c` on macOS and `ctrl+c` elsewhere.
+
+Keys are physical keyboard input, and `press` does not need `--headed` for an unscoped press. The result is always `delivered_unverified`, because delivery does not prove the shortcut did anything:
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "press",
+  "data": {
+    "action": "press",
+    "disposition": { "delivery": "delivered_unverified", "retry": "unsafe" },
+    "steps": [{ "label": "XTEST.press_key", "mechanism": "physical_synthetic", "outcome": "succeeded", "verified": false }]
+  }
+}
+```
+
+The step label names the platform mechanism; this one is Linux X11. With [post-action wait flags](/desktop/configuration#post-action-wait-flags), the press report moves under `data.after_action`.
+
+Errors specific to `press`:
+
+- `INVALID_ARGS`: an empty combo, an unknown modifier, or an unknown key (`Unknown key name 'foo'`). Nothing is sent.
+- `POLICY_DENIED`: the platform blocks the combo. The disposition is `not_delivered`. Pass `--force` only when you mean it.
+- `ACTION_FAILED` with `details.cause: "frame_not_active"`: a headless scoped press to an app whose window is not active. Nothing is sent. Bring the window forward, or pass `--headed` if focus changes are permitted.
+- `TIMEOUT` with `details.kind: "wait_timeout"`: a `--wait-for` selector never matched. The keys were already delivered, so do not repeat the press blindly.
+
+Platform limits: each platform has its own key names, blocked combos, and scoped-press rules. See [macOS](/desktop/platforms/macos#keys-and-notifications), [Windows](/desktop/platforms/windows#keys), and [Linux](/desktop/platforms/linux).
+
+## key-down
+
+Reserved name for holding a key down. It never sends input.
+
+```bash
+agent-desktop key-down COMBO [--force]
+```
+
+A held key needs a process that can guarantee its release, and every agent-desktop command is a short-lived process. So on every platform, headless or headed, the command parses the combo (`INVALID_ARGS` if bad), applies the blocked-combo check (`POLICY_DENIED` unless `--force`), and then refuses:
+
+```json
+{
+  "version": "2.6",
+  "ok": false,
+  "command": "key-down",
+  "error": {
+    "code": "ACTION_NOT_SUPPORTED",
+    "message": "key-down is unavailable in stateless mode",
+    "suggestion": "Use the atomic press command; held input requires a daemon-owned transaction that can guarantee release",
+    "disposition": { "delivery": "unknown", "retry": "unknown" }
+  }
+}
+```
+
+Nothing was sent, and the command fails the same way every time. Send the whole chord with [`press`](#press), for example `press shift+tab`.
+
+## key-up
+
+Reserved name for releasing a held key. It follows the same steps as [`key-down`](#key-down) and ends with `ACTION_NOT_SUPPORTED` (`key-up is unavailable in stateless mode`).
+
+```bash
+agent-desktop key-up COMBO [--force]
+```

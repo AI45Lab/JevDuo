@@ -1,0 +1,26 @@
+{
+  "pages": [
+    "index",
+    "installation",
+    "quick-start",
+    "skills",
+    "---Core concepts---",
+    "snapshots-and-refs",
+    "skeleton-and-drill-down",
+    "surfaces",
+    "sessions",
+    "json-output",
+    "errors-and-recovery",
+    "---Reference---",
+    "...commands",
+    "configuration",
+    "---Guides---",
+    "...guides",
+    "---Platforms---",
+    "...platforms",
+    "---C library---",
+    "...ffi",
+    "---",
+    "changelog"
+  ]
+}

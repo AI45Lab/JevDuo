@@ -1,0 +1,4 @@
+{
+  "title": "Commands",
+  "pages": ["index", "app-window", "observation", "interaction", "scroll", "keyboard", "mouse", "notifications", "clipboard", "wait", "system", "batch"]
+}

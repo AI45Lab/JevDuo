@@ -1,0 +1,152 @@
+---
+title: Linux
+navTitle: Linux
+description: Requirements, the accessibility bus, per-command capabilities on X11 and Wayland, app naming, surfaces, and troubleshooting for agent-desktop on Linux.
+---
+
+agent-desktop reads Linux apps through AT-SPI over D-Bus. The loop, refs, JSON envelope, sessions, and traces match every platform, so this page covers only what differs on Linux. GNOME is the measured desktop; X11 and Wayland sessions both work and differ in input, capture, and window control. The examples on this page ran on an X11 session (Xvfb with the openbox window manager, no GNOME Shell), so shell surfaces and notifications were not exercised.
+
+## Requirements
+
+- Ubuntu 24.04 or later on x86_64 or aarch64 is the primary validation target, with a glibc 2.35 floor. Action enumeration uses `NActions` and `GetName(i)` to avoid the `GetActions` crash in older ATK bridges shipped with Ubuntu 22.04. This compatibility path does not establish full desktop support on 22.04.
+- A graphical session of the signed-in user, a running AT-SPI bus (`at-spi2-core`), and a window manager. Run agent-desktop from a shell inside that session: the session bus, display, and runtime directory come from its environment. A TTY login, an SSH shell without those variables, a container without a bus, or another user's session sees no apps.
+- X11 keys need XTEST, and Wayland keys need GNOME Mutter RemoteDesktop. The Wayland clipboard needs `wl-clipboard`.
+- On X11, `clipboard-set` needs `agent-desktop-linux-clipboard-owner` beside the binary. npm installs and release archives include it; from source, build it with `cargo build --release -p agent-desktop-linux --bins`.
+- A private state root. A group-writable or world-readable `~/.agent-desktop` makes commands that write there fail with `INTERNAL`. Run `chmod 700` on it, or let agent-desktop create it.
+
+## Check the accessibility bus
+
+Linux has no permission dialog for accessibility; whether the bus answers gates everything. Run `status` first:
+
+```bash
+agent-desktop status
+```
+
+```json
+{
+  "permissions": {
+    "accessibility": { "state": "granted" },
+    "automation": { "state": "not_required" },
+    "screen_recording": { "state": "not_required" }
+  },
+  "platform": "linux",
+  "supported_surfaces": ["window", "sheet", "alert", "menu"]
+}
+```
+
+<table>
+  <thead>
+    <tr><th>State</th><th>What <code>status</code> and <code>list-apps</code> show</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Answered, healthy</td><td><code>accessibility</code> is <code>granted</code>, <code>supported_surfaces</code> lists surfaces, <code>list-apps</code> returns rows</td><td>Normal</td></tr>
+    <tr><td>Answered, empty</td><td><code>granted</code>, but <code>list-apps</code> returns no rows</td><td>The bus is up and no app registered. Start an app, or restart one that started before the bus</td></tr>
+    <tr><td>Unavailable</td><td><code>denied</code> with a suggestion, empty <code>supported_surfaces</code>, and commands fail with <code>PLATFORM_NOT_SUPPORTED</code></td><td>The session bus or the accessibility bus cannot be reached</td></tr>
+  </tbody>
+</table>
+
+An unavailable bus has four usual causes, each reported with the raw D-Bus error in `platform_detail`:
+
+- **No session bus.** Run inside a desktop session, or start one with `dbus-run-session -- COMMAND`.
+- **AT-SPI not installed.** Install `at-spi2-core`. For Flatpak add `--talk-name=org.a11y.Bus`; for snap connect `desktop-legacy` or `unity7`.
+- **Launcher cannot start.** Read `systemctl --user status at-spi-dbus-bus.service`.
+- **Socket gone.** Restart `at-spi-dbus-bus.service`, or log out and back in.
+
+Judge health with `status`, not with `busctl`: on a cold session `org.a11y.Bus` has no owner until its first use. Do not restart a bus you did not start, because other clients on a shared host depend on it.
+
+## What works headless
+
+Ref actions are semantic AT-SPI calls that never move the pointer or change the active window. Under `--headed` on X11, `click`, `right-click`, and `type` try physical input first and fall back to the semantic action only after a `not_delivered` refusal. See [Headed mode](/desktop/guides/headed-mode).
+
+For a nonsecure editable field without `EditableText`, `--headed set-value`
+can use keyboard replacement. It needs a complete readable value, verifies
+that Ctrl+A selected the whole unchanged value, types and checks the result.
+Focus loss after selection stops the write. Unsupported text refuses before
+selection; headless behavior and advertised semantic capabilities stay unchanged.
+
+
+<table>
+  <thead>
+    <tr><th>Group</th><th>Works headless</th><th>Needs <code>--headed</code></th><th>Fails closed or not supported</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Observation and surfaces</td><td><code>snapshot</code>, <code>find</code>, <code>get</code>, <code>is</code>, <code>list-surfaces</code>, on X11 and Wayland</td><td></td><td></td></tr>
+    <tr><td>Ref actions</td><td><code>click</code>, <code>right-click</code>, <code>type</code>, <code>set-value</code>, <code>clear</code>, <code>select</code>, <code>toggle</code>, <code>check</code>, <code>uncheck</code>, <code>expand</code>, <code>collapse</code>, <code>scroll-to</code>, when the element exposes the AT-SPI capability</td><td><code>focus</code>; <code>type</code> into a terminal text node; some Qt and libadwaita combos for <code>select</code></td><td>An element with no semantic route refuses and never falls back to physical input</td></tr>
+    <tr><td>Wheel scrolling</td><td></td><td><code>scroll</code>, <code>mouse-wheel</code>, X11 only</td><td>Headless <code>scroll</code>: <code>POLICY_DENIED</code></td></tr>
+    <tr><td>Pointer gestures</td><td></td><td><code>double-click</code>, <code>triple-click</code>, <code>hover</code>, <code>drag</code>, <code>mouse-click</code>, <code>mouse-move</code>, X11 only</td><td>Wayland: <code>ACTION_NOT_SUPPORTED</code>, cause <code>wayland_session</code></td></tr>
+    <tr><td>Keyboard</td><td><code>press</code> on X11 and Mutter Wayland. A scoped headless <code>press</code> needs the target window already active</td><td>A scoped <code>press</code> to a background app (X11)</td><td>Blocked combos such as <code>alt+f4</code> without <code>--force</code></td></tr>
+    <tr><td>Held input</td><td></td><td></td><td><code>key-down</code>, <code>key-up</code>, <code>mouse-down</code>, <code>mouse-up</code></td></tr>
+    <tr><td>App and window</td><td><code>launch</code>, <code>list-apps</code>, <code>list-windows</code> on X11 and Wayland; window control and graceful <code>close-app</code> on X11</td><td></td><td><code>focus-window</code> and window control on Wayland: <code>ACTION_NOT_SUPPORTED</code></td></tr>
+    <tr><td>Capture</td><td><code>screenshot</code>, <code>list-displays</code></td><td></td><td>X11 under a compositing window manager (GNOME): display and <code>--screen</code> captures return <code>PLATFORM_NOT_SUPPORTED</code> (<code>details.reason: "compositing"</code>); capture one window instead. Wayland: portal consent on first use, and window targets are <code>PLATFORM_NOT_SUPPORTED</code></td></tr>
+    <tr><td>Clipboard</td><td><code>clipboard-get</code>, <code>clipboard-set</code>, <code>clipboard-clear</code> (text, images, file lists)</td><td></td><td>Missing helper or <code>wl-clipboard</code>: <code>PLATFORM_NOT_SUPPORTED</code></td></tr>
+    <tr><td>Wait</td><td>All modes; <code>--notification</code> on GNOME</td><td></td><td></td></tr>
+    <tr><td>Notifications</td><td><code>list-notifications</code>, even with the list closed</td><td>Every dismiss and action, on X11</td><td>GNOME Shell only; otherwise <code>PLATFORM_NOT_SUPPORTED</code></td></tr>
+    <tr><td>Shell surfaces</td><td><code>snapshot --surface system-tray</code> with a StatusNotifierWatcher</td><td><code>open-system-surface</code> for <code>action-center</code>, and for <code>system-tray</code> when a StatusNotifierWatcher is present</td><td><code>quick-settings</code>, <code>taskbar</code>, <code>start-menu</code>, and <code>system-tray-overflow</code> refuse</td></tr>
+    <tr><td>System</td><td><code>status</code>, <code>permissions</code>, <code>version</code>, <code>batch</code>, <code>skills</code>, <code>session</code>, <code>trace</code>, <code>cursor-overlay</code></td><td></td><td>Wayland: the overlay setting saves with <code>rendered: false</code></td></tr>
+  </tbody>
+</table>
+
+## App naming
+
+`--app` takes the name `list-apps` prints, such as `gnome-calculator`, or a desktop-entry name or id backed by a verified executable, such as `Files`. It never matches a window title.
+
+```json
+{ "bundle_id": "org.gnome.Calculator", "name": "gnome-calculator", "pid": 8255, "presentation": "foreground", "process_instance": "6d91df60:28340" }
+```
+
+`list-windows --app` is an exact, case-insensitive match; `list-apps --app` also matches a substring. Window ids are opaque strings such as `w-1.11-org-gnome-Calculator-a11y-...`, valid for the life of the window's process. Several instances of one app share a name; pick one with `--window-id`. `launch` accepts an absolute path, a desktop id, a bare command, or a desktop entry name.
+
+## Surfaces
+
+`supported_surfaces` lists `window`, `sheet`, `alert`, and `menu`, plus GNOME Shell kinds the session can resolve. After an opener, read `data.surfaces`. A GTK popover appears asynchronously, so if it is absent, run `wait --menu` before you assume the opener failed. A list-backed GTK4 dropdown is part of the window tree, not a menu surface. See [Surfaces](/desktop/surfaces).
+
+Popup-opener verification also compares independent top-level menus of the same accessibility bus owner and process before and after the action. A new unique popup can verify opening; an unchanged existing popup cannot. Incomplete or ambiguous evidence keeps delivery unverified, so inspect a fresh snapshot before another action.
+
+Plain, check, and radio menu items that advertise `doDefault` expose `Click`, which invokes their advertised default action. Other roles do not gain `Click` from `doDefault` alone because static nodes can also advertise it.
+
+Menu snapshots follow the unique showing popup that owns keyboard focus, including a submenu exposed as a separate application-root child. If no popup reports focus, the outermost menu is read. Multiple popups claiming focus return `AMBIGUOUS_TARGET`.
+
+## Chromium, Qt, and Electron
+
+An app appears in `list-apps` only when its toolkit registered on the accessibility bus.
+
+<table>
+  <thead>
+    <tr><th>App</th><th>Needs</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>GTK3, GTK4</td><td>Nothing. An app that started before the bus never registers: restart it</td></tr>
+    <tr><td>Qt</td><td><code>QT_ACCESSIBILITY=1</code> in its environment</td></tr>
+    <tr><td>Chromium browsers</td><td><code>--force-renderer-accessibility</code>; in a bare session without a settings daemon, also <code>--env ACCESSIBILITY_ENABLED=1</code> on <code>launch</code></td></tr>
+    <tr><td>Electron</td><td>No flag. <code>--no-sandbox</code> where <code>chrome-sandbox</code> is not setuid</td></tr>
+  </tbody>
+</table>
+
+```bash
+agent-desktop launch google-chrome --arg=--force-renderer-accessibility
+```
+
+To drive the web contents with agent-browser instead, launch the app with `--cdp`; see [Chromium and Electron apps](/desktop/guides/chromium-and-electron). GTK apps nest deeply with unnamed `group` wrappers that `-i --compact` keeps; read past them, or let a skeleton find the drill targets. Electron native dialogs are not on the AT-SPI tree.
+
+## Troubleshooting
+
+<table>
+  <thead>
+    <tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Empty <code>supported_surfaces</code>, or <code>PLATFORM_NOT_SUPPORTED</code> about the AT-SPI bus</td><td>The session bus or accessibility bus is unreachable</td><td>Run inside the desktop session; see the four causes above</td></tr>
+    <tr><td><code>list-apps</code> or <code>snapshot</code> returns <code>ACTION_NOT_SUPPORTED</code>, "The native window type of accessibility frame owned by pid N could not be proven"</td><td>No window manager is running, so windows cannot be matched to their X11 clients</td><td>Run inside a real desktop session, or start a window manager</td></tr>
+    <tr><td>The app runs but <code>--app</code> finds nothing</td><td>The app is not on the bus, or the name is wrong</td><td>Use the <code>list-apps</code> name, and see the toolkit table</td></tr>
+    <tr><td>The window appears but <code>snapshot</code> is thin</td><td>The content is not ready</td><td><code>wait --window</code>, then <code>wait --text</code>, and raise <code>--timeout-ms</code></td></tr>
+    <tr><td><code>ACTION_FAILED</code>, cause <code>frame_not_active</code>, on a scoped <code>press</code></td><td>The target window is not active and focus changes are not allowed</td><td>Bring the window forward, or pass <code>--headed</code> if focus changes are permitted</td></tr>
+    <tr><td><code>ACTION_FAILED</code>, cause <code>blocked_by_modal_dialog</code></td><td>A modal dialog or popover blocks the window</td><td>Read it with <code>snapshot --surface</code> and answer or dismiss it</td></tr>
+    <tr><td><code>ACTION_FAILED</code>, cause <code>grab_focus_rejected</code>, on <code>focus</code></td><td>A GTK4 app rejects <code>Component.GrabFocus</code></td><td>Focus its window with <code>focus-window</code></td></tr>
+    <tr><td>Two quick <code>click</code> calls on one GTK4 button act once</td><td>GTK4 reads clicks less than about 250 ms apart as one</td><td>Wait for the effect between clicks</td></tr>
+    <tr><td><code>--menu-closed</code> returns at once</td><td>The menu never opened</td><td>Wait for <code>--menu</code> first</td></tr>
+    <tr><td><code>screenshot</code> returns <code>ACTION_FAILED</code> with <code>details.reason: "covered"</code></td><td>A non-compositing window manager cannot capture a covered window</td><td>Raise it with <code>focus-window</code>; on a non-compositing window manager, capture the display with <code>--screen 0</code></td></tr>
+    <tr><td><code>INTERNAL</code>, "private file parent is accessible by group or other users"</td><td>The state root is not private</td><td><code>chmod 700</code> the state root</td></tr>
+  </tbody>
+</table>
+
+More cases are in `agent-desktop skills get linux troubleshooting`.

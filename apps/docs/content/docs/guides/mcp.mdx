@@ -1,0 +1,66 @@
+---
+title: Using agent-desktop over MCP
+navTitle: MCP
+description: Serve every agent-desktop command as an MCP tool over stdio. How tools map to commands, how global flags apply, and what a tool returns.
+---
+
+`agent-desktop mcp` runs a Model Context Protocol server over stdio. Every command is a tool, so an MCP client gets the same surface as the CLI with no separate setup.
+
+## Connect a client
+
+Add the server to your client's MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "agent-desktop": { "command": "agent-desktop", "args": ["mcp"] }
+  }
+}
+```
+
+The server speaks both the stateless `2026-07-28` protocol and the `initialize` handshake of `2025-11-25` and earlier.
+
+## How tools map to commands
+
+Each tool is one command, named `desktop_` plus the command with hyphens as underscores. Subcommands join the name the same way:
+
+| Command | Tool |
+|---|---|
+| `snapshot` | `desktop_snapshot` |
+| `list-windows` | `desktop_list_windows` |
+| `session start` | `desktop_session_start` |
+| `skills get` | `desktop_skills_get` |
+
+A tool's arguments are its command's arguments, with hyphens as underscores: `snapshot --app Finder -i` is `desktop_snapshot` with `{ "app": "Finder", "interactive_only": true }`. Positional arguments use their names too, such as `ref_id` for `click`. A null argument counts as omitted.
+
+The tool list is read from the CLI's own command definitions, so it always matches the installed binary.
+
+## Apply global flags once
+
+Global flags given to `mcp` apply to every call:
+
+```bash
+agent-desktop mcp --session s1 --headed
+```
+
+`AGENT_DESKTOP_SESSION`, `AGENT_DESKTOP_AGENT_ID` and `AGENT_DESKTOP_HOME` in the server's environment apply the same way.
+
+A tool cannot pass a global flag. Commands that need a session, such as `trace` and `cursor-overlay`, work only when the server has one, headed-only commands need `mcp --headed`, and `--wait-for` is not available per call.
+
+## Read results
+
+A tool returns the command's JSON envelope as `structuredContent`, and the same JSON as text. `isError` is `true` when the envelope's `ok` is `false`, so read `error.code` and `error.disposition` exactly as you would from the CLI. A `screenshot` without an output path returns its PNG as an image block instead of base64 text.
+
+An unknown argument returns a tool error that names the accepted arguments, and a value of the wrong type returns an error that names the argument, so the model can correct the call.
+
+## Start with the skills
+
+Call `desktop_skills_get` with `{ "name": "desktop" }` for the observe-act loop and `{ "name": "platform" }` for what differs on your OS. The server's instructions point clients there too.
+
+## Security
+
+The server adds nothing the CLI cannot already do. Tool arguments become CLI arguments without a shell. A value is always passed as a value, never as a flag. A tool cannot set global flags such as `--session` or `--headed`; only the server's own command line can.
+
+A tool still has the CLI's full reach: it can operate any app the accessibility tree exposes, and `desktop_launch` starts any program on `PATH` with any arguments. Treat the server like a shell for the signed-in user. Keep your client's confirmation on for actions, and remember that text read from the screen is untrusted input to the model.
+
+The server runs at most 8 tool calls at once and answers more with a tool error. It refuses any message over 4 MiB. A `notifications/cancelled` stops the call and it gets no response. A call that has not started never starts. A running call gets `SIGTERM` first, so it releases any key or button it holds, and is killed if it is still running 3 seconds later; on Windows it is killed at once.

@@ -1,0 +1,70 @@
+---
+title: Batching commands
+navTitle: Batch
+description: Run several agent-desktop commands in one process with batch. When to batch, the non-atomic semantics, validation before the first entry, and how to read the result.
+---
+
+`batch` runs a JSON array of commands in order, in one process. It is not a transaction. Use it to save process starts on a known sequence, and to pair an action with `wait --event` so the wait's baseline is read before the action runs. The input format, limits, and output fields are in the [`batch` reference](/desktop/commands/batch).
+
+## When to batch
+
+Batch these:
+
+- An action followed by `wait --event`, such as a click or launch that opens a window. See [Waiting without sleeps](/desktop/guides/waiting#wait-for-an-event-your-action-causes).
+- A fixed sequence on refs you already hold, where you do not need to read anything between steps.
+
+Do not batch these:
+
+- Steps where the next command depends on the previous output. Observe, act, and verify each need a read; see [the observe, act, verify loop](/desktop/guides/observe-act-verify).
+- Steps that need a ref an earlier entry would create. A batch is validated before its first entry runs, so it cannot name refs from a `snapshot` entry inside it.
+
+## Know what runs first
+
+Before any entry runs, agent-desktop checks every entry: the JSON, the command names, the arguments, ref syntax, and the permissions each command needs. One failure rejects the whole batch and nothing runs:
+
+```json
+{
+  "code": "INVALID_ARGS",
+  "message": "Batch entry 0 ('click') failed validation: Invalid ref_id '@e1': expected @<snapshot_id>:e<N>",
+  "details": { "batch_command": "click", "batch_index": 0 },
+  "disposition": { "delivery": "not_delivered", "retry": "safe" }
+}
+```
+
+The check does not reach the live desktop. Whether a ref still resolves, and whether a headless physical action is refused, are decided when the entry runs.
+
+## Read every entry
+
+A batch returns `ok: true` and exit code `0` even when entries fail, so read each entry's `ok`. This batch clicked the calculator's C button, then a ref that does not exist, then C again, with `--stop-on-error` (fields abridged):
+
+```json
+{
+  "results": [
+    { "index": 0, "ok": true, "execution": "completed", "data": { "disposition": { "delivery": "delivered_unverified", "retry": "unsafe" } } },
+    {
+      "index": 1, "ok": false, "execution": "completed",
+      "error": {
+        "code": "STALE_REF",
+        "message": "@s3sl23kzkoxzvb:e999 not found in current RefMap",
+        "disposition": { "delivery": "not_delivered", "retry": "safe" }
+      }
+    }
+  ],
+  "total_entries": 3,
+  "completed_entries": 2,
+  "not_started_entries": 1,
+  "stopped": { "index": 1, "reason": "stop_on_error" }
+}
+```
+
+Each entry keeps its own disposition, and a batch never retries an entry. Apply the normal rule per entry: retry only when `retry` is `safe`.
+
+## Control failures
+
+- **Default.** A failed entry does not stop the batch. Later entries still run, so an action after a failed one can act on a UI you did not expect.
+- **`--stop-on-error`.** The batch halts after the first failed entry and reports `stopped`. Use it for any sequence where a later step is wrong after an earlier one fails.
+- **`--timeout-ms`.** The default 60000 ms covers the whole batch, waits included. When it expires, the next entry is reported `not_started` with reason `deadline`.
+
+## Use refs in a batch
+
+Refs in `args` must be qualified and come from a snapshot or `find` taken before the batch, under the same `--session`. If an earlier entry changes the UI, a later ref can go stale and that entry fails with `STALE_REF`. Keep batched ref actions to controls that one action does not rebuild. See [Snapshots and refs](/desktop/snapshots-and-refs#refresh-after-the-ui-changes).

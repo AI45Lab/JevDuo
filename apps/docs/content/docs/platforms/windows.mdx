@@ -1,0 +1,104 @@
+---
+title: Windows
+navTitle: Windows
+description: Requirements, permissions and elevation, per-command capabilities, app naming, surfaces, PowerShell notes, and troubleshooting for agent-desktop on Windows.
+---
+
+agent-desktop reads Windows apps through UI Automation (UIA). The loop, refs, JSON envelope, sessions, and traces match every platform, so this page covers only what differs on Windows. The Windows behavior here is checked against the Windows adapter, its tests, and the Windows skill (`agent-desktop skills get windows`); it was not run for these docs. Examples elsewhere are POSIX shell; the PowerShell forms are in [Use PowerShell](#use-powershell).
+
+## Requirements
+
+- Windows 10 1809 or later, or Windows Server 2019 or later, on x64 or ARM64.
+- The interactive desktop session of the signed-in user. Session 0 (services and SYSTEM tasks), Server Core, the secure desktop (UAC prompts and the sign-in screen), a locked desktop, and another user's session are not supported.
+- The binary is unsigned. SmartScreen can warn on a browser download, antivirus can quarantine it, and Smart App Control on a clean Windows 11 install blocks it.
+
+## Permissions and elevation
+
+Windows has no grant dialog for UI Automation; access is controlled by integrity level.
+
+- Apps at your terminal's integrity level need no grant. `permissions` reports `accessibility: granted` when UIA answers, and `automation: not_required`. `permissions --guide` returns `PLATFORM_NOT_SUPPORTED`.
+- An app running as administrator can be read but not driven from a lower-integrity terminal, because User Interface Privilege Isolation (UIPI) blocks the input. agent-desktop compares the process tokens before sending anything and returns `PERM_DENIED` with `E_ACCESSDENIED` in `platform_detail`. Run agent-desktop from a terminal elevated to the same level.
+- Elevated and non-elevated runs cannot share a state root; the second fails with `INTERNAL`, "private file parent is owned by a foreign principal". Give the elevated run its own `AGENT_DESKTOP_HOME`.
+
+## What works headless
+
+Ref actions are semantic UIA calls headless and under `--headed`, except the ones that are physical or take focus. See [Headed mode](/desktop/guides/headed-mode).
+
+<table>
+  <thead>
+    <tr><th>Group</th><th>Works headless</th><th>Needs <code>--headed</code></th><th>Fails closed or not supported</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Observation and capture</td><td><code>snapshot</code>, <code>find</code>, <code>get</code>, <code>is</code>, <code>screenshot</code>, <code>list-surfaces</code>, <code>list-displays</code></td><td></td><td></td></tr>
+    <tr><td>Ref actions</td><td><code>click</code>, <code>set-value</code>, <code>clear</code>, <code>select</code>, <code>toggle</code>, <code>check</code>, <code>uncheck</code>, <code>expand</code>, <code>collapse</code>, <code>scroll</code>, <code>scroll-to</code></td><td><code>right-click</code>, <code>type</code>, <code>focus</code></td><td>Headless <code>right-click</code> and <code>type</code>: <code>POLICY_DENIED</code>. Use <code>set-value</code> to write text headless</td></tr>
+    <tr><td>Multi-click and pointer</td><td></td><td><code>double-click</code>, <code>triple-click</code>, <code>hover</code>, <code>drag</code>, <code>mouse-click</code>, <code>mouse-move</code>, <code>mouse-wheel</code></td><td>Headless: <code>POLICY_DENIED</code></td></tr>
+    <tr><td>Keyboard</td><td><code>press</code></td><td>A scoped <code>press --app</code> to an app that is not frontmost</td><td>Blocked shortcuts without <code>--force</code></td></tr>
+    <tr><td>Held input</td><td></td><td></td><td><code>key-down</code>, <code>key-up</code>, <code>mouse-down</code>, <code>mouse-up</code></td></tr>
+    <tr><td>App and window</td><td><code>launch</code>, <code>close-app</code>, <code>list-windows</code>, <code>list-apps</code>, <code>focus-window</code>, <code>resize-window</code>, <code>move-window</code>, <code>minimize</code>, <code>maximize</code>, <code>restore</code></td><td></td><td><code>close-app</code> on <code>explorer.exe</code> and other protected images: <code>INVALID_ARGS</code></td></tr>
+    <tr><td>Clipboard</td><td><code>clipboard-get</code>, <code>clipboard-set</code>, <code>clipboard-clear</code> (text and images)</td><td></td><td></td></tr>
+    <tr><td>Wait</td><td>All modes except notifications with the Action Center closed</td><td><code>--notification</code> when the Action Center is closed</td><td></td></tr>
+    <tr><td>Notifications</td><td><code>list-notifications</code> while the Action Center is open</td><td>Listing while it is closed, and every dismiss and action</td><td>Headless on a closed center: <code>POLICY_DENIED</code></td></tr>
+    <tr><td>Shell surfaces</td><td><code>snapshot --surface KIND</code> on a surface that is already present</td><td><code>open-system-surface</code> for <code>start-menu</code>, <code>taskbar</code>, <code>system-tray</code>, <code>system-tray-overflow</code>, <code>action-center</code></td><td><code>quick-settings</code>: <code>INVALID_ARGS</code>, naming <code>action-center</code></td></tr>
+    <tr><td>System</td><td><code>status</code>, <code>permissions</code>, <code>version</code>, <code>batch</code>, <code>skills</code>, <code>session</code>, <code>cursor-overlay</code>, <code>trace</code></td><td></td><td></td></tr>
+  </tbody>
+</table>
+
+## App naming
+
+- `launch` takes an absolute path, or a bare name under System32 or the Windows directory, with or without `.exe` (`notepad` or `notepad.exe`). It does not resolve a display name such as "Google Chrome".
+- For a running app, pass the name `list-apps` prints to `--app`, such as `notepad.exe`.
+- Window ids are `w-` followed by the window handle. A hosted (UWP) app is reported through its `ApplicationFrameHost` frame.
+- A window behind another window is drivable. A minimized one is not: every element reports `offscreen`. Run `restore --app IMAGE` and snapshot again, instead of `focus-window`, which steals the user's foreground.
+
+## Surfaces
+
+`supported_surfaces` lists `window`, `focused`, `sheet` (a Chromium modal), `menu`, and the shell kinds `start-menu`, `taskbar`, `system-tray`, `system-tray-overflow`, and `action-center`. There is no `menubar` surface. `snapshot --surface KIND` reads a shell surface without `--app` and without `--headed`; a closed one returns `WINDOW_NOT_FOUND` with a suggestion that names `open-system-surface`. The `menu` detector covers classic Win32, WPF, and Chromium or Electron menus, but not WinUI 3 or MSIX hosts, so read "no menu" as "not detected" there. See [Surfaces](/desktop/surfaces).
+
+## Use PowerShell
+
+PowerShell reads a bare `@token` as its splatting operator and drops the argument before agent-desktop sees it. Quote every ref:
+
+```powershell
+agent-desktop set-value '@s8f3k2p9:e1' "hello"
+$env:AGENT_DESKTOP_HOME = "$env:TEMP\ad-scratch"
+$start = agent-desktop session start | ConvertFrom-Json
+$env:AGENT_DESKTOP_SESSION = $start.data.session_id
+```
+
+Use `$env:NAME = 'value'` instead of `export`, and `| ConvertFrom-Json` instead of `jq`. An unquoted ref fails with `INVALID_ARGS`. `cmd.exe` and bash need no quoting.
+
+## Keys
+
+- `cmd` and `meta` are the Windows key, so `meta+c` is a shell shortcut. Write `ctrl+c` to copy.
+- `alt+f4`, `win+l`, `win+d`, `alt+tab`, `win+r`, `win+x`, `win+e`, `ctrl+shift+esc`, and their supersets are refused without `--force`. `ctrl+alt+delete` cannot be synthesized at all.
+- `type` is keystroke synthesis and needs `--headed`; use `set-value` headless.
+- `press --app` writes to the foreground input queue and cannot target one background process.
+
+## Chromium and Electron
+
+Chromium 138 and later exposes a full UIA tree with no flag, but the first read starts the renderer's accessibility build and returns a small fraction of the tree. A cold launch takes 10 to 25 seconds to settle.
+
+- Pass a longer `--timeout-ms` to `snapshot` instead of concluding the tree is empty.
+- A settled tree with boundary nodes carrying `children_count` and no controls is a depth effect: drill into a boundary with `snapshot --root`.
+- For the web contents of an app you can launch fresh, `launch --cdp` opens a DevTools port for agent-browser; see [Chromium and Electron apps](/desktop/guides/chromium-and-electron).
+- A WPF window read before its automation peer exists can bind an empty generic provider. Take a new snapshot after a few seconds.
+
+## Troubleshooting
+
+<table>
+  <thead>
+    <tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>A Chromium or Electron app returns far fewer nodes than it shows</td><td>The first read came before the renderer settled</td><td><code>snapshot --timeout-ms 30000</code></td></tr>
+    <tr><td><code>PERM_DENIED</code> with <code>E_ACCESSDENIED</code></td><td>The target runs at a higher integrity level</td><td>Run the terminal elevated to the target's level</td></tr>
+    <tr><td><code>INVALID_ARGS</code> on a ref in PowerShell</td><td>An unquoted <code>@</code> ref was eaten as splatting</td><td>Quote the ref in single quotes</td></tr>
+    <tr><td><code>POLICY_DENIED</code> from <code>open-system-surface</code> or a notification command</td><td>The command raises shell chrome, which takes the foreground</td><td>Pass <code>--headed</code>, or open the surface yourself first</td></tr>
+    <tr><td><code>wait --notification</code> times out while toasts are posted</td><td>The Action Center collects a toast only while open</td><td>Hold the center open, or confirm with <code>list-notifications</code> while it is open</td></tr>
+    <tr><td>A hosted app reads as <code>ApplicationFrameHost</code></td><td>The app is suspended</td><td>Activate the app so it resumes, then list again</td></tr>
+    <tr><td>The binary will not start</td><td>SmartScreen, antivirus quarantine, or Smart App Control</td><td>Choose <strong>More info</strong>, then <strong>Run anyway</strong>; restore a quarantined file after checking its SHA-256 checksum</td></tr>
+    <tr><td>Headed coordinates land offset on a scaled display</td><td>A host process locked an incompatible DPI awareness</td><td>Run from a plain terminal and prefer refs to <code>--xy</code></td></tr>
+  </tbody>
+</table>
+
+More cases are in `agent-desktop skills get windows troubleshooting`.

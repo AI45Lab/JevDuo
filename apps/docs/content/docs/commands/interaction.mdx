@@ -1,0 +1,349 @@
+---
+title: Interaction commands
+navTitle: Interaction
+description: Reference for click, double-click, triple-click, right-click, type, set-value, clear, focus, select, toggle, check, uncheck, expand, and collapse.
+---
+
+Every command here acts on one element. Pass the qualified ref from [`snapshot`](/desktop/commands/observation#snapshot) or [`find`](/desktop/commands/observation#find), such as `@s8f3k2p9:e1`; a bare `@e1` is rejected with `INVALID_ARGS`.
+
+By default these commands run headless: semantic accessibility calls that do not take focus, move the cursor, synthesize keys, or use the clipboard. If no semantic path exists, the action fails closed. The global `--headed` flag permits physical input and focus changes; see [Headed mode](/desktop/guides/headed-mode). The examples on this page are real output from GNOME Calculator and GTK Widget Factory on Linux.
+
+## Result shape
+
+Every successful ref action returns an action report in `data`. This is a `click` on a calculator button:
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "click",
+  "data": {
+    "action": "click",
+    "details": {
+      "auto_wait": {
+        "lease_contention_count": 0,
+        "lease_hold_ms": 114,
+        "read_only_preflight_attempts": 1,
+        "read_only_resolve_attempts": 1
+      }
+    },
+    "disposition": { "delivery": "delivered_unverified", "retry": "unsafe" },
+    "steps": [{ "label": "Action.DoAction", "mechanism": "semantic_api", "outcome": "succeeded" }],
+    "surfaces": [
+      { "id": "w-1.11-org-gnome-Calculator-a11y-948fd89a_9bda_453b_9c10_4a9e9eed3feb", "title": "Calculator", "type": "window" }
+    ]
+  }
+}
+```
+
+<table>
+  <thead>
+    <tr><th>Field</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>action</code></td><td>The command that ran.</td></tr>
+    <tr><td><code>disposition</code></td><td><code>delivery</code> and <code>retry</code>. Repeat an action only when <code>retry</code> is <code>safe</code>. See <a href="/desktop/errors-and-recovery#disposition">Disposition</a>.</td></tr>
+    <tr><td><code>steps</code></td><td>The mechanisms tried: <code>label</code>, <code>outcome</code> (<code>attempted</code>, <code>skipped</code>, or <code>succeeded</code>), <code>mechanism</code> (<code>semantic_api</code> or <code>physical_synthetic</code>), and <code>verified</code> when the step read back its effect.</td></tr>
+    <tr><td><code>post_state</code></td><td>The element's state after the action, for the commands that read it back.</td></tr>
+    <tr><td><code>surfaces</code></td><td>Windows and overlays open once the action settled. Only <code>click</code>, <code>double-click</code>, <code>triple-click</code>, <code>right-click</code>, <code>expand</code>, <code>select</code>, and <code>press</code> report them. A <code>menu</code>, <code>sheet</code>, or <code>alert</code> means the app is waiting on it. See <a href="/desktop/surfaces#know-when-a-surface-opened">Surfaces</a>.</td></tr>
+    <tr><td><code>details</code></td><td><code>auto_wait</code> counters, plus the verification fields below. Later examples on this page omit <code>auto_wait</code>.</td></tr>
+  </tbody>
+</table>
+
+When the target is already in the requested state, nothing is delivered and the report says `not_delivered`, which is safe to repeat.
+
+`set-value`, `clear`, `type`, `check`, `uncheck`, `toggle`, `expand`, and `collapse` run once and then re-read the element:
+
+- A match returns `delivered_verified` with `post_state` and `details.verification_scope`: `element_state` for `check`, `uncheck`, `toggle`, `expand`, and `collapse`, or `element_value` with `application_commit: "not_verified"` for `set-value`, `clear`, and `type`. A verified value proves the element holds it, not that the app committed it.
+- A readable contradiction returns `ACTION_FAILED` with `details.kind: "post_action_verification"`, the observed `post_state`, and the report under `details.after_action`. The action landed, so read `post_state` instead of retrying.
+- An unreadable result still succeeds, as `delivered_unverified` with `details.verification_scope: "unavailable"` and a `verification_reason`: `insufficient_evidence`, `secure_field`, or `postcondition_mismatch`.
+
+## Wait budget
+
+Every command on this page takes `--timeout-ms MS` (default `5000`; `type` adds 30 ms per character), the budget for resolving the ref and waiting for the element to become actionable. Core polls the transient checks (`visible`, `stable`, `enabled`, and, for pointer delivery, `receives_events`) until they pass. The terminal checks (`supported_action`, `policy`, `editable`) cannot be fixed by waiting and fail at once. `--timeout-ms 0` tries once without polling.
+
+A failed check list appears in `error.details.checks`, each with a `status` of `pass`, `fail`, or `unknown` and a `reason`. This is `double-click` on a text entry without `--headed`:
+
+```json
+{
+  "code": "POLICY_DENIED",
+  "message": "Target is not actionable: supported_action (semantic gesture is unavailable and physical fallback is denied)",
+  "details": {
+    "actionable": false,
+    "checks": [
+      { "check": "visible", "status": "pass" },
+      { "check": "stable", "stability": { "samples": 1, "span_ms": 0 }, "status": "pass" },
+      { "check": "enabled", "status": "pass" },
+      { "check": "supported_action", "reason": "semantic gesture is unavailable and physical fallback is denied", "status": "fail" },
+      { "check": "policy", "status": "pass" }
+    ]
+  },
+  "disposition": { "delivery": "not_delivered", "retry": "safe" }
+}
+```
+
+`receives_events` fails with an `occluder` (`role`, `name`, `bounds`) when another element covers the target. To wait for readiness on its own, use [`wait --element REF --predicate actionable`](/desktop/commands/wait#wait).
+
+## Errors shared by ref commands
+
+<table>
+  <thead>
+    <tr><th>Code</th><th>Cause</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>INVALID_ARGS</code></td><td>A bare or malformed ref, or an argument the command rejects.</td></tr>
+    <tr><td><code>SNAPSHOT_NOT_FOUND</code></td><td>The snapshot that owns the ref is missing or pruned.</td></tr>
+    <tr><td><code>STALE_REF</code></td><td>No live element matches the ref's saved identity.</td></tr>
+    <tr><td><code>AMBIGUOUS_TARGET</code></td><td>Several live elements match. A ref action never guesses.</td></tr>
+    <tr><td><code>ACTION_NOT_SUPPORTED</code></td><td>The element does not expose the action.</td></tr>
+    <tr><td><code>POLICY_DENIED</code></td><td>A physical or focus-taking path was needed and headless policy refused it.</td></tr>
+    <tr><td><code>TIMEOUT</code>, <code>details.kind: actionability_timeout</code></td><td>The target never became actionable within <code>--timeout-ms</code>. <code>details.last_report</code> names the failing check.</td></tr>
+    <tr><td><code>ACTION_FAILED</code></td><td>The action was rejected, blocked, or contradicted by the readback.</td></tr>
+    <tr><td><code>APP_UNRESPONSIVE</code></td><td>The app stopped responding.</td></tr>
+    <tr><td><code>PERM_DENIED</code></td><td>Accessibility permission is not granted.</td></tr>
+  </tbody>
+</table>
+
+What each code means and when to retry is in [Errors and recovery](/desktop/errors-and-recovery).
+
+## click
+
+Activates an element with its primary action, such as a press or invoke.
+
+```bash
+agent-desktop click <REF> [--timeout-ms MS]
+```
+
+The result is the one in [Result shape](#result-shape). A click usually ends `delivered_unverified`, because a delivered activation does not prove the app acted on it: verify by reading the UI, and check `data.surfaces`.
+
+Platform limits: semantic everywhere headless; `--headed` tries physical input first on macOS and Linux. See [macOS](/desktop/platforms/macos), [Windows](/desktop/platforms/windows), and [Linux](/desktop/platforms/linux).
+
+## double-click
+
+Double-clicks an element. It is a physical gesture, so it needs `--headed` unless the element exposes a semantic open action.
+
+```bash
+agent-desktop --headed double-click <REF> [--timeout-ms MS]
+```
+
+Without `--headed` and a semantic route, it returns `POLICY_DENIED` (see [Wait budget](#wait-budget)). For raw coordinates use `--headed mouse-click --xy X,Y --count 2` ([`mouse-click`](/desktop/commands/mouse#mouse-click)).
+
+Platform limits: macOS tries `AXOpen` headless; Windows and Linux need `--headed`, and Linux needs X11. See [Linux](/desktop/platforms/linux).
+
+## triple-click
+
+Triple-clicks an element, for example to select a line of text. Arguments and errors are the same as [`double-click`](#double-click). For raw coordinates use `--headed mouse-click --xy X,Y --count 3`.
+
+```bash
+agent-desktop --headed triple-click <REF> [--timeout-ms MS]
+```
+
+## right-click
+
+Opens an element's context menu. Afterward, `data.surfaces` lists the open `menu`; read it with `snapshot --surface menu`. For combo boxes and menu buttons, use [`select`](#select) instead.
+
+```bash
+agent-desktop right-click <REF> [--timeout-ms MS]
+```
+
+Headless delivery needs a context-menu action on the element. On a GTK entry without one, it returns `POLICY_DENIED` with `supported_action` failing. On macOS, a right-click can return `APP_UNRESPONSIVE` with an unsafe disposition after a modal menu opened: look before you retry.
+
+Platform limits: Windows always needs `--headed`. See [Windows](/desktop/platforms/windows).
+
+## type
+
+Inserts text into a text target at its insertion point, then reads the field back.
+
+```bash
+agent-desktop type <REF> <TEXT> [--timeout-ms MS] [--interval-ms MS]
+agent-desktop type <REF> --stdin [--timeout-ms MS] [--interval-ms MS]
+```
+
+<table>
+  <thead>
+    <tr><th>Flag or argument</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>TEXT</code></td><td>required unless <code>--stdin</code></td><td>The text, up to 10,000 bytes. A value that starts with a hyphen is accepted.</td></tr>
+    <tr><td><code>--timeout-ms MS</code></td><td><code>5000</code> plus <code>30</code> per character</td><td>Covers resolution, actionability, and delivery. An explicit value wins. With <code>--interval-ms</code>, it applies to each keystroke, and <code>0</code> makes each keystroke try once.</td></tr>
+    <tr><td><code>--interval-ms MS</code></td><td>off</td><td>Types one keystroke every <code>MS</code> milliseconds, 1 to 2000, instead of inserting the text at once.</td></tr>
+  </tbody>
+</table>
+
+Use `--stdin` with `type` or `set-value` to read text from a pipe or redirected file. Terminal input is rejected. Replace the example ref with one from your snapshot:
+
+```bash
+printf '%s' 'hello' | agent-desktop type @s8f3k2p9:e2 --stdin
+```
+
+The action timeout starts after the input ends; it doesn't limit this wait. Empty input and all line breaks are kept, including a final newline. Use `printf '%s'` to avoid adding one. Input must be valid UTF-8 without NUL bytes (`\0`). The limits are 10,000 bytes for `type` and 128 KiB for `set-value`.
+
+Provide either `--stdin` or a command-line value. To enter the text `--stdin`, put it after `--`: `agent-desktop type @s8f3k2p9:e2 -- --stdin`. Batch uses the JSON `text` or `value` field, which puts the text in process arguments. Run secret steps as separate `--stdin` commands.
+
+`--stdin` keeps text out of process arguments and omits observed `value` fields from JSON results, including `post_state.value`. Other app text and screenshot artifacts aren't redacted.
+
+`type` inserts; it does not replace. After `set-value hello`, `type ' world'` into the same entry produced this, because the insertion point was at the start:
+
+```json
+{
+  "action": "type",
+  "details": { "application_commit": "not_verified", "verification_scope": "element_value" },
+  "disposition": { "delivery": "delivered_verified", "retry": "unsafe" },
+  "post_state": { "enabled": true, "role": "textfield", "value": " worldhello" },
+  "steps": [{ "label": "EditableText.InsertText", "mechanism": "semantic_api", "outcome": "succeeded", "verified": true }]
+}
+```
+
+`--interval-ms` types at a steady pace inside one command. A keystroke is one character together with the combining marks, emoji modifiers, and joined characters drawn with it, and CR LF counts as one. The first keystroke runs as a full ref action, and a headed one also focuses the target's window. The rest go to the same element, each taking the interaction lease only while it is delivered, so other agents can act between keystrokes. A headed keystroke is posted only while the target's process and focused element are unchanged, so a burst that loses focus stops with an error. The result adds `keystrokes` and `interval_ms`, and its `post_state` reads the field after the last keystroke. It stays `delivered_verified` only when that read shows the whole text; otherwise it is `delivered_unverified` with `verification_reason` set to `postcondition_mismatch`, `insufficient_evidence` (the text went in part way through the field), or `final_read_failed` (with no `post_state`). A `--wait-for` condition is waited on once, after the last keystroke. A failure after the first keystroke carries `details.typed_keystrokes` and `details.keystrokes` with a `delivered_unverified` disposition, because part of the text landed.
+
+```bash
+agent-desktop type @s8f3k2p9:e2 "hello world" --interval-ms 60
+```
+
+To set a field's whole content, use [`set-value`](#set-value). Keystroke delivery that settles on other text returns `delivered_unverified` with `verification_reason: "postcondition_mismatch"`; read the field with `get` before you write again.
+
+Platform limits: Windows needs `--headed` and returns `POLICY_DENIED` headless; use `set-value` there. See [Windows](/desktop/platforms/windows).
+
+## set-value
+
+Writes a value directly through the accessibility value path: text fields, text areas, and sliders.
+
+```bash
+agent-desktop set-value <REF> <VALUE> [--timeout-ms MS]
+agent-desktop set-value <REF> --stdin [--timeout-ms MS]
+```
+
+For piped text, use `--stdin` with the [input rules above](#type).
+
+```json
+{
+  "action": "set-value",
+  "details": { "application_commit": "not_verified", "verification_scope": "element_value" },
+  "disposition": { "delivery": "delivered_verified", "retry": "unsafe" },
+  "post_state": { "enabled": true, "role": "textfield", "value": "hello" },
+  "steps": [{ "label": "EditableText.SetTextContents", "mechanism": "semantic_api", "outcome": "succeeded", "verified": true }]
+}
+```
+
+On a slider, the step is `Value.CurrentValue` and `post_state.value` is the new position. A value the app reformats reads as a contradiction and returns `ACTION_FAILED`. An element that exposes no value write returns `ACTION_NOT_SUPPORTED`; for a table cell, activate it and target the editor that appears. A write to a secure field ends `delivered_unverified` with `verification_reason: "secure_field"`.
+
+## clear
+
+Empties a text target and expects an empty value on readback. The result looks like `set-value` with `post_state.value: ""`.
+
+```bash
+agent-desktop clear <REF> [--timeout-ms MS]
+```
+
+## focus
+
+Sets keyboard focus on an element without clicking it.
+
+```bash
+agent-desktop --headed focus <REF> [--timeout-ms MS]
+```
+
+Moving focus can change the foreground, so headless it returns `POLICY_DENIED` on Windows and Linux:
+
+```json
+{
+  "code": "POLICY_DENIED",
+  "message": "Focusing an element moves the keyboard focus of the application",
+  "details": { "foreground_effect": true },
+  "disposition": { "delivery": "not_delivered", "retry": "safe" }
+}
+```
+
+On Linux, a GTK4 app rejects the call with cause `grab_focus_rejected`; use [`focus-window`](/desktop/commands/app-window#focus-window) for its window.
+
+## select
+
+Picks an option by display text in a list, dropdown, or combo box.
+
+```bash
+agent-desktop select <REF> <VALUE> [--timeout-ms MS]
+```
+
+```bash
+agent-desktop select @s30sxlstqzdq8x:e21 Middle
+```
+
+```json
+{
+  "action": "select",
+  "details": {},
+  "disposition": { "delivery": "delivered_verified", "retry": "unsafe" },
+  "steps": [{ "label": "Action.DoAction", "mechanism": "semantic_api", "outcome": "succeeded", "verified": true }],
+  "surfaces": [{ "id": "w-1.9-org-a11y-atspi-accessible-229", "type": "window" }]
+}
+```
+
+If the control already shows the value, nothing is delivered. A combo box whose accessible name is its current value gets a new identity when the value changes, so the old ref returns `STALE_REF` afterward: find the control again before the next action.
+
+Platform limits: on macOS, dismiss any open menu first. On Linux, a Qt combo refuses headless with `details.kind: pointer_required`, and a GTK4 list refuses with `selection_index_unproven`. See the platform pages.
+
+## toggle
+
+Flips a checkbox or switch. Prefer [`check`](#check) and [`uncheck`](#uncheck), which are idempotent; use `toggle` only when you want the opposite of whatever the state is.
+
+```bash
+agent-desktop toggle <REF> [--timeout-ms MS]
+```
+
+The readback requires the checked state to have changed, and `post_state.states` shows the result. An unreadable or indeterminate state returns `ACTION_FAILED`, and a role that cannot be checked returns `ACTION_NOT_SUPPORTED`.
+
+## check
+
+Sets a checkbox or switch to checked. An element that is already checked delivers nothing.
+
+```bash
+agent-desktop check <REF> [--timeout-ms MS]
+```
+
+```json
+{
+  "action": "check",
+  "details": { "verification_scope": "element_state" },
+  "disposition": { "delivery": "delivered_verified", "retry": "unsafe" },
+  "post_state": { "enabled": true, "role": "checkbox", "states": ["checked"] },
+  "steps": [{ "label": "Action.DoAction", "mechanism": "semantic_api", "outcome": "succeeded", "verified": true }]
+}
+```
+
+Run it again on the same checkbox and the step is skipped:
+
+```json
+{
+  "action": "check",
+  "details": { "verification_scope": "element_state" },
+  "disposition": { "delivery": "not_delivered", "retry": "safe" },
+  "post_state": { "enabled": true, "role": "checkbox", "states": ["checked"] },
+  "steps": [{ "label": "Action.DoAction", "mechanism": "semantic_api", "outcome": "skipped", "verified": true }]
+}
+```
+
+Errors are the same as [`toggle`](#toggle). On Linux, two clicks less than about 250 ms apart on one GTK4 button can act once.
+
+## uncheck
+
+Sets a checkbox or switch to unchecked, idempotently. The result matches `check`, with `checked` absent from `post_state.states`.
+
+```bash
+agent-desktop uncheck <REF> [--timeout-ms MS]
+```
+
+## expand
+
+Expands a disclosure triangle, tree item, or accordion, and verifies that the element reads as expanded (`post_state.states` contains `expanded`). `data.surfaces` can list a menu or popover the expansion opened. A non-expandable element returns `ACTION_NOT_SUPPORTED`.
+
+```bash
+agent-desktop expand <REF> [--timeout-ms MS]
+```
+
+## collapse
+
+Collapses a disclosure triangle, tree item, or accordion, and verifies that `expanded` is gone. Errors are the same as [`expand`](#expand).
+
+```bash
+agent-desktop collapse <REF> [--timeout-ms MS]
+```

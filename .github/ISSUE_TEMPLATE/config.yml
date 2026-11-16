@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Feature request
+    url: https://github.com/vercel-labs/agent-desktop/discussions/new?category=ideas
+    about: Suggest new features and improvements in Discussions.
+  - name: Ask a question
+    url: https://github.com/vercel-labs/agent-desktop/discussions/new?category=help
+    about: Get help using agent-desktop in Discussions.
+  - name: Security vulnerabilities
+    url: https://github.com/vercel-labs/agent-desktop/security/advisories/new
+    about: Report security issues privately (do not open a public issue).
+  - name: Documentation & usage
+    url: https://github.com/vercel-labs/agent-desktop#readme
+    about: Read the README and skill docs before filing.

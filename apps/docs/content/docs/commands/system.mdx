@@ -1,0 +1,207 @@
+---
+title: System commands
+navTitle: System
+description: Reference for status, permissions, version, skills, session, cursor-overlay, and trace.
+---
+
+These commands report adapter and OS state, manage sessions and their traces, and configure the cursor overlay. None of them acts on an application. The examples are real output from Linux.
+
+## status
+
+Shows adapter health, platform, permissions, and the active snapshot and session. It takes no flags.
+
+```bash
+agent-desktop status
+```
+
+<table>
+  <thead>
+    <tr><th>Field</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>platform</code>, <code>version</code></td><td>The OS and the agent-desktop version.</td></tr>
+    <tr><td><code>permissions</code></td><td>The object <a href="#permissions"><code>permissions</code></a> returns.</td></tr>
+    <tr><td><code>snapshot_id</code>, <code>ref_count</code></td><td>The latest snapshot in the selected namespace, or <code>null</code>.</td></tr>
+    <tr><td><code>session_id</code>, <code>tracing</code></td><td>The active session, or <code>null</code>, and whether a trace writer is attached.</td></tr>
+    <tr><td><code>artifacts</code></td><td><code>events</code> or <code>full</code>, for an active session only.</td></tr>
+    <tr><td><code>supported_surfaces</code></td><td>Surface kinds this adapter can read. Empty means the accessibility service did not answer. See <a href="/desktop/surfaces">Surfaces</a>.</td></tr>
+    <tr><td><code>state_root</code></td><td>The resolved <a href="/desktop/configuration#state-root">state root</a>.</td></tr>
+  </tbody>
+</table>
+
+[Installation](/desktop/installation#verify-the-install) shows a full result. A missing accessibility service does not fail `status`; it shows as a denied permission and an empty `supported_surfaces`. An invalid `AGENT_DESKTOP_HOME` or `AGENT_DESKTOP_SESSION` returns `INVALID_ARGS`.
+
+## permissions
+
+Reports the OS permission states agent-desktop needs.
+
+```bash
+agent-desktop permissions [--request] [--guide]
+```
+
+<table>
+  <thead>
+    <tr><th>Flag</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>--request</code></td><td>off</td><td>Ask the OS to prompt for missing permissions, through a bounded helper so a stalled prompt cannot hang the command. This is the only path that prompts.</td></tr>
+    <tr><td><code>--guide</code></td><td>off</td><td>macOS only. Open System Settings with an on-screen guide and return without waiting. <code>data.guide</code> is <code>started</code>, <code>already_running</code>, or <code>not_needed</code>.</td></tr>
+  </tbody>
+</table>
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "permissions",
+  "data": {
+    "accessibility": { "state": "granted" },
+    "automation": { "state": "not_required" },
+    "screen_recording": { "state": "not_required" }
+  }
+}
+```
+
+Each state is `granted`, `denied` (with a `suggestion`), `not_required`, or `unknown`. On Windows and Linux, `--guide` returns `PLATFORM_NOT_SUPPORTED`.
+
+## version
+
+Prints the version, CPU architecture, and OS. It takes no flags.
+
+```json
+{ "version": "2.6", "ok": true, "command": "version", "data": { "os": "linux", "target": "x86_64", "version": "1.0.1" } }
+```
+
+The envelope's `version` is the JSON contract version; `data.version` is the release.
+
+## skills
+
+Prints the guides compiled into the binary. Usage, names, and references are on [Skills](/desktop/skills).
+
+```bash
+agent-desktop skills [list]
+agent-desktop skills get NAME [REFERENCE] [--full]
+agent-desktop skills path
+```
+
+## session
+
+Creates, lists, ends, and cleans up sessions. What a session is and how commands select one are on [Sessions](/desktop/sessions).
+
+```bash
+agent-desktop session start [--name LABEL] [--no-trace] [--screenshots] [--cursor [--multi-agent]]
+agent-desktop session end [ID]
+agent-desktop session list
+agent-desktop session gc [--older-than SECONDS] [--ended]
+```
+
+<table>
+  <thead>
+    <tr><th>Subcommand and flag</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>start --name LABEL</code></td><td>none</td><td>A label of 1 to 128 bytes.</td></tr>
+    <tr><td><code>start --no-trace</code></td><td>off</td><td>Create the session without tracing.</td></tr>
+    <tr><td><code>start --screenshots</code></td><td>off</td><td>Capture pre-action and post-action screenshots and refmap copies. Unredacted. Requires tracing.</td></tr>
+    <tr><td><code>start --cursor</code></td><td>off</td><td>Enable the cursor overlay with its default style.</td></tr>
+    <tr><td><code>start --multi-agent</code></td><td>off</td><td>Give each harness subagent its own cursor. Requires <code>--cursor</code>; desktop actions then need an agent id.</td></tr>
+    <tr><td><code>end [ID]</code></td><td>the active session</td><td>Seal the manifest; running it again on an ended session succeeds. Also stops every cursor overlay in the session.</td></tr>
+    <tr><td><code>gc --older-than SECONDS</code></td><td>none</td><td>Remove only sessions older than this; without <code>--ended</code>, sessions that never ended qualify once stale.</td></tr>
+    <tr><td><code>gc --ended</code></td><td>off</td><td>Remove ended sessions even if they wrote in the last five minutes.</td></tr>
+  </tbody>
+</table>
+
+`start` returns `session_id`, `name`, `trace`, `artifacts`, `created_at`, `next` (the shell line that exports the id), and `activation`; [Sessions](/desktop/sessions#start-list-end-and-clean-up) shows a full result. `end` returns `session_id` and `ended_at`, `list` returns `data.sessions`, and `gc` returns `data.removed`. `--screenshots` with `--no-trace` is `INVALID_ARGS`, and `--multi-agent` without `--cursor` is a parse error.
+
+## cursor-overlay
+
+Configures the presentation-only cursor overlay for a session. The overlay draws an agent cursor, a click ripple, and an element highlight, and never changes what an action does. On macOS and Windows, after `type` or `set-value` lands, it also draws a caret at the field's insertion point, and moves it after a `press` that moves the insertion point. It needs an active session, and it cannot run inside a [batch](/desktop/commands/batch).
+
+```bash
+agent-desktop --session "$AGENT_DESKTOP_SESSION" cursor-overlay enable [STYLE FLAGS]
+agent-desktop --session "$AGENT_DESKTOP_SESSION" cursor-overlay disable
+```
+
+<table>
+  <thead>
+    <tr><th><code>enable</code> flag</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>--multi-agent</code></td><td>off</td><td>Require an agent id for desktop actions. Rejected together with <code>--agent-id</code>.</td></tr>
+    <tr><td><code>--label TEXT</code>, <code>--max-words N</code></td><td>none, <code>6</code></td><td>Intent text beside the cursor, limited to 1 to 12 words, drawn as a black pill sized to the text.</td></tr>
+    <tr><td><code>--accent HEX</code></td><td><code>#4299FF</code></td><td>Cursor body, ripple, element outline and caret color.</td></tr>
+    <tr><td><code>--fill HEX</code>, <code>--rim HEX</code></td><td>the accent, <code>#111318</code></td><td>Cursor body and outline colors. <code>--fill</code> sets a body color other than the accent.</td></tr>
+    <tr><td><code>--size N</code></td><td><code>1.0</code></td><td>Size multiplier, 0.5 to 4.0.</td></tr>
+    <tr><td><code>--no-ripple</code>, <code>--no-highlight</code></td><td>off</td><td>Turn off the click ripple or the element outline.</td></tr>
+    <tr><td><code>--image PATH</code>, <code>--hotspot X,Y</code></td><td>built-in arrow</td><td>Draw the cursor from a PNG (at most 2 MiB and 1024 pixels per side) with its click point.</td></tr>
+    <tr><td><code>--pointer-image PATH</code>, <code>--pointer-hotspot X,Y</code></td><td>none</td><td>PNG shown over pressable controls, with its click point.</td></tr>
+    <tr><td><code>--travel-ms MIN,MAX</code></td><td><code>90,320</code></td><td>Travel time range for short to long moves.</td></tr>
+    <tr><td><code>--bow N</code>, <code>--overshoot N</code>, <code>--tremor PX</code></td><td><code>1</code>, <code>0.035</code>, <code>1.1</code></td><td>Path curvature (0 to 3), overshoot fraction (0 to 0.15), and tremor in points (0 to 4).</td></tr>
+    <tr><td><code>--dwell-ms N</code></td><td><code>0</code></td><td>Pause on the target before the action, 0 to 300. Maximum travel plus dwell must not exceed 700 ms.</td></tr>
+    <tr><td><code>--motion-seed N</code></td><td>none</td><td>Vary each move deterministically.</td></tr>
+  </tbody>
+</table>
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "cursor-overlay",
+  "data": {
+    "activation": { "environment": "AGENT_DESKTOP_SESSION", "value": "run-1793353372413-23159-0" },
+    "cursor_overlay": {
+      "enabled": true,
+      "max_words": 6,
+      "style": { "accent": "#4299FF", "highlight": true, "rim": "#111318", "ripple": true, "size": 1.0 }
+    },
+    "next": "export AGENT_DESKTOP_SESSION=run-1793353372413-23159-0",
+    "rendered": true,
+    "session_id": "run-1793353372413-23159-0"
+  }
+}
+```
+
+`rendered: false` means the setting was saved but nothing was drawn, as on Linux Wayland. With `--agent-id`, `enable` saves the style as that agent's profile. `disable` stops every cursor in the session; if teardown cannot be confirmed, the setting is still saved and the error's disposition is `delivery_uncertain`. How headed actions and the overlay interact is in [Headed mode](/desktop/guides/headed-mode#see-where-actions-land).
+
+## trace
+
+Reads the merged trace timeline of the active session. Both actions need an active session and no OS permission. Recording and privacy are in [Traces](/desktop/guides/traces).
+
+```bash
+agent-desktop --session "$AGENT_DESKTOP_SESSION" trace show [--limit N] [--event PREFIX]
+agent-desktop --session "$AGENT_DESKTOP_SESSION" trace export [--out PATH] [--limit N]
+```
+
+<table>
+  <thead>
+    <tr><th>Subcommand and flag</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>show --limit N</code></td><td><code>500</code></td><td>Return the last N merged events. <code>0</code> returns all.</td></tr>
+    <tr><td><code>show --event PREFIX</code></td><td>none</td><td>Keep only events whose name starts with this prefix, before the limit applies.</td></tr>
+    <tr><td><code>export --out PATH</code></td><td><code>trace-SESSION.html</code> in the session directory</td><td>Output path for a self-contained HTML viewer.</td></tr>
+    <tr><td><code>export --limit N</code></td><td><code>5000</code></td><td>Embed the last N events. <code>0</code> embeds all.</td></tr>
+  </tbody>
+</table>
+
+`show` returns `session_id`, `segments`, `total_events`, `returned_events`, `truncated`, and `events`, plus `matched_events` with `--event` and `warnings` for skipped lines. `export` returns:
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "trace",
+  "data": {
+    "bytes": 26611,
+    "event_count": 9,
+    "path": "/tmp/run.html",
+    "returned_events": 9,
+    "screenshots_embedded": 0,
+    "screenshots_skipped": 0,
+    "total_events": 9,
+    "truncated": false
+  }
+}
+```
+
+Without an active session, or with a session that recorded nothing, both return `INVALID_ARGS`.

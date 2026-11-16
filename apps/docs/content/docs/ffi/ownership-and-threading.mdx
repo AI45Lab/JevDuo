@@ -1,0 +1,107 @@
+---
+title: Ownership, threading, and errors
+navTitle: Ownership, threading, errors
+description: Who frees every pointer the C library returns, which threads may call it, and how to read failures.
+---
+
+## Ownership
+
+Every pointer the library hands you was allocated by Rust, so C's `free()` cannot release it. Each one has a matching free function. Borrowed pointers, such as the `ad_last_error_*` strings and entries returned by `*_list_get`, are never freed.
+
+<table>
+  <thead>
+    <tr><th>Allocated by</th><th>Free with</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>The JSON entrypoints (<code>ad_snapshot</code>, <code>ad_execute_by_ref</code>, <code>ad_execute_by_ref_timeout</code>, <code>ad_wait</code>, <code>ad_status</code>, <code>ad_version</code>, <code>ad_trace_show</code>, <code>ad_trace_export</code>)</td><td><code>ad_free_string(out)</code></td></tr>
+    <tr><td><code>ad_get_clipboard</code>, <code>ad_get</code> (which may write null)</td><td><code>ad_free_string(text)</code></td></tr>
+    <tr><td><code>ad_adapter_create</code>, <code>ad_adapter_create_with_session</code></td><td><code>ad_adapter_destroy(adapter)</code></td></tr>
+    <tr><td><code>ad_list_apps</code></td><td><code>ad_app_list_free(list)</code></td></tr>
+    <tr><td><code>ad_list_displays</code></td><td><code>ad_display_list_free(list)</code></td></tr>
+    <tr><td><code>ad_list_windows_exact</code></td><td><code>ad_exact_window_list_free(list)</code></td></tr>
+    <tr><td><code>ad_list_surfaces_exact</code></td><td><code>ad_exact_surface_list_free(list)</code></td></tr>
+    <tr><td><code>ad_list_notifications</code></td><td><code>ad_notification_list_free(list)</code></td></tr>
+    <tr><td><code>ad_dismiss_all_notifications</code></td><td><code>ad_dismiss_all_notifications_free(dismissed, failed)</code></td></tr>
+    <tr><td><code>ad_launch_app_exact</code> (the window struct's strings)</td><td><code>ad_release_exact_window_fields(&amp;out)</code></td></tr>
+    <tr><td><code>ad_get_tree_exact</code></td><td><code>ad_free_tree(&amp;out)</code></td></tr>
+    <tr><td><code>ad_find_exact</code> (the native handle)</td><td><code>ad_free_handle(adapter, &amp;handle)</code></td></tr>
+    <tr><td><code>ad_execute_action</code>, <code>ad_execute_action_with_policy</code>, <code>ad_notification_action</code></td><td><code>ad_free_action_result(&amp;out)</code></td></tr>
+    <tr><td><code>ad_screenshot</code>, <code>ad_screenshot_window_exact</code></td><td><code>ad_image_buffer_free(buf)</code></td></tr>
+  </tbody>
+</table>
+
+- Every free function accepts null and does nothing.
+- Freeing a list handle or an image buffer twice is undefined behavior. Set the pointer to `NULL` after you free it.
+- `ad_free_handle` zeroes the handle, so a second call on the same struct is a no-op. Free handles before you destroy the adapter that produced them.
+- Strings inside a struct belong to the struct's owner. Do not free them one by one.
+- Every fallible function zeroes its out-parameter before validating anything, so calling the paired free function after a failure is safe.
+- `ad_resolve_element_exact` and `ad_execute_ref_action_exact_with_policy` allocate nothing. They fail with `AD_RESULT_ERR_ACTION_NOT_SUPPORTED` and leave their out-parameter null or zeroed.
+
+## Threading
+
+Entrypoints may be called from any host thread. Native handles are the exception: resolve, use, and release a handle on the same thread, with the adapter that produced it; anything else returns `AD_RESULT_ERR_INVALID_ARGS`. To pass a target across threads, pass the qualified ref and use `ad_execute_by_ref`.
+
+<table>
+  <thead>
+    <tr><th>Concurrent calls</th><th>Contract</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>read and read</td><td>Both run concurrently.</td></tr>
+    <tr><td>read and mutation</td><td>The read does not wait and may overlap the mutation; its result is a point-in-time observation.</td></tr>
+    <tr><td>mutation and mutation</td><td>One holder of the interaction lock runs at a time for the same OS user. A waiter that cannot get it returns a structured timeout.</td></tr>
+  </tbody>
+</table>
+
+Snapshots, finds, listings, screenshots, clipboard reads, status, and trace reads are observations. Ref actions, native-handle actions, input synthesis, clipboard writes, app and window changes, and notification actions are mutations. The lock is shared with the CLI, so mutations serialize across threads and processes of one user. It is scoped to one command, not a transaction: the UI can change between an observation and a later action.
+
+- `ad_adapter_destroy` revokes the adapter. Calls already in flight finish; calls that start afterward return `AD_RESULT_ERR_INVALID_ARGS`.
+- `ad_wait` blocks its calling thread for at most `scope.timeout_ms`.
+- The `ad_set_log_callback` callback may run on any thread that calls an `ad_*` function, concurrently, and may still fire briefly after you unregister it. Keep it alive for the process lifetime and never let it unwind across the C ABI.
+- A language runtime's global lock does not give thread affinity; keep native handles in thread-confined objects, or use refs.
+- On macOS, `ad_check_permissions` reports Accessibility trust for the host executable (`python3`, `node`, your app), not for the library.
+
+## Errors
+
+A failing `AdResult` function returns a negative code and fills the calling thread's last-error slot. Read it before the next call that can fail.
+
+```c
+AdExactWindowInfo win = {0};
+AdResult rc = ad_launch_app_exact(adapter, "gnome-calculator", 5000, &win);
+if (rc != AD_RESULT_OK) {
+    const char *msg = ad_last_error_message();
+    const char *sug = ad_last_error_suggestion();   /* may be NULL */
+    fprintf(stderr, "launch failed (%d): %s\n", (int)rc, msg ? msg : "(no message)");
+    if (sug) fprintf(stderr, "  suggestion: %s\n", sug);
+    return -1;
+}
+ad_release_exact_window_fields(&win);
+```
+
+<table>
+  <thead>
+    <tr><th>Accessor</th><th>Returns</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>ad_last_error_code()</code></td><td>The code of the last failure, or <code>AD_RESULT_OK</code></td></tr>
+    <tr><td><code>ad_last_error_message()</code></td><td>Description, or null</td></tr>
+    <tr><td><code>ad_last_error_suggestion()</code></td><td>Recovery hint, or null</td></tr>
+    <tr><td><code>ad_last_error_platform_detail()</code></td><td>OS diagnostic, or null</td></tr>
+    <tr><td><code>ad_last_error_details()</code></td><td>Structured JSON, or null. It can contain text from the user's screen, so keep it out of shared logs.</td></tr>
+    <tr><td><code>ad_last_error_delivery_semantics(&amp;sem)</code></td><td>Writes the delivery and retry values of the last failure; both are <code>UNKNOWN</code> when none is recorded.</td></tr>
+  </tbody>
+</table>
+
+The strings stay valid across later successful calls on the same thread; only the next failing call replaces them, like POSIX `errno`. The slot is thread-local. Retry only when the retry disposition is `AD_RETRY_DISPOSITION_SAFE`, as described in [Errors and recovery](/desktop/errors-and-recovery#disposition).
+
+`AdResult` codes mirror the CLI's [error codes](/desktop/errors-and-recovery#error-codes): `AD_RESULT_ERR_PERM_DENIED` is -1 through `AD_RESULT_ERR_APP_UNRESPONSIVE` at -16. The full list is on the [API page](/desktop/ffi/api#enums). Treat any negative value outside that list as an unknown error, because new codes can be appended.
+
+### Two failure modes for JSON entrypoints
+
+The JSON entrypoints fail in two ways, so check `*out` before you decide whether to free:
+
+- **Argument or infrastructure failure** (a null adapter, bad UTF-8, a bad enum): `*out` is null, nothing is allocated, and only the last-error slot reports it.
+- **Command failure** (app not found, `STALE_REF`, `TIMEOUT`): `*out` holds an `"ok": false` envelope that you free with `ad_free_string`. The last-error slot is also set.
+
+### Refs, enums, and panics
+
+Ref-taking functions accept only `@<snapshot_id>:e<N>`. A bare or malformed ref returns `AD_RESULT_ERR_INVALID_ARGS` before dispatch; a missing snapshot returns `AD_RESULT_ERR_SNAPSHOT_NOT_FOUND`; a missing ref returns `AD_RESULT_ERR_STALE_REF`. Every `int32_t` enum field is validated, so an out-of-range value returns `AD_RESULT_ERR_INVALID_ARGS` instead of undefined behavior. Every entrypoint traps panics and reports them as `AD_RESULT_ERR_INTERNAL`, but only in a library built with the `release-ffi` profile; see [Build and link](/desktop/ffi/build-and-link#build-from-source).

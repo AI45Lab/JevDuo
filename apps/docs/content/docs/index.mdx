@@ -1,0 +1,71 @@
+---
+title: agent-desktop
+navTitle: Introduction
+description: A CLI and C library that lets AI agents read and operate desktop apps on macOS, Windows, and Linux through the OS accessibility tree.
+---
+
+agent-desktop reads the accessibility tree of a desktop app and returns it as JSON. Every element an agent can act on gets a ref. The agent acts on a ref, reads the UI again to check the result, and repeats. It ships as a CLI and as a C library for macOS, Windows, and Linux.
+
+```bash
+npm install -g agent-desktop        # macOS, Windows, and Linux
+agent-desktop status                # platform, permissions, supported surfaces
+agent-desktop skills get desktop    # the guide your agent should load first
+```
+
+## What agent-desktop is and is not
+
+- **A tool that agents call.** It is not an agent. The observe, act, and verify loop lives in the calling agent or script.
+- **No model inside.** It never embeds an LLM, has no GUI, and has no interactive prompt. Every command prints one JSON envelope and exits.
+- **Desktop apps only.** It does not automate web pages; use [agent-browser](https://agent-browser.dev) for those. For the web contents of a Chromium or Electron app you launch, agent-desktop opens a DevTools port that agent-browser connects to. See [Chromium and Electron apps](/desktop/guides/chromium-and-electron).
+- **Limited to what apps expose.** It reads accessibility trees and does not match pixels, so it cannot see a UI that publishes no accessibility tree.
+
+## The loop in four commands
+
+An agent maps an app, drills into the region it needs, acts on a ref, and checks the result.
+
+```bash
+agent-desktop snapshot --app gnome-calculator --skeleton -i --compact         # 1. map: a shallow skeleton
+agent-desktop snapshot --root @s2txcl95uvubmn:e1 -i --compact                 # 2. drill: expand one region
+agent-desktop click @s2txcl95uvubmn:e11                                       # 3. act: press the 7 button
+agent-desktop wait --element @s2txcl95uvubmn:e6 --predicate value --value 7   # 4. verify: the display reads 7
+```
+
+Refs carry the id of the snapshot that produced them (`@s2txcl95uvubmn:e11`). [Snapshots and refs](/desktop/snapshots-and-refs) defines them, and [Skeleton and drill-down](/desktop/skeleton-and-drill-down) explains the first two commands. A successful action does not prove the UI changed, so the loop ends with a read. The [quick start](/desktop/quick-start) runs these commands with their output.
+
+## How it works
+
+<Diagram name="architecture" title="agent-desktop architecture" aspectRatio="720 / 672" />
+
+The same chain in text, from the caller to the app:
+
+1. The calling agent: your code or an LLM loop. It runs a command and reads the JSON envelope it prints.
+2. The `agent-desktop` CLI, or the [C library](/desktop/ffi) when you call it in process.
+3. `agent-desktop-core`: the commands, `RefStore`, and snapshot building. Core defines the `PlatformAdapter` trait and every shared type.
+4. `PlatformAdapter`, the only way core reaches an operating system.
+5. One platform crate: `agent-desktop-macos`, `agent-desktop-windows`, or `agent-desktop-linux`.
+6. The OS accessibility API: the AX API on macOS, UI Automation on Windows, AT-SPI on Linux.
+7. The app, which exposes its UI through that API.
+
+Core never imports a platform crate, and platform crates never import each other. Only the CLI and the C library connect a platform crate to core, and each picks it at compile time, so a binary drives the OS it was built for.
+
+## Platform support
+
+<table>
+  <thead>
+    <tr><th>Platform</th><th>Requirement</th><th>Accessibility API</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><a href="/desktop/platforms/macos">macOS</a></td><td>macOS 13 or later, Intel or Apple Silicon. Accessibility permission for the app that runs agent-desktop.</td><td>AX API</td></tr>
+    <tr><td><a href="/desktop/platforms/windows">Windows</a></td><td>Windows 10 1809 or later, or Windows Server 2019 or later, on x64 or ARM64, in the signed-in user's interactive desktop.</td><td>UI Automation</td></tr>
+    <tr><td><a href="/desktop/platforms/linux">Linux</a></td><td>Ubuntu 24.04 or later on x86_64 or aarch64 (glibc 2.35 floor), in the user's graphical session with a running AT-SPI bus.</td><td>AT-SPI</td></tr>
+  </tbody>
+</table>
+
+The CLI has the same 60 command names on every platform. Four of them (`key-down`, `key-up`, `mouse-down`, `mouse-up`) fail closed everywhere. Each platform page lists what works headless, what needs `--headed`, and what refuses.
+
+## Next steps
+
+- [Installation](/desktop/installation): install the CLI, verify it, and grant permissions.
+- [Quick start](/desktop/quick-start): one complete run against a real app.
+- [Skills](/desktop/skills): the guides your agent reads before it acts.
+- [Commands](/desktop/commands): all 60 commands.

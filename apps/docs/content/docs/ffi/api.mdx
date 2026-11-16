@@ -1,0 +1,843 @@
+---
+title: C library API
+navTitle: API
+description: Every function, struct, and enum in agent_desktop.h, grouped by area, with exact C signatures.
+---
+
+Signatures on this page are extracted from `crates/ffi/include/agent_desktop.h`. Every `AdResult` function returns `AD_RESULT_OK` (0) or a negative code; read the details with the [last-error accessors](/desktop/ffi/ownership-and-threading#errors). Which call frees which pointer is in [Ownership](/desktop/ffi/ownership-and-threading#ownership).
+
+## Enums
+
+Enum fields inside structs are stored as `int32_t`. The library validates each one and returns `AD_RESULT_ERR_INVALID_ARGS` for an out-of-range value. New `AdResult` codes may be appended.
+
+<table>
+  <thead>
+    <tr><th>Enum</th><th>Values</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>AdResult</code></td><td><code>AD_RESULT_OK</code> 0, <code>AD_RESULT_ERR_PERM_DENIED</code> -1, <code>AD_RESULT_ERR_ELEMENT_NOT_FOUND</code> -2, <code>AD_RESULT_ERR_APP_NOT_FOUND</code> -3, <code>AD_RESULT_ERR_ACTION_FAILED</code> -4, <code>AD_RESULT_ERR_ACTION_NOT_SUPPORTED</code> -5, <code>AD_RESULT_ERR_STALE_REF</code> -6, <code>AD_RESULT_ERR_WINDOW_NOT_FOUND</code> -7, <code>AD_RESULT_ERR_PLATFORM_NOT_SUPPORTED</code> -8, <code>AD_RESULT_ERR_TIMEOUT</code> -9, <code>AD_RESULT_ERR_INVALID_ARGS</code> -10, <code>AD_RESULT_ERR_NOTIFICATION_NOT_FOUND</code> -11, <code>AD_RESULT_ERR_INTERNAL</code> -12, <code>AD_RESULT_ERR_SNAPSHOT_NOT_FOUND</code> -13, <code>AD_RESULT_ERR_POLICY_DENIED</code> -14, <code>AD_RESULT_ERR_AMBIGUOUS_TARGET</code> -15, <code>AD_RESULT_ERR_APP_UNRESPONSIVE</code> -16</td></tr>
+    <tr><td><code>AdImageFormat</code></td><td><code>AD_IMAGE_FORMAT_PNG</code> 0, <code>AD_IMAGE_FORMAT_JPG</code> 1</td></tr>
+    <tr><td><code>AdActionKind</code></td><td><code>AD_ACTION_KIND_CLICK</code> 0, <code>AD_ACTION_KIND_DOUBLE_CLICK</code> 1, <code>AD_ACTION_KIND_RIGHT_CLICK</code> 2, <code>AD_ACTION_KIND_TRIPLE_CLICK</code> 3, <code>AD_ACTION_KIND_SET_VALUE</code> 4, <code>AD_ACTION_KIND_SET_FOCUS</code> 5, <code>AD_ACTION_KIND_EXPAND</code> 6, <code>AD_ACTION_KIND_COLLAPSE</code> 7, <code>AD_ACTION_KIND_SELECT</code> 8, <code>AD_ACTION_KIND_TOGGLE</code> 9, <code>AD_ACTION_KIND_CHECK</code> 10, <code>AD_ACTION_KIND_UNCHECK</code> 11, <code>AD_ACTION_KIND_SCROLL</code> 12, <code>AD_ACTION_KIND_SCROLL_TO</code> 13, <code>AD_ACTION_KIND_PRESS_KEY</code> 14, <code>AD_ACTION_KIND_KEY_DOWN</code> 15, <code>AD_ACTION_KIND_KEY_UP</code> 16, <code>AD_ACTION_KIND_TYPE_TEXT</code> 17, <code>AD_ACTION_KIND_CLEAR</code> 18, <code>AD_ACTION_KIND_HOVER</code> 19, <code>AD_ACTION_KIND_DRAG</code> 20</td></tr>
+    <tr><td><code>AdDirection</code></td><td><code>AD_DIRECTION_UP</code> 0, <code>AD_DIRECTION_DOWN</code> 1, <code>AD_DIRECTION_LEFT</code> 2, <code>AD_DIRECTION_RIGHT</code> 3</td></tr>
+    <tr><td><code>AdDeliveryDisposition</code></td><td><code>AD_DELIVERY_DISPOSITION_UNKNOWN</code> 0, <code>AD_DELIVERY_DISPOSITION_NOT_DELIVERED</code> 1, <code>AD_DELIVERY_DISPOSITION_DELIVERY_UNCERTAIN</code> 2, <code>AD_DELIVERY_DISPOSITION_DELIVERED_UNVERIFIED</code> 3, <code>AD_DELIVERY_DISPOSITION_DELIVERED_VERIFIED</code> 4</td></tr>
+    <tr><td><code>AdFindSelectionKind</code></td><td><code>AD_FIND_SELECTION_KIND_STRICT</code> 0, <code>AD_FIND_SELECTION_KIND_FIRST</code> 1, <code>AD_FIND_SELECTION_KIND_LAST</code> 2, <code>AD_FIND_SELECTION_KIND_NTH</code> 3</td></tr>
+    <tr><td><code>AdIdentifierKind</code></td><td><code>AD_IDENTIFIER_KIND_AX_IDENTIFIER</code> 0, <code>AD_IDENTIFIER_KIND_AX_DOM_IDENTIFIER</code> 1, <code>AD_IDENTIFIER_KIND_AUTOMATION_ID</code> 2, <code>AD_IDENTIFIER_KIND_RUNTIME_ID</code> 3, <code>AD_IDENTIFIER_KIND_ATSPI_OBJECT_PATH</code> 4</td></tr>
+    <tr><td><code>AdModifier</code></td><td><code>AD_MODIFIER_META</code> 0, <code>AD_MODIFIER_CTRL</code> 1, <code>AD_MODIFIER_ALT</code> 2, <code>AD_MODIFIER_SHIFT</code> 3</td></tr>
+    <tr><td><code>AdMouseButton</code></td><td><code>AD_MOUSE_BUTTON_LEFT</code> 0, <code>AD_MOUSE_BUTTON_RIGHT</code> 1, <code>AD_MOUSE_BUTTON_MIDDLE</code> 2</td></tr>
+    <tr><td><code>AdMouseEventKind</code></td><td><code>AD_MOUSE_EVENT_KIND_MOVE</code> 0, <code>AD_MOUSE_EVENT_KIND_DOWN</code> 1, <code>AD_MOUSE_EVENT_KIND_UP</code> 2, <code>AD_MOUSE_EVENT_KIND_CLICK</code> 3</td></tr>
+    <tr><td><code>AdPolicyKind</code></td><td><code>AD_POLICY_KIND_HEADLESS</code> 0, <code>AD_POLICY_KIND_FOCUS_FALLBACK</code> 1, <code>AD_POLICY_KIND_HEADED</code> 2</td></tr>
+    <tr><td><code>AdRetryDisposition</code></td><td><code>AD_RETRY_DISPOSITION_UNKNOWN</code> 0, <code>AD_RETRY_DISPOSITION_SAFE</code> 1, <code>AD_RETRY_DISPOSITION_UNSAFE</code> 2</td></tr>
+    <tr><td><code>AdScreenshotKind</code></td><td><code>AD_SCREENSHOT_KIND_SCREEN</code> 0, <code>AD_SCREENSHOT_KIND_FULL_SCREEN</code> 2</td></tr>
+    <tr><td><code>AdSnapshotSurface</code></td><td><code>AD_SNAPSHOT_SURFACE_WINDOW</code> 0, <code>AD_SNAPSHOT_SURFACE_FOCUSED</code> 1, <code>AD_SNAPSHOT_SURFACE_MENU</code> 2, <code>AD_SNAPSHOT_SURFACE_MENUBAR</code> 3, <code>AD_SNAPSHOT_SURFACE_SHEET</code> 4, <code>AD_SNAPSHOT_SURFACE_POPOVER</code> 5, <code>AD_SNAPSHOT_SURFACE_ALERT</code> 6, <code>AD_SNAPSHOT_SURFACE_DESKTOP</code> 7, <code>AD_SNAPSHOT_SURFACE_TASKBAR</code> 8, <code>AD_SNAPSHOT_SURFACE_SYSTEM_TRAY</code> 9, <code>AD_SNAPSHOT_SURFACE_QUICK_SETTINGS</code> 10, <code>AD_SNAPSHOT_SURFACE_NOTIFICATION_CENTER</code> 11, <code>AD_SNAPSHOT_SURFACE_TOOLBAR</code> 12, <code>AD_SNAPSHOT_SURFACE_DOCK</code> 13, <code>AD_SNAPSHOT_SURFACE_SPOTLIGHT</code> 14, <code>AD_SNAPSHOT_SURFACE_MENU_BAR_EXTRAS</code> 15, <code>AD_SNAPSHOT_SURFACE_SYSTEM_TRAY_OVERFLOW</code> 16, <code>AD_SNAPSHOT_SURFACE_START_MENU</code> 17, <code>AD_SNAPSHOT_SURFACE_ACTION_CENTER</code> 18</td></tr>
+    <tr><td><code>AdStepMechanism</code></td><td><code>AD_STEP_MECHANISM_SEMANTIC_API</code> 1, <code>AD_STEP_MECHANISM_PHYSICAL_SYNTHETIC</code> 2</td></tr>
+    <tr><td><code>AdWindowOpKind</code></td><td><code>AD_WINDOW_OP_KIND_RESIZE</code> 0, <code>AD_WINDOW_OP_KIND_MOVE</code> 1, <code>AD_WINDOW_OP_KIND_MINIMIZE</code> 2, <code>AD_WINDOW_OP_KIND_MAXIMIZE</code> 3, <code>AD_WINDOW_OP_KIND_RESTORE</code> 4</td></tr>
+  </tbody>
+</table>
+
+Sizes and versions of versioned structs are the `AD_*_SIZE` and `AD_*_VERSION` macros in the header. `AD_MAX_STRING_BYTES` (1 MiB) bounds every C string the library reads.
+
+## ABI handshake
+
+```c
+// Returns the major ABI version of the loaded library.
+uint32_t ad_abi_version(void);
+
+// Checks the header major against the library; call once after loading.
+AdResult ad_init(uint32_t expected_major);
+```
+
+## Adapter lifecycle
+
+An `AdAdapter` is an opaque token. Create one per process, or one per session.
+
+```c
+// Creates a platform adapter with no session; null on failure.
+struct AdAdapter *ad_adapter_create(void);
+
+// Creates an adapter scoped to a session id; a null session means none.
+struct AdAdapter *ad_adapter_create_with_session(const char *session);
+
+// Destroys an adapter; calls in flight finish, later calls fail with invalid args.
+void ad_adapter_destroy(struct AdAdapter *adapter);
+
+// Returns OK when accessibility permission is granted or not required.
+AdResult ad_check_permissions(const struct AdAdapter *adapter);
+```
+
+## Command-backed JSON entrypoints
+
+Each writes an owned JSON envelope into `*out`; free it with `ad_free_string`, including an `"ok": false` envelope. `*out` is null only on an argument or infrastructure failure.
+
+```c
+// Snapshots the app surface selected by AdSnapshotSurface.
+AdResult ad_snapshot(const struct AdAdapter *adapter,
+                     const char *app,
+                     int32_t surface,
+                     uint8_t max_depth,
+                     bool interactive_only,
+                     bool compact,
+                     char **out);
+
+// Runs a ref action with the default 5000 ms auto-wait; policy is an AdPolicyKind.
+AdResult ad_execute_by_ref(const struct AdAdapter *adapter,
+                           const char *ref_id,
+                           const struct AdAction *action,
+                           int32_t policy,
+                           char **out);
+
+// Same, with an explicit auto-wait budget (-1 default, 0 single attempt).
+AdResult ad_execute_by_ref_timeout(const struct AdAdapter *adapter,
+                                   const char *ref_id,
+                                   const struct AdAction *action,
+                                   int32_t policy,
+                                   int64_t timeout_ms,
+                                   char **out);
+
+// Runs the wait command until the condition holds or scope.timeout_ms elapses.
+AdResult ad_wait(const struct AdAdapter *adapter, const struct AdWaitArgs *args, char **out);
+
+// Returns the status envelope.
+AdResult ad_status(const struct AdAdapter *adapter, char **out);
+
+// Returns the version envelope.
+AdResult ad_version(char **out);
+
+// Returns the merged trace timeline of the adapter's session.
+AdResult ad_trace_show(const struct AdAdapter *adapter,
+                       int32_t limit,
+                       const char *event_prefix,
+                       char **out);
+
+// Exports the session trace as a self-contained HTML file.
+AdResult ad_trace_export(const struct AdAdapter *adapter,
+                         int32_t limit,
+                         const char *out_path,
+                         char **out);
+```
+
+## Actions, refs, and native handles
+
+`ad_execute_by_ref` is the primary action entrypoint. `ad_execute_action` and `ad_execute_action_with_policy` act on a native handle and skip strict re-identification and the actionability checks.
+
+The two exact-entry calls, `ad_execute_ref_action_exact_with_policy` and `ad_resolve_element_exact`, fail closed with `AD_RESULT_ERR_ACTION_NOT_SUPPORTED` on every platform. An `AdExactRefEntry` carries no retained element token and no capture proof, so the element it names cannot be re-identified. Act through a snapshot ref with `ad_execute_by_ref`, and get a native handle with `ad_find_exact`.
+
+```c
+typedef struct AdNativeHandle {
+  const void *ptr;
+} AdNativeHandle;
+
+typedef struct AdScrollParams {
+  int32_t direction;
+  uint32_t amount;
+} AdScrollParams;
+
+typedef struct AdKeyCombo {
+  const char *key;
+  const int32_t *modifiers;
+  uint32_t modifier_count;
+} AdKeyCombo;
+
+typedef struct AdPoint {
+  double x;
+  double y;
+} AdPoint;
+
+typedef struct AdDragParams {
+  struct AdPoint from;
+  struct AdPoint to;
+  uint64_t duration_ms;
+  uint64_t drop_delay_ms;
+} AdDragParams;
+
+typedef struct AdAction {
+  int32_t kind;
+  const char *text;
+  struct AdScrollParams scroll;
+  struct AdKeyCombo key;
+  struct AdDragParams drag;
+} AdAction;
+
+typedef struct AdElementState {
+  const char *role;
+  char **states;
+  uint32_t state_count;
+  const char *value;
+} AdElementState;
+
+typedef struct AdActionStep {
+  const char *label;
+  const char *outcome;
+  int32_t mechanism;
+  bool has_mechanism;
+  bool verified;
+  bool has_verified;
+  uint64_t _reserved;
+} AdActionStep;
+
+typedef struct AdDeliverySemantics {
+  int32_t delivery;
+  int32_t retry;
+} AdDeliverySemantics;
+
+typedef struct AdActionResult {
+  const char *action;
+  const char *ref_id;
+  struct AdElementState *post_state;
+  struct AdActionStep *steps;
+  uint32_t step_count;
+  const char *details_json;
+  struct AdDeliverySemantics disposition;
+} AdActionResult;
+```
+
+```c
+typedef struct AdRefProcess {
+  uint32_t pid;
+} AdRefProcess;
+
+typedef struct AdRefIdentity {
+  const char *role;
+  const char *name;
+  const char *value;
+  const char *description;
+  const char *native_id;
+} AdRefIdentity;
+
+typedef struct AdRect {
+  double x;
+  double y;
+  double width;
+  double height;
+} AdRect;
+
+typedef struct AdRefGeometry {
+  struct AdRect bounds;
+  uint64_t bounds_hash;
+  bool has_bounds;
+  bool has_bounds_hash;
+  int32_t bounds_space;
+} AdRefGeometry;
+
+typedef struct AdStringSlice {
+  const char *const *items;
+  size_t count;
+} AdStringSlice;
+
+typedef struct AdRefCapabilities {
+  struct AdStringSlice states;
+  struct AdStringSlice available_actions;
+} AdRefCapabilities;
+
+typedef struct AdRefSource {
+  const char *app;
+  const char *window_id;
+  const char *window_title;
+  uint64_t window_bounds_hash;
+  int32_t surface;
+  bool has_window_bounds_hash;
+} AdRefSource;
+
+typedef struct AdRefScope {
+  const char *root_ref;
+  const uint32_t *path;
+  size_t path_count;
+  bool path_is_absolute;
+} AdRefScope;
+
+typedef struct AdRefEntry {
+  struct AdRefProcess process;
+  struct AdRefIdentity identity;
+  struct AdRefGeometry geometry;
+  struct AdRefCapabilities capabilities;
+  struct AdRefSource source;
+  struct AdRefScope scope;
+} AdRefEntry;
+
+typedef struct AdExactRefEntry {
+  uint32_t version;
+  uint32_t size;
+  struct AdRefEntry entry;
+  const char *process_instance;
+  int32_t identifier_kind;
+} AdExactRefEntry;
+```
+
+```c
+// Acts on a native handle under the default policy, with no preflight.
+AdResult ad_execute_action(const struct AdAdapter *adapter,
+                           const struct AdNativeHandle *handle,
+                           const struct AdAction *action,
+                           struct AdActionResult *out);
+
+// Acts on a native handle with an explicit AdPolicyKind.
+AdResult ad_execute_action_with_policy(const struct AdAdapter *adapter,
+                                       const struct AdNativeHandle *handle,
+                                       const struct AdAction *action,
+                                       int32_t policy,
+                                       struct AdActionResult *out);
+
+// Always fails with ACTION_NOT_SUPPORTED: an exact ref entry carries no
+// retained element token and no capture proof, so it cannot be
+// re-identified. Act through a snapshot ref with ad_execute_by_ref.
+AdResult ad_execute_ref_action_exact_with_policy(const struct AdAdapter *adapter,
+                                                 const struct AdExactRefEntry *entry,
+                                                 const struct AdAction *action,
+                                                 int32_t policy,
+                                                 struct AdActionResult *out);
+
+// Always fails with ACTION_NOT_SUPPORTED for the same reason. To get a native
+// handle, use ad_find_exact.
+AdResult ad_resolve_element_exact(const struct AdAdapter *adapter,
+                                  const struct AdExactRefEntry *entry,
+                                  struct AdNativeHandle *out);
+
+// Releases a native handle on the resolving thread and zeroes it.
+AdResult ad_free_handle(const struct AdAdapter *adapter, struct AdNativeHandle *handle);
+
+// Frees every string and array owned by an AdActionResult.
+void ad_free_action_result(struct AdActionResult *result);
+```
+
+## Find, get, and is
+
+```c
+typedef struct AdFindSelection {
+  int32_t kind;
+  uint32_t nth;
+} AdFindSelection;
+
+typedef struct AdFindControl {
+  uint32_t version;
+  struct AdFindSelection selection;
+  uint64_t timeout_ms;
+} AdFindControl;
+
+typedef struct AdFindIdentity {
+  const char *role;
+  const char *name;
+  const char *description;
+  const char *native_id;
+  const char *value;
+} AdFindIdentity;
+
+typedef struct AdFindStatePredicate {
+  const char *token;
+  int32_t expected;
+} AdFindStatePredicate;
+
+typedef struct AdFindStateSlice {
+  const struct AdFindStatePredicate *items;
+  size_t count;
+} AdFindStateSlice;
+
+typedef struct AdFindFilter {
+  struct AdFindIdentity identity;
+  const char *has_text;
+  struct AdFindStateSlice states;
+  const struct AdFindQuery *has;
+  const struct AdFindQuery *has_not;
+  bool exact;
+} AdFindFilter;
+
+typedef struct AdFindQuery {
+  struct AdFindControl control;
+  struct AdFindFilter filter;
+} AdFindQuery;
+```
+
+```c
+// Finds and strictly resolves one element in an exact window; duplicates need a first, last, or nth selection.
+// The handle is published only when the landed element still matches the selected entry's recorded identity.
+AdResult ad_find_exact(const struct AdAdapter *adapter,
+                       const struct AdExactWindowInfo *win,
+                       const struct AdFindQuery *query,
+                       struct AdNativeHandle *out_handle);
+
+// Reads "value" or "bounds" from a resolved handle into an owned string, or null.
+AdResult ad_get(const struct AdAdapter *adapter,
+                const struct AdNativeHandle *handle,
+                const char *property,
+                char **out);
+
+// Checks a boolean state of the element a query matches in an exact window.
+AdResult ad_is_exact(const struct AdAdapter *adapter,
+                     const struct AdExactWindowInfo *win,
+                     const struct AdFindQuery *query,
+                     const char *property,
+                     bool *out);
+```
+
+## Raw tree
+
+`ad_get_tree_exact` returns a flat, breadth-first tree with no refs, refmap, or envelope. Use `ad_snapshot` for the observe and act loop.
+
+```c
+typedef struct AdNodeContent {
+  const char *ref_id;
+  const char *role;
+  const char *name;
+  const char *value;
+  const char *description;
+  const char *hint;
+} AdNodeContent;
+
+typedef struct AdNodePresentation {
+  char **states;
+  struct AdRect bounds;
+  uint32_t state_count;
+  bool has_bounds;
+} AdNodePresentation;
+
+typedef struct AdNodeRelation {
+  int32_t parent_index;
+  uint32_t child_start;
+  uint32_t child_count;
+} AdNodeRelation;
+
+typedef struct AdNode {
+  struct AdNodeContent content;
+  struct AdNodePresentation presentation;
+  struct AdNodeRelation relation;
+} AdNode;
+
+typedef struct AdNodeTree {
+  struct AdNode *nodes;
+  uint32_t count;
+} AdNodeTree;
+
+typedef struct AdTreeOptions {
+  uint8_t max_depth;
+  bool include_bounds;
+  bool interactive_only;
+  bool compact;
+  int32_t surface;
+} AdTreeOptions;
+```
+
+```c
+// Reads an exact window into a flat tree; children are contiguous at nodes[child_start..].
+AdResult ad_get_tree_exact(const struct AdAdapter *adapter,
+                           const struct AdExactWindowInfo *win,
+                           const struct AdTreeOptions *opts,
+                           struct AdNodeTree *out);
+
+// Frees a tree and zeroes it.
+void ad_free_tree(struct AdNodeTree *tree);
+```
+
+## Apps and windows
+
+Window functions take an `AdExactWindowInfo`, which carries the process-generation token that targeting needs.
+
+```c
+typedef struct AdWindowInfo {
+  const char *id;
+  const char *title;
+  const char *app_name;
+  uint32_t pid;
+  struct AdRect bounds;
+  bool has_bounds;
+  bool is_focused;
+} AdWindowInfo;
+
+typedef struct AdExactWindowInfo {
+  uint32_t version;
+  uint32_t size;
+  struct AdWindowInfo window;
+  const char *process_instance;
+  bool accessible;
+} AdExactWindowInfo;
+
+typedef struct AdAppInfo {
+  const char *name;
+  uint32_t pid;
+  const char *bundle_id;
+} AdAppInfo;
+
+typedef struct AdWindowOp {
+  int32_t kind;
+  double width;
+  double height;
+  double x;
+  double y;
+} AdWindowOp;
+```
+
+```c
+// Launches an app and writes its first window.
+AdResult ad_launch_app_exact(const struct AdAdapter *adapter,
+                             const char *id,
+                             uint64_t timeout_ms,
+                             struct AdExactWindowInfo *out);
+
+// Closes an app; force skips graceful shutdown.
+AdResult ad_close_app(const struct AdAdapter *adapter, const char *id, bool force);
+
+// Lists running apps into an opaque list.
+AdResult ad_list_apps(const struct AdAdapter *adapter, struct AdAppList **out);
+
+// Returns the number of apps in the list.
+uint32_t ad_app_list_count(const struct AdAppList *list);
+
+// Returns a borrowed entry, or null when out of range.
+const struct AdAppInfo *ad_app_list_get(const struct AdAppList *list, uint32_t index);
+
+// Frees the list.
+void ad_app_list_free(struct AdAppList *list);
+
+// Lists windows with process-generation evidence, optionally filtered.
+AdResult ad_list_windows_exact(const struct AdAdapter *adapter,
+                               const char *app_filter,
+                               bool focused_only,
+                               struct AdExactWindowList **out);
+
+// Returns the number of windows in the list.
+uint32_t ad_exact_window_list_count(const struct AdExactWindowList *list);
+
+// Returns a borrowed window entry, or null when out of range.
+const struct AdExactWindowInfo *ad_exact_window_list_get(const struct AdExactWindowList *list,
+                                                         uint32_t index);
+
+// Frees the window list.
+void ad_exact_window_list_free(struct AdExactWindowList *list);
+
+// Focuses an exact window.
+AdResult ad_focus_window_exact(const struct AdAdapter *adapter,
+                               const struct AdExactWindowInfo *win);
+
+// Resizes, moves, minimizes, maximizes, or restores an exact window.
+AdResult ad_window_op_exact(const struct AdAdapter *adapter,
+                            const struct AdExactWindowInfo *win,
+                            struct AdWindowOp op);
+
+// Releases the strings inside an AdExactWindowInfo written by ad_launch_app_exact.
+void ad_release_exact_window_fields(struct AdExactWindowInfo *win);
+```
+
+## Surfaces
+
+```c
+typedef struct AdSurfaceInfo {
+  const char *kind;
+  const char *title;
+  int64_t item_count;
+} AdSurfaceInfo;
+
+typedef struct AdExactSurfaceInfo {
+  uint32_t version;
+  uint32_t size;
+  const char *id;
+  struct AdSurfaceInfo surface;
+  const char *unclassified;
+} AdExactSurfaceInfo;
+```
+
+```c
+// Lists the overlay surfaces a process presents.
+AdResult ad_list_surfaces_exact(const struct AdAdapter *adapter,
+                                uint32_t pid,
+                                struct AdExactSurfaceList **out);
+
+// Returns the number of surfaces in the list.
+uint32_t ad_exact_surface_list_count(const struct AdExactSurfaceList *list);
+
+// Returns a borrowed surface entry, or null when out of range.
+const struct AdExactSurfaceInfo *ad_exact_surface_list_get(const struct AdExactSurfaceList *list,
+                                                           uint32_t index);
+
+// Frees the surface list.
+void ad_exact_surface_list_free(struct AdExactSurfaceList *list);
+```
+
+## Wait
+
+Zero-initialize `AdWaitArgs` and check its size before calling [`ad_wait`](#command-backed-json-entrypoints).
+
+```c
+typedef struct AdOptionalU64 {
+  uint64_t value;
+  bool present;
+} AdOptionalU64;
+
+typedef struct AdWaitSurfaceModes {
+  bool menu;
+  bool menu_closed;
+  bool notification;
+} AdWaitSurfaceModes;
+
+typedef struct AdWaitMode {
+  struct AdOptionalU64 pause;
+  const char *element;
+  const char *window;
+  const char *text;
+  struct AdWaitSurfaceModes surfaces;
+} AdWaitMode;
+
+typedef struct AdOptionalUsize {
+  size_t value;
+  bool present;
+} AdOptionalUsize;
+
+typedef struct AdWaitPredicate {
+  const char *predicate;
+  const char *value;
+  const char *action;
+  struct AdOptionalUsize count;
+} AdWaitPredicate;
+
+typedef struct AdWaitScope {
+  uint64_t timeout_ms;
+  const char *app;
+} AdWaitScope;
+
+typedef struct AdWaitArgs {
+  struct AdWaitMode mode;
+  struct AdWaitPredicate predicate;
+  struct AdWaitScope scope;
+} AdWaitArgs;
+```
+
+## Displays and screenshots
+
+```c
+typedef struct AdDisplayInfo {
+  uint32_t version;
+  uint32_t size;
+  const char *id;
+  struct AdRect bounds;
+  bool is_primary;
+  double scale;
+} AdDisplayInfo;
+
+typedef struct AdScreenshotTarget {
+  int32_t kind;
+  uint64_t screen_index;
+} AdScreenshotTarget;
+```
+
+```c
+// Lists displays in screenshot screen-index order.
+AdResult ad_list_displays(const struct AdAdapter *adapter, struct AdDisplayList **out);
+
+// Returns the number of displays.
+uint32_t ad_display_list_count(const struct AdDisplayList *list);
+
+// Returns a borrowed display entry, or null when out of range.
+const struct AdDisplayInfo *ad_display_list_get(const struct AdDisplayList *list, uint32_t index);
+
+// Frees the display list.
+void ad_display_list_free(struct AdDisplayList *list);
+
+// Captures a display into an opaque image buffer.
+AdResult ad_screenshot(const struct AdAdapter *adapter,
+                       const struct AdScreenshotTarget *target,
+                       struct AdImageBuffer **out);
+
+// Captures one exact window into an opaque image buffer.
+AdResult ad_screenshot_window_exact(const struct AdAdapter *adapter,
+                                    const struct AdExactWindowInfo *window,
+                                    struct AdImageBuffer **out);
+
+// Returns a borrowed pointer to the image bytes.
+const uint8_t *ad_image_buffer_data(const struct AdImageBuffer *buf);
+
+// Returns the byte length of the image.
+uint64_t ad_image_buffer_size(const struct AdImageBuffer *buf);
+
+// Returns the pixel width.
+uint32_t ad_image_buffer_width(const struct AdImageBuffer *buf);
+
+// Returns the pixel height.
+uint32_t ad_image_buffer_height(const struct AdImageBuffer *buf);
+
+// Returns the encoding.
+AdImageFormat ad_image_buffer_format(const struct AdImageBuffer *buf);
+
+// Returns the point-to-pixel scale factor.
+double ad_image_buffer_scale_factor(const struct AdImageBuffer *buf);
+
+// Frees the image buffer; freeing twice is undefined behavior.
+void ad_image_buffer_free(struct AdImageBuffer *buf);
+```
+
+## Clipboard
+
+```c
+// Reads clipboard text into an owned string.
+AdResult ad_get_clipboard(const struct AdAdapter *adapter, char **out);
+
+// Writes UTF-8 text to the clipboard.
+AdResult ad_set_clipboard(const struct AdAdapter *adapter, const char *text);
+
+// Clears the clipboard.
+AdResult ad_clear_clipboard(const struct AdAdapter *adapter);
+```
+
+## Mouse
+
+These send physical input and carry no headless policy. For policy-checked clicks, use ref actions.
+
+```c
+typedef struct AdMouseEvent {
+  int32_t kind;
+  struct AdPoint point;
+  int32_t button;
+  uint32_t click_count;
+} AdMouseEvent;
+```
+
+```c
+// Drags the pointer from params.from to params.to.
+AdResult ad_drag(const struct AdAdapter *adapter, const struct AdDragParams *params);
+
+// Sends a move, down, up, or click event at a screen point.
+AdResult ad_mouse_event(const struct AdAdapter *adapter, const struct AdMouseEvent *event);
+
+// Same, while holding a modifier chord.
+AdResult ad_mouse_event_with_modifiers(const struct AdAdapter *adapter,
+                                       const struct AdMouseEvent *event,
+                                       const int32_t *modifiers,
+                                       uint32_t modifier_count);
+
+// Sends a wheel event in line deltas; modifier_mask bits 0 to 3 are meta, ctrl, alt, shift.
+AdResult ad_mouse_wheel(const struct AdAdapter *adapter,
+                        struct AdPoint point,
+                        double delta_x,
+                        double delta_y,
+                        uint32_t modifier_mask);
+```
+
+## Notifications
+
+```c
+typedef struct AdNotificationIdentity {
+  const char *app;
+  const char *title;
+} AdNotificationIdentity;
+
+typedef struct AdNotificationActionRequest {
+  uint32_t index;
+  int32_t policy;
+  const char *action_name;
+  struct AdNotificationIdentity identity;
+} AdNotificationActionRequest;
+
+typedef struct AdNotificationFilter {
+  const char *app;
+  const char *text;
+  uint32_t limit;
+  bool has_limit;
+} AdNotificationFilter;
+
+typedef struct AdNotificationInfo {
+  uint32_t index;
+  const char *app_name;
+  const char *title;
+  const char *body;
+  char **actions;
+  uint32_t action_count;
+} AdNotificationInfo;
+```
+
+```c
+// Lists notifications; indexes are stable only within one list.
+AdResult ad_list_notifications(const struct AdAdapter *adapter,
+                               const struct AdNotificationFilter *filter,
+                               struct AdNotificationList **out);
+
+// Returns the number of notifications.
+uint32_t ad_notification_list_count(const struct AdNotificationList *list);
+
+// Returns a borrowed notification, or null when out of range.
+const struct AdNotificationInfo *ad_notification_list_get(const struct AdNotificationList *list,
+                                                          uint32_t index);
+
+// Frees the list.
+void ad_notification_list_free(struct AdNotificationList *list);
+
+// Presses a named action, failing closed when the identity no longer matches.
+AdResult ad_notification_action(const struct AdAdapter *adapter,
+                                const struct AdNotificationActionRequest *request,
+                                struct AdActionResult *out);
+
+// Dismisses one notification when it matches the expected app or title.
+AdResult ad_dismiss_notification(const struct AdAdapter *adapter,
+                                 uint32_t index,
+                                 const char *app_filter,
+                                 const char *expected_app,
+                                 const char *expected_title);
+
+// Dismisses every matching notification and returns the dismissed and failed lists.
+AdResult ad_dismiss_all_notifications(const struct AdAdapter *adapter,
+                                      const char *app_filter,
+                                      struct AdNotificationList **dismissed_out,
+                                      struct AdNotificationList **failed_out);
+
+// Frees both lists returned by ad_dismiss_all_notifications.
+void ad_dismiss_all_notifications_free(struct AdNotificationList *dismissed,
+                                       struct AdNotificationList *failed);
+```
+
+## Errors
+
+These read the calling thread's last-error slot. See [Errors](/desktop/ffi/ownership-and-threading#errors).
+
+```c
+// Returns the code of the last failure on this thread.
+AdResult ad_last_error_code(void);
+
+// Returns a borrowed description, or null.
+const char *ad_last_error_message(void);
+
+// Returns a borrowed recovery hint, or null.
+const char *ad_last_error_suggestion(void);
+
+// Returns a borrowed OS diagnostic, or null.
+const char *ad_last_error_platform_detail(void);
+
+// Returns borrowed structured JSON, or null; it may contain on-screen text.
+const char *ad_last_error_details(void);
+
+// Writes the delivery and retry semantics of the last failure.
+AdResult ad_last_error_delivery_semantics(struct AdDeliverySemantics *out);
+```
+
+## Logging and memory
+
+```c
+// Registers or clears one process-wide callback for log events.
+AdResult ad_set_log_callback(void (*callback)(int32_t level, const char *msg));
+
+// Frees a string the library returned; null-tolerant.
+void ad_free_string(char *s);
+```
+
+## Size getters
+
+Each returns a struct size as compiled in the library. Compare it with your binding's size before you pass the struct.
+
+```c
+size_t ad_action_size(void);
+
+size_t ad_action_result_size(void);
+
+size_t ad_action_step_size(void);
+
+size_t ad_display_info_size(void);
+
+size_t ad_drag_params_size(void);
+
+size_t ad_element_state_size(void);
+
+size_t ad_exact_ref_entry_size(void);
+
+size_t ad_exact_surface_info_size(void);
+
+size_t ad_exact_window_info_size(void);
+
+size_t ad_ref_entry_size(void);
+
+size_t ad_wait_args_size(void);
+```
+
+`AdAdapter`, `AdAppList`, `AdDisplayList`, `AdExactSurfaceList`, `AdExactWindowList`, `AdImageBuffer`, and `AdNotificationList` are opaque: use them only through the functions above.

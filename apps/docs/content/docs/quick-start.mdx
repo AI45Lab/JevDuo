@@ -1,0 +1,138 @@
+---
+title: Quick start
+navTitle: Quick start
+description: Run the observe, act, verify loop against a real desktop app. Check the install, map the app, drill into a region, click a ref, and verify the result.
+---
+
+This run drives GNOME Calculator on Linux: check the install, map the app, drill into one region, press a button, confirm the display changed, and put the app back. Every output below is real, trimmed where noted.
+
+Start GNOME Calculator in your graphical session, and run the commands from a terminal in the same session. On macOS or Windows, use an app name that `list-apps` prints (for example `"Calculator"`) and expect different refs. In PowerShell, quote every ref (`'@s2txcl95uvubmn:e1'`); see [Windows](/desktop/platforms/windows#use-powershell).
+
+## 1. Check the install
+
+```bash
+agent-desktop status                 # permissions, supported_surfaces, state_root
+agent-desktop skills get platform    # the guide for this OS, in data.content
+```
+
+`data.permissions.accessibility.state` should be `granted`, and `data.supported_surfaces` should not be empty. Agents load the platform skill before their first action; see [Skills](/desktop/skills).
+
+## 2. Map the app
+
+A skeleton snapshot reads three levels and marks each cut branch with `children_count`:
+
+```bash
+agent-desktop snapshot --app gnome-calculator --skeleton -i --compact
+```
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "snapshot",
+  "data": {
+    "app": "gnome-calculator",
+    "complete": true,
+    "ref_count": 2,
+    "snapshot_id": "s2txcl95uvubmn",
+    "tree": {
+      "role": "window",
+      "name": "Calculator",
+      "children": [
+        { "children_count": 2, "ref_id": "@s2txcl95uvubmn:e1", "role": "group" },
+        { "children_count": 1, "ref_id": "@s2txcl95uvubmn:e2", "role": "group" }
+      ]
+    }
+  }
+}
+```
+
+The tree is trimmed: wrapper groups and `native_id` fields are removed. `e1` is the calculator body and `e2` is the header bar. Every ref carries its snapshot id; pass it to later commands exactly as printed.
+
+## 3. Drill into a region
+
+```bash
+agent-desktop snapshot --root @s2txcl95uvubmn:e1 -i --compact
+```
+
+The drill reads `e1`'s subtree and adds 31 refs (`e3` to `e33`) to the same snapshot. Two of them:
+
+```json
+[
+  { "ref_id": "@s2txcl95uvubmn:e6", "role": "textfield", "available_actions": ["RightClick", "SetValue", "TypeText", "SetFocus"] },
+  { "ref_id": "@s2txcl95uvubmn:e11", "role": "button", "name": "7", "available_actions": ["Click", "SetFocus"] }
+]
+```
+
+`e6` is the display and `e11` is the 7 button. How drill targets and re-drills work is in [Skeleton and drill-down](/desktop/skeleton-and-drill-down).
+
+## 4. Act on a ref
+
+```bash
+agent-desktop click @s2txcl95uvubmn:e11
+```
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "click",
+  "data": {
+    "action": "click",
+    "details": {
+      "auto_wait": {
+        "lease_contention_count": 0,
+        "lease_hold_ms": 114,
+        "read_only_preflight_attempts": 1,
+        "read_only_resolve_attempts": 1
+      }
+    },
+    "disposition": { "delivery": "delivered_unverified", "retry": "unsafe" },
+    "steps": [{ "label": "Action.DoAction", "mechanism": "semantic_api", "outcome": "succeeded" }],
+    "surfaces": [
+      { "id": "w-1.11-org-gnome-Calculator-a11y-948fd89a_9bda_453b_9c10_4a9e9eed3feb", "title": "Calculator", "type": "window" }
+    ]
+  }
+}
+```
+
+The click went through the accessibility API (`semantic_api`), without moving the cursor. `delivered_unverified` means it was dispatched but nothing confirmed the effect yet, and `retry: unsafe` means a repeat could press 7 twice. See [JSON output](/desktop/json-output#action-results-and-disposition).
+
+## 5. Verify
+
+The app updates its display asynchronously, so wait for the value instead of reading once or sleeping:
+
+```bash
+agent-desktop wait --element @s2txcl95uvubmn:e6 --predicate value --value 7 --timeout 5000
+```
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "wait",
+  "data": {
+    "elapsed_ms": 286,
+    "found": true,
+    "observed": { "expected_chars": 1, "matched": true, "value_chars": 1, "value_present": true },
+    "predicate": "value",
+    "ref": "@s2txcl95uvubmn:e6"
+  }
+}
+```
+
+`get @s2txcl95uvubmn:e6 --property value` now returns `"7"`. A read taken immediately after the click can still show the old value, which is why the verify step waits. See [Waiting without sleeps](/desktop/guides/waiting).
+
+## 6. Restore the state
+
+Press **C** (`e8` in the same drill) so the app is as you found it:
+
+```bash
+agent-desktop click @s2txcl95uvubmn:e8
+```
+
+## Next steps
+
+- [The observe, act, verify loop](/desktop/guides/observe-act-verify): the loop as practice.
+- [Errors and recovery](/desktop/errors-and-recovery): what to do when a ref is stale or ambiguous.
+- [Commands](/desktop/commands): every command and flag.
