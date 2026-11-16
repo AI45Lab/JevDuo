@@ -1,0 +1,109 @@
+---
+title: Clipboard commands
+navTitle: Clipboard
+description: Reference for clipboard-get, clipboard-set, and clipboard-clear, including the text, image, and file-list formats and the result shapes.
+---
+
+The clipboard commands read and write the system clipboard. They need no accessibility permission and no `--headed`. The examples are real output from Linux X11.
+
+## clipboard-get
+
+Reads the clipboard as text, an image, or a list of files.
+
+```bash
+agent-desktop clipboard-get [--format text|auto|image|file-urls] [--out PATH]
+```
+
+<table>
+  <thead>
+    <tr><th>Flag</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>--format</code></td><td><code>text</code></td><td><code>text</code>, <code>auto</code> (file references first, then an image, then text), <code>image</code>, or <code>file-urls</code>.</td></tr>
+    <tr><td><code>--out PATH</code></td><td>a private file in the state root</td><td>Where to write image content. Without it the image goes to the active session's <code>clipboard/</code> directory, or to <code>tmp/</code> under the <a href="/desktop/configuration#state-root">state root</a>.</td></tr>
+  </tbody>
+</table>
+
+```json
+{ "version": "2.6", "ok": true, "command": "clipboard-get", "data": { "text": "hello from agent-desktop", "type": "text" } }
+```
+
+An image result is `{ "type": "image", "path", "width", "height" }`, and a file list is `{ "type": "file_urls", "file_urls": [...] }`. Image bytes are never inlined. When the clipboard holds nothing in the requested form, the command still succeeds:
+
+```json
+{ "version": "2.6", "ok": true, "command": "clipboard-get", "data": { "found": false, "type": "text" } }
+```
+
+Check `found` before you read `text`. Errors: `INVALID_ARGS` for an unknown format or an unwritable `--out`, and `PLATFORM_NOT_SUPPORTED` when a platform helper is missing.
+
+## clipboard-set
+
+Writes text, a PNG image, or a list of file paths.
+
+```bash
+agent-desktop clipboard-set TEXT
+printf '%s' 'Hello' | agent-desktop clipboard-set --stdin
+agent-desktop clipboard-set --image /tmp/a.png
+agent-desktop clipboard-set --file-url /tmp/a.txt --file-url /tmp/b.txt
+```
+
+<table>
+  <thead>
+    <tr><th>Flag or argument</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>TEXT</code></td><td>empty text</td><td>Text to write.</td></tr>
+    <tr><td><code>--stdin</code></td><td>none</td><td>Read up to 128 KiB from a pipe or redirected file. Terminal input is rejected. Cannot be combined with <code>TEXT</code>, <code>--image</code>, or <code>--file-url</code>.</td></tr>
+    <tr><td><code>--image PATH</code></td><td>none</td><td>A regular PNG file of at most 64 MiB.</td></tr>
+    <tr><td><code>--file-url PATH</code></td><td>none</td><td>A file path to write as a file reference. Repeatable. Every path must exist.</td></tr>
+  </tbody>
+</table>
+
+With `--stdin`, the command waits until the input ends. Empty input and all line breaks are kept, including a final newline. Use `printf '%s'` to avoid adding one. Input must be valid UTF-8 without NUL bytes (`\0`).
+
+`--stdin` keeps text out of process arguments. Batch uses the JSON `text` field, which puts the text in process arguments. Run secret steps as separate `--stdin` commands. To copy the text `--stdin`, use `agent-desktop clipboard-set -- --stdin`.
+
+Without `--stdin`, one call writes one representation: `--file-url` wins over `--image`, which wins over `TEXT`. The result is an [OperationReport](/desktop/json-output#operationreport) plus the written `type`:
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "clipboard-set",
+  "data": {
+    "action": "clipboard-set",
+    "disposition": { "delivery": "delivered_unverified", "retry": "unsafe" },
+    "steps": [{ "label": "clipboard_write", "mechanism": "semantic_api", "outcome": "succeeded" }],
+    "target": { "kind": "clipboard" },
+    "type": "text"
+  }
+}
+```
+
+macOS reads the content back and reports `delivered_verified`; Windows and Linux report `delivered_unverified`, so confirm with `clipboard-get`. On Linux X11, a helper process (`agent-desktop-linux-clipboard-owner`) keeps serving the content after the command exits; without it beside the binary, the command returns `PLATFORM_NOT_SUPPORTED`. Errors: `INVALID_ARGS` for a bad `--image` or a missing `--file-url` path, and `TIMEOUT` with `lock_timeout` when another agent holds the input lock.
+
+## clipboard-clear
+
+Empties the clipboard. It takes no arguments.
+
+```bash
+agent-desktop clipboard-clear
+```
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "clipboard-clear",
+  "data": {
+    "action": "clipboard-clear",
+    "disposition": { "delivery": "delivered_unverified", "retry": "unsafe" },
+    "steps": [{ "label": "clipboard_write", "mechanism": "semantic_api", "outcome": "succeeded" }],
+    "target": { "kind": "clipboard" }
+  }
+}
+```
+
+Confirm with `clipboard-get`, which then returns `found: false`.
+
+Platform limits: Wayland needs `wl-clipboard`. See [macOS](/desktop/platforms/macos), [Windows](/desktop/platforms/windows), and [Linux](/desktop/platforms/linux).

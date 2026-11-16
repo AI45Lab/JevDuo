@@ -1,0 +1,164 @@
+---
+title: Surfaces
+navTitle: Surfaces
+description: Observe menus, sheets, alerts, popovers, and OS shell areas separately from a window or application with --surface, list-surfaces, and open-system-surface.
+---
+
+A surface is a UI layer that you observe separately from a window or application's full accessibility tree: an open menu, a sheet, a popover, an alert, or an OS shell area such as the taskbar. While an overlay is open, the refs from the window behind it are the wrong target, so read the overlay itself.
+
+```bash
+agent-desktop snapshot --app gtk3-widget-factory --surface menu -i --compact
+agent-desktop find --app gtk3-widget-factory --surface menu --name "Dark Theme" --exact --first
+```
+
+## Surface kinds
+
+`--surface` takes these values on `snapshot` and `find`. The default is `window`. Names with hyphens also accept underscores, such as `system_tray`.
+
+<table>
+  <thead>
+    <tr><th>Group</th><th>Kinds</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>The app or window and its layers</td><td><code>window</code>, <code>focused</code>, <code>menu</code>, <code>menubar</code>, <code>sheet</code>, <code>popover</code>, <code>alert</code></td></tr>
+    <tr><td>OS shell</td><td><code>desktop</code>, <code>taskbar</code>, <code>system-tray</code>, <code>system-tray-overflow</code>, <code>quick-settings</code>, <code>notification-center</code>, <code>toolbar</code>, <code>dock</code>, <code>spotlight</code>, <code>menu-bar-extras</code>, <code>start-menu</code>, <code>action-center</code></td></tr>
+  </tbody>
+</table>
+
+Each platform supports a subset:
+
+<table>
+  <thead>
+    <tr><th>Platform</th><th>Supported surfaces</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>macOS</td><td><code>window</code>, <code>focused</code>, <code>menu</code>, <code>menubar</code>, <code>sheet</code>, <code>popover</code>, <code>alert</code>, <code>dock</code>, <code>menu-bar-extras</code></td></tr>
+    <tr><td>Windows</td><td><code>window</code>, <code>focused</code>, <code>sheet</code>, <code>menu</code>, <code>start-menu</code>, <code>taskbar</code>, <code>system-tray</code>, <code>system-tray-overflow</code>, <code>action-center</code></td></tr>
+    <tr><td>Linux</td><td><code>window</code>, <code>sheet</code>, <code>alert</code>, <code>menu</code>, plus GNOME Shell kinds the session can resolve</td></tr>
+  </tbody>
+</table>
+
+Per-kind limits are on the platform pages: [macOS](/desktop/platforms/macos), [Windows](/desktop/platforms/windows), [Linux](/desktop/platforms/linux).
+
+## Check what is supported
+
+`status` reports `supported_surfaces` for the current machine and session. On a Linux X11 session without GNOME Shell:
+
+```json
+{ "supported_surfaces": ["window", "sheet", "alert", "menu"] }
+```
+
+Read it before you ask for a surface. A kind this OS does not have fails with `INVALID_ARGS`, with the supported list in `details.supported_surfaces` and your request in `details.requested_surface`. On Linux, an empty `supported_surfaces` means the accessibility bus did not answer, not that the desktop is empty.
+
+## Know when a surface opened
+
+You rarely need to poll for a surface. `click`, `double-click`, `right-click`, `triple-click`, `expand`, `select`, and `press` report the surfaces open after the action in `data.surfaces`. This is the result of clicking the **Menu** button in GTK Widget Factory:
+
+```json
+{
+  "surfaces": [
+    { "id": "w-1.9-org-a11y-atspi-accessible-229", "type": "window" },
+    { "id": "w-1.9-org-a11y-atspi-accessible-229", "item_count": 4, "type": "menu" }
+  ]
+}
+```
+
+A `menu`, `sheet`, or `alert` entry means the app is waiting on that overlay. Observe it next with `snapshot --surface` or `find --surface`. The field is omitted when nothing is open or the read failed.
+
+## Snapshot or search a surface
+
+```bash
+agent-desktop snapshot --app gtk3-widget-factory --surface menu -i --compact
+```
+
+The snapshot of that menu holds six refs and nothing from the window behind it:
+
+```json
+[
+  { "ref_id": "@s2n10v3haasex6:e1", "role": "button", "name": "Get Busy" },
+  { "ref_id": "@s2n10v3haasex6:e2", "role": "checkbox", "name": "Dark Theme" },
+  { "ref_id": "@s2n10v3haasex6:e3", "role": "checkbox", "name": "Slide Pages" },
+  { "ref_id": "@s2n10v3haasex6:e4", "role": "button", "name": "Inspector" },
+  { "ref_id": "@s2n10v3haasex6:e5", "role": "button", "name": "Keyboard Shortcuts" },
+  { "ref_id": "@s2n10v3haasex6:e6", "role": "button", "name": "About Widget Factory" }
+]
+```
+
+To reach one item, `find --surface` is cheaper than a dump:
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "find",
+  "data": {
+    "match": {
+      "interactive": true,
+      "name": "Dark Theme",
+      "path": ["group", "group", "group", "group", "group", "group"],
+      "ref_id": "@svj2992hf8d2k:e1",
+      "role": "checkbox",
+      "states": [],
+      "value": null
+    },
+    "snapshot_id": "svj2992hf8d2k"
+  }
+}
+```
+
+How agent-desktop selects an owner depends on the kind and platform:
+
+- `sheet`, `popover`, and `alert`: the app's accessible windows in order, focused first and then visible, and the first that presents one wins. With no `--app`, the frontmost process.
+- `sheet`, `popover`, and `alert`: the app's accessible windows in order, focused first and then visible, and the first that presents one wins. With no `--app`, the frontmost process.
+- On macOS, `menu` and `menubar` are application-owned and do not require a document window. If you pass `--window-id`, it selects the app that owns the surface. Snapshot data includes `app` and omits `window`. A complete lookup with no open menu or menu bar returns `ELEMENT_NOT_FOUND` with `details.kind: "surface_absent"` and `details.complete: true`. To read an application menu, snapshot `menubar` when it exists, click its item without `--headed`, then snapshot `--surface menu`. An absent menu bar can mean the app exposes none.
+- On implementations where `menu`, `menubar`, and `focused` are window-owned, any app window identifies the process, so several open windows are not ambiguous.
+- On macOS, `window`, `menubar`, and `menu-bar-extras` can read a background app with no window through its process. The result omits `window`. A regular app that has not shown a window returns `WINDOW_NOT_FOUND`; `focused` requires a focused window.
+- A shell kind needs no `--app`, because no application owns it. On macOS, `menu-bar-extras` with `--app` reads that app's own status item.
+- For window-owned surfaces, `--window-id` pins the read to that window.
+
+A missing `complete`, `complete: false`, a timeout, or an incomplete accessibility read leaves menu absence unknown. After a delivery with `retry: unsafe`, inspect the current UI before taking another action.
+A surface that is not open returns an error. On Linux, a closed menu returns `ELEMENT_NOT_FOUND`:
+
+```json
+{
+  "code": "ELEMENT_NOT_FOUND",
+  "message": "The window does not present an open menu",
+  "suggestion": "Open the menu first, then snapshot the menu surface"
+}
+```
+
+A closed shell surface returns `WINDOW_NOT_FOUND`. `--surface` cannot combine with `--root`, because a ref already carries the surface it was captured from. Do not use `--skeleton` on a surface: it is already small and focused. See [Skeleton and drill-down](/desktop/skeleton-and-drill-down#when-to-skip-the-skeleton).
+
+## List what is open
+
+```bash
+agent-desktop list-surfaces --app gtk3-widget-factory
+```
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "list-surfaces",
+  "data": {
+    "pid": 8258,
+    "surfaces": [
+      { "id": "w-1.9-org-a11y-atspi-accessible-229", "type": "window" },
+      { "id": "w-1.9-org-a11y-atspi-accessible-229", "item_count": 4, "type": "menu" }
+    ]
+  }
+}
+```
+
+`list-surfaces` returns the overlays an app presents now, which are the kinds `snapshot --surface` accepts for it. Shell surfaces belong to the OS and never appear here. An entry can carry `"unclassified": ["sheet"]` or `["menu"]` when the check could not read that window, often because the app was busy. Treat the missing entry as unknown, not absent.
+
+## Open an OS shell surface
+
+`open-system-surface` raises a shell surface. On Windows and Linux it returns the window it presents, in the `w-<id>` form that `list-windows` uses. On macOS it returns only `{"surface": "dock"}`, because no window owns these surfaces:
+
+```bash
+agent-desktop --headed open-system-surface --surface action-center
+agent-desktop snapshot --surface action-center -i --compact
+```
+
+It takes the foreground, so on Windows and Linux headless mode refuses it with `POLICY_DENIED`; pass `--headed` (see [Headed mode](/desktop/guides/headed-mode)). An already-present surface returns without being raised again. A kind the OS does not expose returns `INVALID_ARGS`, and the suggestion or `platform_detail` names the kinds to use instead. On macOS, `dock` and `menu-bar-extras` are always on screen, so the command returns them at once, headless, with no `--headed`; open Control Center or Notification Center by clicking its `menu-bar-extras` item. Which kinds open on Windows and Linux is on their platform pages.

@@ -1,0 +1,133 @@
+---
+title: Installation
+navTitle: Installation
+description: Install agent-desktop with npm, pnpm, Yarn, Bun, or Homebrew, from a release archive, or from source, and verify the install on macOS, Windows, or Linux.
+---
+
+Install the `agent-desktop` npm package globally with npm, pnpm, Yarn, or Bun. It needs Node 18 or later and runs on macOS, Windows, and Linux.
+
+```bash
+npm install -g agent-desktop     # or: pnpm add -g, yarn global add, bun add -g
+agent-desktop version            # confirm the command resolves
+```
+
+Without `-g`, the command lands in `./node_modules/.bin` instead of on your PATH. Run it with `npx agent-desktop`, or install globally.
+
+## What the package contains
+
+The package carries native CLI executables for six targets, plus the helper each platform needs:
+
+<table>
+  <thead>
+    <tr><th>Platform</th><th>Targets</th><th>Helper installed beside the CLI</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>macOS</td><td>arm64, x64</td><td><code>agent-desktop-macos-helper</code></td></tr>
+    <tr><td>Linux (glibc)</td><td>x64, arm64</td><td><code>agent-desktop-linux-clipboard-owner</code></td></tr>
+    <tr><td>Windows</td><td>x64, arm64</td><td>none</td></tr>
+  </tbody>
+</table>
+
+The [C library](/desktop/ffi) is not in the npm package. It ships as a separate archive on each release.
+
+## Release archives
+
+For a native executable without a JavaScript launcher, download the archive for your OS and architecture from [GitHub Releases](https://github.com/vercel-labs/agent-desktop/releases). Extract the executable and its helper together into a directory on your PATH. To upgrade, replace both with files from the same release.
+
+Checksums catch corruption. Verify origin with the build attestation:
+
+```bash
+gh attestation verify <downloaded-archive> --repo vercel-labs/agent-desktop
+```
+
+## Blocked install scripts
+
+The package's `postinstall` script replaces the Node launcher with a link to the native binary. If your package manager blocks install scripts, the Node launcher runs instead. It works, but every call starts Node first, which adds more than 100 ms. The launcher prints a one-time notice to stderr with the fix. Allow the script and reinstall:
+
+```bash
+npm install -g agent-desktop --allow-scripts=agent-desktop
+```
+
+## Homebrew
+
+On macOS and Linux, install from Homebrew's default catalog. Homebrew builds from the tagged source and installs the platform helper beside the CLI.
+
+```bash
+brew install agent-desktop     # macOS and Linux
+brew upgrade agent-desktop     # new versions arrive shortly after each GitHub release
+```
+
+## Scoop and older installs
+
+There is no Scoop package. The custom Homebrew tap and Scoop bucket were removed in 1.0.1 (see the [changelog](/desktop/changelog)). An older tap or bucket install stays pinned to its version and can shadow the npm or Homebrew command. Check which executable runs, and uninstall the old one with the package manager that installed it:
+
+```bash
+command -v agent-desktop     # macOS and Linux; in PowerShell: Get-Command agent-desktop
+```
+
+## Build from source
+
+You need the Rust toolchain pinned in `rust-toolchain.toml` (1.89.0), which `rustup` installs on first use, and a C toolchain: the Xcode command-line tools on macOS, the MSVC build tools on Windows, or `build-essential` on Linux.
+
+```bash
+git clone https://github.com/vercel-labs/agent-desktop && cd agent-desktop
+cargo build --release -p agent-desktop      # writes target/release/agent-desktop
+```
+
+Build the helper for your platform and keep it beside the CLI. A platform crate compiles only on its own OS:
+
+```bash
+cargo build --release -p agent-desktop-macos --bin agent-desktop-macos-helper    # macOS
+cargo build --release -p agent-desktop-linux --bins                              # Linux
+```
+
+## Verify the install
+
+```bash
+agent-desktop version
+agent-desktop status
+```
+
+`version` prints the CLI version, the architecture, and the OS:
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "version",
+  "data": { "os": "linux", "target": "x86_64", "version": "1.0.1" }
+}
+```
+
+`status` reports the platform, the permission state, the surfaces this OS can read, and the [state root](/desktop/configuration#state-root):
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "status",
+  "data": {
+    "permissions": {
+      "accessibility": { "state": "granted" },
+      "automation": { "state": "not_required" },
+      "screen_recording": { "state": "not_required" }
+    },
+    "platform": "linux",
+    "ref_count": null,
+    "session_id": null,
+    "snapshot_id": null,
+    "state_root": "/home/user/.agent-desktop",
+    "supported_surfaces": ["window", "sheet", "alert", "menu"],
+    "tracing": false,
+    "version": "1.0.1"
+  }
+}
+```
+
+## Grant permissions
+
+- **macOS:** grant Accessibility permission with `agent-desktop permissions --guide`. See [macOS](/desktop/platforms/macos).
+- **Windows:** no grant is needed for apps at your terminal's integrity level. See [Windows](/desktop/platforms/windows).
+- **Linux:** run inside the user's graphical session with a running AT-SPI bus, then check `agent-desktop status`. An empty `supported_surfaces` means the bus did not answer. See [Linux](/desktop/platforms/linux).
+
+Next, run the [quick start](/desktop/quick-start).

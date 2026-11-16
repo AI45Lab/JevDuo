@@ -1,0 +1,105 @@
+---
+title: Waiting without sleeps
+navTitle: Waiting
+description: Wait for a desktop app to reach a state without fixed sleeps. Choose between the post-action wait flags and the wait command, and read a timeout.
+---
+
+A fixed sleep either wastes time or races the app. agent-desktop gives you two waits that poll for a condition instead: the post-action `--wait-for` flags, which wait inside the command you already run, and the `wait` command, which waits on its own. Every flag is in the [`wait` reference](/desktop/commands/wait) and in [Post-action wait flags](/desktop/configuration#post-action-wait-flags).
+
+## Choose the wait
+
+<table>
+  <thead>
+    <tr><th>You are waiting for</th><th>Use</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>A control or text to appear after an action</td><td><code>--wait-for "role:text"</code> on the action</td></tr>
+    <tr><td>A control to disappear after an action, such as a spinner</td><td><code>--wait-for-gone "role"</code> on the action</td></tr>
+    <tr><td>One element to reach a value or become ready</td><td><code>wait --element REF --predicate value</code> or <code>actionable</code></td></tr>
+    <tr><td>A new window or dialog</td><td><code>wait --window TITLE --app APP</code></td></tr>
+    <tr><td>Text anywhere in an app</td><td><code>wait --text TEXT --app APP</code></td></tr>
+    <tr><td>A menu to open or close</td><td><code>wait --menu</code>, <code>wait --menu-closed</code></td></tr>
+    <tr><td>A window or app lifecycle change your action causes</td><td><code>wait --event KIND</code>, in a batch with the action</td></tr>
+    <tr><td>A new notification</td><td><code>wait --notification</code></td></tr>
+    <tr><td>Nothing observable</td><td><code>wait MS</code>, as a last resort</td></tr>
+  </tbody>
+</table>
+
+## Wait inside the action
+
+`--wait-for` polls the ref's original process until the selector matches, then returns a fresh snapshot with the action's own report under `after_action`, so you can act on the new refs at once. Application-owned refs keep their source surface. Window-owned refs stay pinned to their original window, including refs captured from a sheet, alert, popover, focused view, or window-owned Linux menu:
+
+```bash
+agent-desktop click @s8f3k2p9:e5 --wait-for "button:Done" --wait-timeout 10000
+agent-desktop click @s8f3k2p9:e5 --wait-for-gone "progressindicator"
+```
+
+If the wait times out, the action already ran: the error keeps the action's delivery in `error.disposition` and its report in `details.after_action`. Read the app before you retry the action.
+
+## Wait for an element
+
+Use `wait --element` when you hold a ref and need a condition on it. The verify step of the [quick start](/desktop/quick-start#verify) waits for the calculator display to read `7`, which took 286 ms after the click:
+
+```bash
+agent-desktop wait --element @s2txcl95uvubmn:e6 --predicate value --value 7 --timeout 5000
+```
+
+Use `--predicate actionable --action type` before typing into a field that is still loading. You rarely need a wait before a plain click: ref actions already wait for their target to become actionable.
+
+## Wait for a window, then its content
+
+A window can exist before its content does. Wait for the window, then for the content:
+
+```bash
+agent-desktop wait --window "Save As" --app gedit --timeout 10000
+agent-desktop wait --text "Save" --app gedit --timeout 10000
+```
+
+`--window` matches a title that contains your text. If an app has a document and a dialog open, `wait --text` returns `AMBIGUOUS_TARGET` before it checks any text; wait for the dialog by title with `--window`, then read it with `snapshot --surface sheet` or `--window-id`.
+
+## Wait for an event your action causes
+
+`wait --event` diffs a baseline taken when the wait starts against fresh reads, so a separate `wait` started after your action can miss the change. Put the action and the wait in one [batch](/desktop/guides/batch), which takes the baseline before the action runs:
+
+```bash
+agent-desktop batch '[
+  {"command":"launch","args":{"app":"gtk3-demo"}},
+  {"command":"wait","args":{"event":"window-opened","app":"gtk3-demo","timeout":10000}}
+]' --stop-on-error
+```
+
+On Linux this returned the new window 144 ms after the launch; the [`wait` reference](/desktop/commands/wait#event) shows the result. A misspelled `--app` makes closing events such as `app-terminated` return at once with `target_unresolved: true`, so check the name with `list-apps` first.
+
+## Wait for a menu
+
+Open the menu, wait for it, and read it as a surface:
+
+```bash
+agent-desktop click @s2qfke45s1966h:e1                                       # the Menu button
+agent-desktop wait --menu --app gtk3-widget-factory --timeout 5000
+agent-desktop snapshot --app gtk3-widget-factory --surface menu -i --compact
+```
+
+After you choose an item or dismiss the menu, `wait --menu-closed --app gtk3-widget-factory` confirms it is gone. Wait for `--menu` before `--menu-closed`: on Linux, `--menu-closed` on a menu that never opened is true at once. See [Surfaces](/desktop/surfaces).
+
+## Set timeouts
+
+<table>
+  <thead>
+    <tr><th>Wait</th><th>Flag</th><th>Default</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>wait</code> in every mode except <code>wait MS</code></td><td><code>--timeout</code></td><td>30000 ms</td></tr>
+    <tr><td><code>--wait-for</code>, <code>--wait-for-gone</code></td><td><code>--wait-timeout</code></td><td>30000 ms</td></tr>
+    <tr><td>Auto-wait before a ref action</td><td><code>--timeout-ms</code></td><td>5000 ms</td></tr>
+    <tr><td>A whole <code>batch</code>, including waits inside it</td><td><code>--timeout-ms</code></td><td>60000 ms</td></tr>
+  </tbody>
+</table>
+
+`wait` uses `--timeout`; the other commands use `--timeout-ms`.
+
+## Read a timeout
+
+A `TIMEOUT` from a wait says what the wait last saw in `details.last_observed`. A `wait --window "Save As"` that timed out reported the only window it found, `Untitled Document 1 - gedit`, which tells you the dialog never opened rather than that the title was wrong. Use it to decide between a wrong title, a wrong `--app`, and a slow app. The fields per mode are in the [`wait` reference](/desktop/commands/wait#errors).
+
+On macOS and Windows, a headless `wait --notification` sees only an already-open notification surface; see [macOS](/desktop/platforms/macos) and [Windows](/desktop/platforms/windows).

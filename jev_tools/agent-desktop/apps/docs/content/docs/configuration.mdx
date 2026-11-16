@@ -1,0 +1,108 @@
+---
+title: Configuration
+navTitle: Configuration
+description: Global flags, post-action wait flags, environment variables, and the state root where agent-desktop stores snapshots, sessions, and traces.
+---
+
+agent-desktop has no configuration file. Behavior comes from global flags on each command, a few environment variables, and the state root directory where snapshots, sessions, and traces live.
+
+## Global flags
+
+Global flags work before or after the command name, so `agent-desktop --headed click REF` and `agent-desktop click REF --headed` are the same. `agent-desktop --help` lists them.
+
+<table>
+  <thead>
+    <tr><th>Flag</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>--headed</code></td><td>off</td><td>Prefer physical delivery for natural input commands and allow focus and cursor side effects. The default is strict headless semantic delivery. See <a href="/desktop/guides/headed-mode">Headed mode</a>.</td></tr>
+    <tr><td><code>--session ID</code></td><td>none</td><td>Select the snapshot namespace and trace. Overrides <code>AGENT_DESKTOP_SESSION</code>. See <a href="/desktop/sessions">Sessions</a>.</td></tr>
+    <tr><td><code>--agent-id ID</code></td><td>none</td><td>Subagent id within the session. Overrides <code>AGENT_DESKTOP_AGENT_ID</code>. Required for desktop actions in a multi-agent session.</td></tr>
+    <tr><td><code>--trace PATH</code></td><td>off</td><td>Append trace events as JSONL to this file instead of the session's trace. See <a href="/desktop/guides/traces">Traces</a>.</td></tr>
+    <tr><td><code>--trace-strict</code></td><td>off</td><td>Fail when trace setup or a pre-action write fails. Requires <code>--trace</code> or a tracing session.</td></tr>
+    <tr><td><code>--wait-for SELECTOR</code>, <code>-w</code></td><td>none</td><td>After the command, poll until an element matches. See <a href="#post-action-wait-flags">Post-action wait flags</a>.</td></tr>
+    <tr><td><code>--wait-for-gone SELECTOR</code></td><td>none</td><td>After the command, poll until no element matches.</td></tr>
+    <tr><td><code>--wait-timeout MS</code></td><td><code>30000</code></td><td>Longest wait for the two flags above.</td></tr>
+    <tr><td><code>--verbose</code>, <code>-v</code></td><td>off</td><td>Write debug logs to stderr. Stdout stays one JSON envelope.</td></tr>
+    <tr><td><code>--debug</code>, <code>--screenshot PATH.html</code></td><td>off</td><td>Write a visual debug HTML file for <code>snapshot</code> or <code>click</code>. Each requires the other. See <a href="/desktop/guides/traces#make-a-visual-debug-file">Traces</a>.</td></tr>
+    <tr><td><code>--help</code>, <code>-h</code>; <code>--version</code>, <code>-V</code></td><td></td><td>Print help or the version as text. The <code>version</code> command prints it as JSON.</td></tr>
+  </tbody>
+</table>
+
+## Post-action wait flags
+
+`--wait-for`, `--wait-for-gone`, and `--wait-timeout` make a command wait for the UI to show its effect. The command runs first; then the flag polls the accessibility tree until the selector is satisfied or the timeout ends. [Waiting without sleeps](/desktop/guides/waiting) compares them with the [`wait`](/desktop/commands/wait) command.
+
+**Selector.** `role:text`, split at the first `:`. `button` matches by role, `:Saved` by text, and `button:Save` by both. Text is a case-insensitive substring of an element's name, value, or description. An empty selector returns `INVALID_ARGS` before the command runs.
+
+**Commands that accept them.** `snapshot`, `press`, `hover`, `drag`, and every ref action (`click`, `double-click`, `triple-click`, `right-click`, `type`, `set-value`, `clear`, `focus`, `select`, `toggle`, `check`, `uncheck`, `expand`, `collapse`, `scroll`, `scroll-to`). Every other command returns `INVALID_ARGS`. `snapshot --root` cannot combine with them, and a `batch` entry never inherits them.
+
+**Which owner is polled.** For `snapshot`, the selected surface owner. For a ref action, the original process. Application-owned refs keep their source surface; a macOS `menu` or `menubar` ref is observed through its application without requiring a document window. Window-owned refs observe their original pinned window, even when captured from `sheet`, `alert`, `popover`, `focused`, or a window-owned `menu` such as a Linux menu. The wait reads the whole window, so a selector elsewhere in the parent can satisfy `--wait-for` early or keep `--wait-for-gone` from succeeding. On Linux, GTK3 context menus and Chromium popups can be exposed outside that window tree, so a gone wait cannot establish that a popup outside the observed scope was dismissed. To observe the overlay itself, run a separate `snapshot` with the desired `--surface` and wait selector. For `press`, the `--app` or `--window-id` window, else the focused one. For `drag`, the destination window, or the source with `--wait-for-scope from`.
+
+**Results.**
+
+- `--wait-for` succeeds with snapshot data (`snapshot_id`, `ref_count`, `tree`, and so on) plus `elapsed_ms` and `matched_selector`. For an action, the action's own report moves under `data.after_action`.
+- `--wait-for-gone` succeeds with `matched_selector`, `gone: true`, `target_absent: true`, and `elapsed_ms`, with the action's report under `after_action`.
+- On expiry the command fails with `TIMEOUT`, `details.kind: "wait_timeout"`, `details.selector`, and `details.timeout_ms`. After an action, `details.after_action` holds its report, and the error keeps the action's own delivery disposition, so a timeout does not make the action safe to repeat.
+- If a ref action returns `delivery_uncertain`, `error.details.post_action_observation` records read-only evidence from the original process and its application-owned source surface or pinned window. Its [fields and outcomes](/desktop/json-output#post-action-observation) do not change the original error or unsafe retry disposition. The wait uses `--wait-timeout` separately from the action timeout.
+- A temporary `ACTION_NOT_SUPPORTED` error with `details.kind: "window_without_accessibility_element"` is retried during wait polling. For `--wait-for-gone`, that error does not count as absence; the wait succeeds only after a complete selector read finds no match or the app/window lookup confirms the target is gone.
+
+```bash
+agent-desktop click @s8f3k2p9:e5 --wait-for ":Saved" --wait-timeout 5000
+agent-desktop click @s8f3k2p9:e5 --wait-for-gone "progressindicator"
+agent-desktop snapshot --app gnome-calculator -w "button:7"
+```
+
+## Environment variables
+
+<table>
+  <thead>
+    <tr><th>Variable</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>AGENT_DESKTOP_HOME</code></td><td>Relocates the <a href="#state-root">state root</a>. Must be an absolute path.</td></tr>
+    <tr><td><code>AGENT_DESKTOP_SESSION</code></td><td>Session id used when <code>--session</code> is not passed. <code>session start</code> prints the line that sets it. An empty value is <code>INVALID_ARGS</code>.</td></tr>
+    <tr><td><code>AGENT_DESKTOP_AGENT_ID</code></td><td>Subagent id used when <code>--agent-id</code> is not passed.</td></tr>
+    <tr><td><code>AGENT_DESKTOP_MACOS_HELPER_PATH</code></td><td>macOS only. Absolute path to the packaged <code>agent-desktop-macos-helper</code>. The npm launcher sets it.</td></tr>
+    <tr><td><code>RUST_LOG</code></td><td>Log filter for stderr logs. A valid value replaces the default level.</td></tr>
+  </tbody>
+</table>
+
+An invalid value returns `INVALID_ARGS` with `not_delivered`, and nothing runs. In PowerShell, set a variable with `$env:AGENT_DESKTOP_HOME = "$env:TEMP\ad-scratch"`. On Linux the adapter also reads the desktop session's `DISPLAY`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, and `DBUS_SESSION_BUS_ADDRESS`; see [Linux](/desktop/platforms/linux).
+
+## State root
+
+agent-desktop keeps its state under one directory: `.agent-desktop` in your home directory by default. `agent-desktop status` reports the resolved path as `state_root`. `AGENT_DESKTOP_HOME` replaces the default:
+
+- It must be an absolute path. If it exists, it must be a directory you own and not a symlink.
+- It does not need to exist yet; it is created on first use with mode `0700` on macOS and Linux.
+
+On macOS and Linux the state root must stay private. A root that is group-writable or readable by other users makes commands that write there fail with `INTERNAL`, "private file parent is accessible by group or other users". Run `chmod 700` on it, or let agent-desktop create it. A fresh root per run isolates refs:
+
+```bash
+export AGENT_DESKTOP_HOME="$(mktemp -d)"   # absolute and private
+agent-desktop status                       # data.state_root shows this path
+```
+
+### Layout
+
+```text
+~/.agent-desktop/                     state root
+  latest_snapshot_id                  newest snapshot in the global namespace
+  snapshots/
+    s8f3k2p9/refmap.json              one refmap per snapshot
+  tmp/                                clipboard-get images outside a session
+  sessions/
+    run-1793352720537-17009-0/        one directory per session
+      session.json                    manifest
+      latest_snapshot_id
+      snapshots/s8f3k2p9/refmap.json  the session's own namespace
+      trace/                          JSONL segments, one per process
+      clipboard/                      clipboard-get images inside the session
+```
+
+- **Snapshots.** Each snapshot writes `snapshots/<id>/refmap.json`. Size and retention limits are in [Where refs are stored](/desktop/snapshots-and-refs#where-refs-are-stored).
+- **Sessions.** `session start` creates `sessions/<id>/` with its own `snapshots/`, so one session's refs are invisible to another. `session gc` deletes ended sessions with their traces. See [Sessions](/desktop/sessions).
+- **Traces.** A tracing session writes one JSONL segment per process under `trace/`, plus `screens/` and `refmaps/` with `--screenshots`. See [Traces](/desktop/guides/traces).
+
+The cross-process interaction lock lives outside the state root (under `/tmp` on macOS and Linux), so every agent of one user shares it whatever their `AGENT_DESKTOP_HOME`. Files you name yourself, such as a `--trace` path or a screenshot path, are also outside it.

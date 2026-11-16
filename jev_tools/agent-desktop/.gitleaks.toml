@@ -1,0 +1,94 @@
+title = "agent-desktop secret and privacy scanning"
+
+# Inherit gitleaks' built-in credential rules (API keys, tokens, private keys),
+# then add project-specific privacy rules below. This repo is public and ships
+# probe evidence and traces that are written on developer machines, so
+# operator identity and filesystem layout are treated as leaks
+# alongside conventional secrets.
+#
+# Regexes are Go RE2: no lookahead, no lookbehind, no backreferences. Anything
+# that would need a negative lookahead is expressed as an allowlist entry.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "ad-home-directory-path"
+description = "Absolute home-directory path exposing an operator account name"
+# The first character after the home root must not be a dot, so relative
+# fragments like "$suite_root/home/.cache" are not mistaken for "/home/<user>".
+regex = '''(?i)(/Users/|/home/|[A-Za-z]:\\Users\\)[A-Za-z0-9_-][A-Za-z0-9._-]{1,}'''
+tags = ["privacy", "path", "identity"]
+
+[[rules.allowlists]]
+description = "Documented path examples and CI runner homes"
+regexTarget = "match"
+regexes = [
+  '''(?i)^/Users/(name|user|username|you|youruser|runner|me|someone)(/|$)''',
+  '''(?i)^/home/(name|user|username|you|youruser|runner|me|someone|example-user)(/|$)''',
+  '''(?i)^[A-Za-z]:\\Users\\(name|user|username|you|youruser|runner|me|someone)(\\|$)''',
+  '''(?i)^/Users/(DevUser|BuildUser)$''',
+  '''(?i)^/home/alice(-other)?$''',
+  '''^/home/linuxbrew$''',
+]
+
+[[rules]]
+id = "ad-windows-account-sid"
+description = "Windows account SID with machine-unique sub-authorities"
+regex = '''S-1-5-21-[0-9]{5,}-[0-9]{5,}-[0-9]{5,}-[0-9]{3,}'''
+tags = ["privacy", "identity"]
+
+[[rules]]
+id = "ad-personal-email"
+description = "Personal email address in tracked content"
+regex = '''[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'''
+tags = ["privacy", "identity"]
+
+[[rules.allowlists]]
+description = "Documented, public, and operating-system email-shaped values"
+regexTarget = "match"
+regexes = [
+  '''(?i)^[A-Za-z0-9._%+-]+@example\.(com|org|net)$''',
+  '''(?i)^[A-Za-z0-9._%+-]+@users\.noreply\.github\.com$''',
+  '''(?i)^noreply@github\.com$''',
+  '''^secret@router\.example$''',
+  '''^fixture@example\.invalid$''',
+  '''^org\.gnome\.Shell@(x11|wayland)\.service$''',
+  '''^user@[0-9]+\.service$''',
+  '''^ubuntu-appindicators@ubuntu\.com$''',
+  '''^ubuntu-dock@ubuntu\.com$''',
+]
+
+[[rules.allowlists]]
+description = "Compressed image, audio, and video bytes"
+paths = [
+  '''(?i)\.(avif|bmp|gif|heic|jpe?g|m4v|mkv|mov|mp3|mp4|ogg|png|wav|webm|webp)$''',
+]
+
+[[rules]]
+id = "ad-machine-hostname"
+description = "Developer machine hostname captured from a probe or trace"
+# Case-sensitive on purpose: Windows default hostnames are uppercase
+# (DESKTOP-A1B2C3D). A case-insensitive form matches this project's own crate
+# names (agent-desktop-core, agent-desktop-ffi, ...) and is pure noise.
+regex = '''\b(DESKTOP|LAPTOP)-[A-Z0-9]{7}\b'''
+tags = ["privacy", "identity"]
+
+[[rules.allowlists]]
+description = "Synthetic hostname examples"
+regexTarget = "match"
+regexes = [
+  '''^(DESKTOP|LAPTOP)-AAAAAAA$''',
+  '''^(DESKTOP|LAPTOP)-EXAMPLE$''',
+]
+
+# ---------------------------------------------------------------------------
+# Global allowlist: local generated artifacts only. Benign privacy matches are
+# allowlisted on their own rules so they cannot suppress credential findings.
+# ---------------------------------------------------------------------------
+[allowlist]
+description = "Local generated artifacts"
+paths = [
+  '''(^|/)target/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)\.claude/''',
+]

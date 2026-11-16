@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How a ref resolves, and when it goes stale</title>
+<script>
+  var t = new URLSearchParams(location.search).get("theme");
+  if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+  if (window.self === window.top) document.documentElement.setAttribute("data-top", "");
+</script>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #000; --panel: #0a0a0a; --node: #111; --border: #5c5c5c;
+    --fg: #ededed; --muted: #8f8f8f; --line: #8f8f8f; --line-strong: #ededed;
+    --hl-fill: #0a2a5e; --hl-ring: #1e5fd6; --hl-icon: #cfe0ff;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme]) {
+      color-scheme: light;
+      --bg: #fff; --panel: #fafafa; --node: #fff; --border: #b8b8b8;
+      --fg: #171717; --muted: #666; --line: #7a7a7a; --line-strong: #171717;
+      --hl-fill: #dbe8ff; --hl-ring: #2563eb; --hl-icon: #1d4ed8;
+    }
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #fff; --panel: #fafafa; --node: #fff; --border: #b8b8b8;
+    --fg: #171717; --muted: #666; --line: #7a7a7a; --line-strong: #171717;
+    --hl-fill: #dbe8ff; --hl-ring: #2563eb; --hl-icon: #1d4ed8;
+  }
+  html, body { margin: 0; background: transparent; }
+  :root[data-top], :root[data-top] body { background: var(--bg); }
+  svg { display: block; width: 100%; height: auto; font-family: Geist, "Geist Sans", system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .box { fill: var(--panel); stroke: var(--border); stroke-width: 1; stroke-dasharray: 4 4; vector-effect: non-scaling-stroke; }
+  .node { fill: var(--node); }
+  .label { fill: var(--fg); font-size: 15px; text-anchor: middle; }
+  .sub { fill: var(--muted); font-size: 11.5px; text-anchor: middle; }
+  .head { fill: var(--fg); font-size: 16px; font-weight: 500; }
+  .tag { fill: var(--muted); font-size: 12.5px; text-anchor: middle; }
+  .wire { fill: none; stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; marker-end: url(#arrow); }
+  .wire.strong { stroke: var(--line-strong); }
+  .icon { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+  .icon.fg { stroke: var(--fg); }
+  .hl { fill: var(--hl-fill); stroke: var(--hl-ring); stroke-width: 1; vector-effect: non-scaling-stroke; }
+  .hl-icon { fill: none; stroke: var(--hl-icon); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+  #arrow path { fill: none; stroke: var(--line); stroke-width: 1; stroke-linecap: round; stroke-linejoin: round; }
+  .label, .sub { text-anchor: start; }
+  .tag.start { text-anchor: start; }
+  .ico { fill: var(--muted); }
+  .ico.fg { fill: var(--fg); }
+  .hl-ico { fill: var(--hl-icon); }
+  .label.dim { fill: var(--muted); }
+</style>
+</head>
+<body>
+<svg viewBox="0 0 720 650" role="img" aria-labelledby="t d">
+  <title id="t">How a ref resolves, and when it goes stale</title>
+  <desc id="d">From top to bottom: a command uses a ref such as @s…:e6, and the refmap returns its RefEntry, or STALE_REF when the key is missing. If the entry carries a retained object (on macOS, the element's own address), resolve_element_strict turns it back into that exact element: if it is alive and its pid, role and recorded id still match, the command acts on it, otherwise STALE_REF. No search runs. If the entry has no retained object, unique_at_capture decides: not unique at capture is AMBIGUOUS_TARGET. If it was unique, FullPredicate counts the live elements that match the same predicate: exactly one lets the command act, none is STALE_REF, and two or more is AMBIGUOUS_TARGET.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" refX="6" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1.5 1.5 L5.5 4 L1.5 6.5"/>
+    </marker>
+  </defs>
+  <circle class="hl" cx="155" cy="40" r="28"/>
+  <svg class="hl-ico" x="144" y="29" width="22" height="22" viewBox="0 0 16 16"><path d="M8.47 1.47a4.29 4.29 0 1 1 6.06 6.06l-2.5 2.5-1.06-1.06 2.5-2.5a2.79 2.79 0 0 0-3.94-3.94l-2.5 2.5-1.06-1.06zm3.06 4.06-6 6-1.06-1.06 6-6zm-10.06 9a4.3 4.3 0 0 0 6.06 0l2.5-2.5-1.06-1.06-2.5 2.5a2.79 2.79 0 0 1-3.94-3.94l2.5-2.5-1.06-1.06-2.5 2.5a4.3 4.3 0 0 0 0 6.06" fill-rule="evenodd" clip-rule="evenodd"/></svg>
+  <text class="label" x="197" y="36">@s…:e6</text>
+  <text class="sub" x="197" y="53">a command uses a ref</text>
+  <path class="wire strong" d="M155 74V90"/>
+  <rect class="box node" x="15" y="96" width="280" height="56" rx="6"/>
+  <svg class="ico" x="31" y="115" width="18" height="18" viewBox="0 0 16 16"><path d="M9.18 0a1 1 0 0 1 .61.3l4.42 4.4a1 1 0 0 1 .29.71v8.09A2.5 2.5 0 0 1 12 16H4a2.5 2.5 0 0 1-2.5-2.5V0h7.69M3 13.5a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5.62L8.88 1.5H3zm8.63-1.25H4.5V11h7.13zm0-3H4.5V8h7.13zm-5-3H4.5V5h2.13z"/></svg>
+  <text class="label" x="59" y="120">RefEntry</text>
+  <text class="sub" x="59" y="137">refmap lookup by key</text>
+  <path class="wire" d="M301 124H349"/>
+  <text class="tag" x="325" y="116">no key</text>
+  <rect class="box node" x="355" y="96" width="320" height="56" rx="6"/>
+  <svg class="ico" x="371" y="115" width="18" height="18" viewBox="0 0 16 16"><path d="m12.47 13.53.53.53L14.06 13l-.53-.53L9.06 8l4.47-4.47.53-.53L13 1.94l-.53.53L8 6.94 3.53 2.47 3 1.94 1.94 3l.53.53L6.94 8l-4.47 4.47-.53.53L3 14.06l.53-.53L8 9.06z" fill-rule="evenodd" clip-rule="evenodd"/></svg>
+  <text class="label" x="399" y="120">STALE_REF</text>
+  <text class="sub" x="399" y="137">key not in the refmap</text>
+  <path class="wire strong" d="M155 158V186"/>
+  <rect class="box node" x="15" y="192" width="280" height="56" rx="6"/>
+  <svg class="ico" x="31" y="211" width="18" height="18" viewBox="0 0 16 16"><path d="M7.53.72 7 .19 5.94 1.25l.53.53.22.22H3.37a3.38 3.38 0 0 0 0 6.75h9.25a1.88 1.88 0 0 1 0 3.75H4.9a2.5 2.5 0 1 0 0 1.5h7.74a3.37 3.37 0 1 0 0-6.75H3.37a1.88 1.88 0 0 1 0-3.75H6.7l-.22.22-.53.53L7 5.31l.53-.53 1.32-1.32a1 1 0 0 0 0-1.42zM2.5 14.25a1 1 0 1 0 0-2 1 1 0 0 0 0 2m12-11.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0m1.5 0a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0" fill-rule="evenodd" clip-rule="evenodd"/></svg>
+  <text class="label" x="59" y="216">element_token(entry)</text>
+  <text class="sub" x="59" y="233">retained object on the entry?</text>
+  <path class="wire" d="M301 220H349"/>
+  <text class="tag" x="325" y="212">yes</text>
+  <rect class="box node" x="355" y="192" width="320" height="56" rx="6"/>
+  <svg class="ico" x="371" y="211" width="18" height="18" viewBox="0 0 16 16"><path d="M8.75 0q.01.69.37 1.06.36.42 1.1.74.73.3 1.6.53c.55.14 1.16.29 1.67.46l.51.17v6.57a5.3 5.3 0 0 1-2.81 4.65l-2.84 1.48-.35.19-.35-.19-2.84-1.48A5.3 5.3 0 0 1 2 9.53V2.96l.51-.17c.5-.17 1.12-.32 1.67-.46q.87-.23 1.6-.53.74-.32 1.1-.74.36-.38.37-1.06zM8 2.06a4.5 4.5 0 0 1-1.61 1.11c-.6.26-1.24.45-1.82.6l-1.07.29v5.47c0 1.4.77 2.67 2.01 3.32L8 14.15l2.49-1.3a3.8 3.8 0 0 0 2.01-3.32V4.06q-.48-.14-1.07-.29a13 13 0 0 1-1.82-.6A4.5 4.5 0 0 1 8 2.06M11.06 7l-3.53 3.53c-.3.3-.77.3-1.06 0L4.94 9 6 7.94l1 1 3-3z"/></svg>
+  <text class="label" x="399" y="216">resolve_element_strict</text>
+  <text class="sub" x="399" y="233">macOS: address back to the same element</text>
+  <path class="wire" d="M515 254V282"/>
+  <text class="tag start" x="525" y="273">dead or mismatched</text>
+  <rect class="box node" x="355" y="288" width="320" height="56" rx="6"/>
+  <svg class="ico" x="371" y="307" width="18" height="18" viewBox="0 0 16 16"><path d="m12.47 13.53.53.53L14.06 13l-.53-.53L9.06 8l4.47-4.47.53-.53L13 1.94l-.53.53L8 6.94 3.53 2.47 3 1.94 1.94 3l.53.53L6.94 8l-4.47 4.47-.53.53L3 14.06l.53-.53L8 9.06z" fill-rule="evenodd" clip-rule="evenodd"/></svg>
+  <text class="label" x="399" y="312">STALE_REF</text>
+  <text class="sub" x="399" y="329">dead, or pid, role or id differ</text>
+  <path class="wire strong" d="M155 254V378"/>
+  <text class="tag start" x="165" y="320">no retained object</text>
+  <rect class="box node" x="15" y="384" width="280" height="56" rx="6"/>
+  <svg class="ico" x="31" y="403" width="18" height="18" viewBox="0 0 16 16"><path d="M8.75 0q.01.69.37 1.06.36.42 1.1.74.73.3 1.6.53c.55.14 1.16.29 1.67.46l.51.17v6.57a5.3 5.3 0 0 1-2.81 4.65l-2.84 1.48-.35.19-.35-.19-2.84-1.48A5.3 5.3 0 0 1 2 9.53V2.96l.51-.17c.5-.17 1.12-.32 1.67-.46q.87-.23 1.6-.53.74-.32 1.1-.74.36-.38.37-1.06zM8 2.06a4.5 4.5 0 0 1-1.61 1.11c-.6.26-1.24.45-1.82.6l-1.07.29v5.47c0 1.4.77 2.67 2.01 3.32L8 14.15l2.49-1.3a3.8 3.8 0 0 0 2.01-3.32V4.06q-.48-.14-1.07-.29a13 13 0 0 1-1.82-.6A4.5 4.5 0 0 1 8 2.06M11.06 7l-3.53 3.53c-.3.3-.77.3-1.06 0L4.94 9 6 7.94l1 1 3-3z"/></svg>
+  <text class="label" x="59" y="408">unique_at_capture</text>
+  <text class="sub" x="59" y="425">complete evidence, full predicate</text>
+  <path class="wire" d="M301 402H349"/>
+  <text class="tag" x="325" y="394">no</text>
+  <rect class="box node" x="355" y="384" width="320" height="56" rx="6"/>
+  <svg class="ico" x="371" y="403" width="18" height="18" viewBox="0 0 16 16"><path d="m12.47 13.53.53.53L14.06 13l-.53-.53L9.06 8l4.47-4.47.53-.53L13 1.94l-.53.53L8 6.94 3.53 2.47 3 1.94 1.94 3l.53.53L6.94 8l-4.47 4.47-.53.53L3 14.06l.53-.53L8 9.06z" fill-rule="evenodd" clip-rule="evenodd"/></svg>
+  <text class="label" x="399" y="408">AMBIGUOUS_TARGET</text>
+  <text class="sub" x="399" y="425">not unique at capture, or 2+ live matches</text>
+  <path class="wire strong" d="M155 440V474"/>
+  <text class="tag start" x="165" y="462">yes</text>
+  <rect class="box node" x="15" y="480" width="280" height="56" rx="6"/>
+  <svg class="ico" x="31" y="499" width="18" height="18" viewBox="0 0 16 16"><path d="M8.75 0q.01.69.37 1.06.36.42 1.1.74.73.3 1.6.53c.55.14 1.16.29 1.67.46l.51.17v6.57a5.3 5.3 0 0 1-2.81 4.65l-2.84 1.48-.35.19-.35-.19-2.84-1.48A5.3 5.3 0 0 1 2 9.53V2.96l.51-.17c.5-.17 1.12-.32 1.67-.46q.87-.23 1.6-.53.74-.32 1.1-.74.36-.38.37-1.06zM8 2.06a4.5 4.5 0 0 1-1.61 1.11c-.6.26-1.24.45-1.82.6l-1.07.29v5.47c0 1.4.77 2.67 2.01 3.32L8 14.15l2.49-1.3a3.8 3.8 0 0 0 2.01-3.32V4.06q-.48-.14-1.07-.29a13 13 0 0 1-1.82-.6A4.5 4.5 0 0 1 8 2.06M11.06 7l-3.53 3.53c-.3.3-.77.3-1.06 0L4.94 9 6 7.94l1 1 3-3z"/></svg>
+  <text class="label" x="59" y="504">FullPredicate</text>
+  <text class="sub" x="59" y="521">count live matches in the window</text>
+  <path class="wire" d="M301 494H321a14 14 0 0 0 14 -14V436a14 14 0 0 1 14 -14H349"/>
+  <text class="tag start" x="343" y="458">2+ matches</text>
+  <path class="wire" d="M301 514H349"/>
+  <text class="tag" x="325" y="506">none</text>
+  <rect class="box node" x="355" y="480" width="320" height="56" rx="6"/>
+  <svg class="ico" x="371" y="499" width="18" height="18" viewBox="0 0 16 16"><path d="m12.47 13.53.53.53L14.06 13l-.53-.53L9.06 8l4.47-4.47.53-.53L13 1.94l-.53.53L8 6.94 3.53 2.47 3 1.94 1.94 3l.53.53L6.94 8l-4.47 4.47-.53.53L3 14.06l.53-.53L8 9.06z" fill-rule="evenodd" clip-rule="evenodd"/></svg>
+  <text class="label" x="399" y="504">STALE_REF</text>
+  <text class="sub" x="399" y="521">no live element matches</text>
+  <path class="wire strong" d="M155 536V570"/>
+  <text class="tag start" x="165" y="558">exactly 1 match</text>
+  <rect class="box node" x="15" y="576" width="280" height="56" rx="6"/>
+  <svg class="ico" x="31" y="595" width="18" height="18" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0m-4.47-1.47.53-.53L11 4.94l-.53.53L6.5 9.44l-.97-.97L5 7.94 3.94 9l.53.53 1.5 1.5c.3.3.77.3 1.06 0z" fill-rule="evenodd" clip-rule="evenodd"/></svg>
+  <text class="label" x="59" y="600">act</text>
+  <text class="sub" x="59" y="617">on the resolved element</text>
+  <path class="wire" d="M681 220a14 14 0 0 1 14 14V590a14 14 0 0 1 -14 14H301"/>
+  <text class="tag" x="500" y="596">alive, fields match</text>
+</svg>
+</body>
+</html>

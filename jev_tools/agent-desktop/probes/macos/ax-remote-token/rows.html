@@ -1,0 +1,9 @@
+<!doctype html><html><body><h1>POC rows</h1><ul id="list"></ul><p id="status">phase0</p>
+<script>
+const list=document.getElementById('list'),status=document.getElementById('status');
+function render(){list.innerHTML='';['Alpha','Beta','Gamma','Delta'].forEach(n=>{const li=document.createElement('li');li.id='row-'+n;li.innerHTML='<span>'+n+'</span> <button>Delete</button>';list.appendChild(li);});}
+render();
+setTimeout(()=>{document.getElementById('row-Beta').remove();status.textContent='phase1 removed Beta';},6000);
+setTimeout(()=>{document.querySelector('#row-Gamma span').textContent='Gamma edited';status.textContent='phase2 edited Gamma';},12000);
+setTimeout(()=>{render();status.textContent='phase3 re-rendered all';},18000);
+</script></body></html>

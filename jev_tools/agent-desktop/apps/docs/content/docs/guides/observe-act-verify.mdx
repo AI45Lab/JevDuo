@@ -1,0 +1,84 @@
+---
+title: The observe, act, verify loop
+navTitle: Observe, act, verify
+description: Run the observe, act, verify loop against a desktop app. Pick the smallest observation, act on a qualified ref, and confirm the effect by reading the app again.
+---
+
+agent-desktop does not run the loop; your agent does, one command at a time. `ok: true` does not show that an action worked, so each step ends with a read.
+
+Before the first step, run `agent-desktop status`. If a permission is missing or `supported_surfaces` is empty, fix that first with the page for your OS: [macOS](/desktop/platforms/macos), [Windows](/desktop/platforms/windows), or [Linux](/desktop/platforms/linux).
+
+## Observe
+
+Read the smallest part of the UI that holds your target. A larger read costs more time and tokens, and its refs go stale sooner.
+
+<table>
+  <thead>
+    <tr><th>What you know</th><th>Run</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>The role and exact name of the element</td><td><code>find --app APP --role button --name Save --exact --first</code></td></tr>
+    <tr><td>Nothing yet, and the app is small</td><td><code>snapshot --app APP -i --compact</code></td></tr>
+    <tr><td>Nothing yet, and the app is dense (Electron, or more than about 50 interactive elements)</td><td><code>snapshot --skeleton</code>, then <code>snapshot --root REF</code> on one region</td></tr>
+    <tr><td>A menu, sheet, alert, or popover is open</td><td><code>snapshot --surface KIND</code>, never with <code>--skeleton</code></td></tr>
+  </tbody>
+</table>
+
+[Skeleton and drill-down](/desktop/skeleton-and-drill-down) explains the dense-app row and [Surfaces](/desktop/surfaces) the last one. Pass every ref exactly as printed, and re-read the region after any UI change; see [Snapshots and refs](/desktop/snapshots-and-refs).
+
+## Act
+
+Run the command that matches your intent:
+
+```bash
+agent-desktop click @s8f3k2p9:e12              # activate a control
+agent-desktop set-value @s8f3k2p9:e3 "hello"   # replace a field's value
+agent-desktop check @s8f3k2p9:e6               # idempotent, unlike toggle
+```
+
+Prefer the semantic, idempotent commands: `set-value` over `type`, `check` and `uncheck` over `toggle`, `select` for combo boxes. They run headless, re-read the element, and report `not_delivered` when the element was already in the requested state. Each ref action also waits up to 5000 ms for its target to become actionable, so you rarely need a `wait` before it. Physical gestures such as hover, drag, and double-click need `--headed`; read [Headed mode](/desktop/guides/headed-mode) first. Flags are in the [interaction commands](/desktop/commands/interaction).
+
+## Verify
+
+`ok: true` means the command returned a delivered or already-satisfied result, not that the app did what you wanted. Read `data.disposition.delivery`:
+
+<table>
+  <thead>
+    <tr><th>Delivery</th><th>What it proves</th><th>What to do</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>delivered_verified</code></td><td>The adapter read back the postcondition it names, such as the checked state or the field value. For values, it does not prove the app committed them.</td><td>Confirm document-level effects with an independent read.</td></tr>
+    <tr><td><code>delivered_unverified</code></td><td>The dispatch completed. The effect was not confirmed.</td><td>Read the app before you act again.</td></tr>
+    <tr><td><code>not_delivered</code></td><td>Nothing was sent, because the operation was already satisfied.</td><td>Read the state if you expected a change.</td></tr>
+  </tbody>
+</table>
+
+Then read the app again with the smallest read that answers the question:
+
+```bash
+agent-desktop is @s8f3k2p9:e6 --property checked                       # one state
+agent-desktop wait --element @s8f3k2p9:e3 --predicate value --value 7   # a value that updates asynchronously
+agent-desktop snapshot --root @s8f3k2p9:e2 -i --compact                 # the region that changed
+```
+
+Apps update asynchronously: a read taken right after a click can still show the old state, so prefer `wait` to a single read. If the result has a `menu`, `sheet`, or `alert` in `data.surfaces`, the app is waiting on that overlay; observe it with `snapshot --surface` before the window behind it. See [Waiting without sleeps](/desktop/guides/waiting).
+
+## Recover from failures
+
+Branch on `error.code` and `error.disposition`, never on message text. `STALE_REF` and `SNAPSHOT_NOT_FOUND` mean observe again and use the new ref; `AMBIGUOUS_TARGET` means narrow the target with `find --exact` or `--root`; `POLICY_DENIED` means read [Headed mode](/desktop/guides/headed-mode) before anything else. Retry or substitute an action only when `disposition.retry` is `safe`; otherwise read the live state first. Every code and its recovery is in [Errors and recovery](/desktop/errors-and-recovery).
+
+## Worked example
+
+This run presses a Calculator button on Linux, verifies the display, and clears it. The [quick start](/desktop/quick-start) shows the output of each step.
+
+```bash
+agent-desktop find --app gnome-calculator --role button --name 7 --exact --first     # ref of the 7 button
+agent-desktop find --app gnome-calculator --role textfield --first                   # ref of the display
+agent-desktop click @s3jjre8xzrvo2l:e1                                               # act
+agent-desktop wait --element @s3sxeejcz18ky3:e1 --predicate value --value 7           # verify
+agent-desktop find --app gnome-calculator --role button --name C --exact --first     # then clear with C
+```
+
+1. Each `find` returns one match in `data.match`; its `ref_id` names the snapshot that `find` saved. Use the refs from your own output.
+2. `click` returns `delivered_unverified`: the accessibility call returned, which does not prove the button did its job.
+3. The `wait` is the verification. If it times out, read `details.last_observed` and `data.surfaces` before you click again, because a second click could type `77`.

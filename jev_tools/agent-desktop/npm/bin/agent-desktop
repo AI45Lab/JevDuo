@@ -1,0 +1,138 @@
+#!/usr/bin/env node
+
+const { spawn } = require('child_process');
+const { existsSync, accessSync, chmodSync, lstatSync, writeFileSync, constants } = require('fs');
+const { isAbsolute, join } = require('path');
+const { platform, arch } = require('os');
+const { LINUX_HELPER_NAME, MACOS_HELPER_NAME, releasedKeys, resolve } = require('../lib/platform');
+
+const binDir = __dirname;
+const MACOS_HELPER_PATH_ENV = 'AGENT_DESKTOP_MACOS_HELPER_PATH';
+
+// Check `released` flag, not just table presence, to distinguish unsupported vs missing binary.
+function getBinaryName() {
+  const entry = resolve(platform(), arch());
+  return entry && entry.released ? entry.binaryName : null;
+}
+
+const LAUNCHER_NOTICE = [
+  'agent-desktop: this command runs through the Node launcher because npm did not run the install script, which adds about 125 ms per call.',
+  'Allow it and reinstall to link the native binary: npm install -g agent-desktop --allow-scripts=agent-desktop. In a project, run npm install-scripts approve agent-desktop, then npm rebuild agent-desktop.',
+].join('\n');
+
+// Reaching this launcher means postinstall never linked the native binary.
+// The marker is the only state: if it cannot be written, stay silent.
+function noteLauncherOnce() {
+  try {
+    const { version } = require('../package.json');
+    if (!/^[0-9A-Za-z.+-]+$/.test(version)) return;
+    writeFileSync(join(binDir, `.launcher-notice-${version}`), '', { flag: 'wx' });
+    process.stderr.write(`${LAUNCHER_NOTICE}\n`);
+  } catch {}
+}
+
+function main() {
+  const binaryName = getBinaryName();
+
+  if (!binaryName) {
+    console.error(`Error: Unsupported platform: ${platform()}-${arch()}`);
+    console.error(`Released platform keys today: ${releasedKeys().join(', ')}`);
+    console.error('See: https://github.com/vercel-labs/agent-desktop');
+    process.exit(1);
+  }
+
+  const binaryPath = join(binDir, binaryName);
+
+  if (!existsSync(binaryPath)) {
+    console.error(`Error: Native binary not found for ${platform()}-${arch()}`);
+    console.error(`Expected: ${binaryPath}`);
+    console.error('');
+    console.error('The installed package is incomplete. Reinstall agent-desktop.');
+    console.error('Release binaries are also available at https://github.com/vercel-labs/agent-desktop/releases');
+
+    process.exit(1);
+  }
+
+  if (platform() !== 'win32') {
+    try {
+      accessSync(binaryPath, constants.X_OK);
+    } catch {
+      try {
+        chmodSync(binaryPath, 0o755);
+      } catch (err) {
+        console.error(`Error: Cannot make binary executable: ${err.message}`);
+        console.error('Try running: chmod +x ' + binaryPath);
+        process.exit(1);
+      }
+    }
+  }
+
+  if (platform() === 'linux') {
+    try {
+      const directory = lstatSync(binDir);
+      if (!directory.isDirectory()) throw new Error('Package bin path must be a directory');
+      if (directory.mode & 0o022) chmodSync(binDir, directory.mode & 0o755);
+      const plainHelper = join(binDir, LINUX_HELPER_NAME);
+      const linuxHelper = existsSync(plainHelper)
+        ? plainHelper : join(binDir, `${LINUX_HELPER_NAME}-linux-${arch()}`);
+      if (existsSync(linuxHelper)) {
+        const helper = lstatSync(linuxHelper);
+        if (!helper.isFile()) throw new Error('Linux helper must be a regular file');
+        const mode = (helper.mode & 0o755) | 0o100;
+        if ((helper.mode & 0o777) !== mode) chmodSync(linuxHelper, mode);
+      }
+    } catch (err) {
+      console.error(`Error: Cannot secure Linux package permissions: ${err.message}`);
+      process.exit(1);
+    }
+  }
+
+  let helperPath;
+  if (platform() === 'darwin') {
+    const override = process.env[MACOS_HELPER_PATH_ENV];
+    if (override && !isAbsolute(override)) {
+      console.error(`Error: ${MACOS_HELPER_PATH_ENV} must be an absolute path`);
+      process.exit(1);
+    }
+    const bundledHelper = join(binDir, `${MACOS_HELPER_NAME}-${platform()}-${arch()}`);
+    helperPath = override || (existsSync(bundledHelper) ? bundledHelper : join(binDir, MACOS_HELPER_NAME));
+    if (!existsSync(helperPath)) {
+      console.error(`Error: macOS helper not found: ${helperPath}`);
+      console.error('Reinstall agent-desktop so the CLI and helper come from the same release.');
+      process.exit(1);
+    }
+    try {
+      accessSync(helperPath, constants.X_OK);
+    } catch {
+      try {
+        chmodSync(helperPath, 0o755);
+      } catch (err) {
+        console.error(`Error: Cannot make macOS helper executable: ${err.message}`);
+        process.exit(1);
+      }
+    }
+  }
+
+  noteLauncherOnce();
+
+  const child = spawn(binaryPath, process.argv.slice(2), {
+    stdio: 'inherit',
+    env: helperPath ? { ...process.env, [MACOS_HELPER_PATH_ENV]: helperPath } : process.env,
+    windowsHide: false,
+  });
+
+  child.on('error', (err) => {
+    console.error(`Error executing binary: ${err.message}`);
+    process.exit(1);
+  });
+
+  child.on('close', (code, signal) => {
+    if (signal) {
+      console.error(`Error: agent-desktop child was terminated by signal: ${signal}`);
+      process.exit(1);
+    }
+    process.exit(code ?? 0);
+  });
+}
+
+main();

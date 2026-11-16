@@ -1,0 +1,61 @@
+---
+title: Scroll commands
+navTitle: Scroll
+description: Reference for scroll and scroll-to, which move a scroll area or bring an element into view.
+---
+
+Both commands act on a qualified ref and share the [result shape](/desktop/commands/interaction#result-shape), [wait budget](/desktop/commands/interaction#wait-budget), and [shared errors](/desktop/commands/interaction#errors-shared-by-ref-commands) of the interaction commands. `scrollarea` elements get refs so that `scroll` can target them.
+
+## scroll
+
+Scrolls a scroll area in one direction by a number of units.
+
+```bash
+agent-desktop scroll <REF> [--direction up|down|left|right] [--amount N] [--timeout-ms MS]
+```
+
+<table>
+  <thead>
+    <tr><th>Flag or argument</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>REF</code></td><td>required</td><td>Qualified ref of the scroll area.</td></tr>
+    <tr><td><code>--direction</code></td><td><code>down</code></td><td><code>up</code>, <code>down</code>, <code>left</code>, or <code>right</code>.</td></tr>
+    <tr><td><code>--amount N</code></td><td><code>3</code></td><td>Number of scroll units.</td></tr>
+    <tr><td><code>--timeout-ms MS</code></td><td><code>5000</code></td><td>Wait budget.</td></tr>
+  </tbody>
+</table>
+
+macOS and Windows scroll through native accessibility paths headless. On Linux, `scroll` is a physical wheel event, so headless it refuses before sending anything:
+
+```json
+{
+  "version": "2.6",
+  "ok": false,
+  "command": "scroll",
+  "error": {
+    "code": "POLICY_DENIED",
+    "message": "Physical pointer input is disabled by the current interaction policy",
+    "recovery": {
+      "strategy": "request_explicit_policy_then_retry_original",
+      "retryable": true,
+      "requires_fresh_snapshot": false
+    },
+    "disposition": { "delivery": "not_delivered", "retry": "safe" }
+  }
+}
+```
+
+A delivered scroll is usually `delivered_unverified`. Take a fresh snapshot before you act on elements that were offscreen, because scrolling changes positions and a repeated scroll moves the view again. For a canvas or custom surface with no scroll action, use [`mouse-wheel`](/desktop/commands/mouse#mouse-wheel).
+
+Platform limits: Linux needs `--headed` and X11. See [macOS](/desktop/platforms/macos), [Windows](/desktop/platforms/windows), and [Linux](/desktop/platforms/linux).
+
+## scroll-to
+
+Brings an element into the visible area. Success means a re-read found the element visible.
+
+```bash
+agent-desktop scroll-to <REF> [--timeout-ms MS]
+```
+
+Most ref actions already scroll their target into view first, so you need `scroll-to` mainly to reveal an element before you read it or act on a neighbor. An element without a ref cannot be targeted: scroll its container with `scroll`. When the element's bounds cannot be read, the visibility check never passes and the command ends with `TIMEOUT` (`details.kind: "actionability_timeout"`, a `stable` check reading `live bounds unavailable`). On Windows, an element with no scrollable ancestor fails with `ACTION_FAILED` and `details.kind: "scroll_into_view_unsupported"`.

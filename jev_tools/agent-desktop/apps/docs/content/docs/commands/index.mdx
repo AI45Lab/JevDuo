@@ -1,0 +1,94 @@
+---
+title: Commands
+navTitle: All commands
+description: All 60 agent-desktop commands by group, with a one-line description and a link to each command's reference entry.
+---
+
+agent-desktop has 60 commands in 11 groups. Every command prints one JSON envelope with `version`, `ok`, `command`, and either `data` or `error`; [JSON output](/desktop/json-output) defines it.
+
+```bash
+agent-desktop --help               # list every command
+agent-desktop <command> --help     # flags and arguments for one command
+agent-desktop skills get desktop   # the agent usage guide compiled into the binary
+```
+
+`--help` prints the flags of the binary you installed. Flags that apply to every command, such as `--headed`, `--session`, `--agent-id`, `--trace`, and the post-action `--wait-for` flags, are documented once in [Configuration](/desktop/configuration).
+
+<table>
+  <thead>
+    <tr><th>Command</th><th>What it does</th></tr>
+  </thead>
+  <tbody>
+    <tr><th colSpan="2">App and window</th></tr>
+    <tr><td><a href="/desktop/commands/app-window#launch"><code>launch</code></a></td><td>Start an app, or attach to a running one, and return once its process is running.</td></tr>
+    <tr><td><a href="/desktop/commands/app-window#close-app"><code>close-app</code></a></td><td>Quit an app and all its windows, or end its process with <code>--force</code>.</td></tr>
+    <tr><td><a href="/desktop/commands/app-window#list-apps"><code>list-apps</code></a></td><td>List running GUI apps.</td></tr>
+    <tr><td><a href="/desktop/commands/app-window#list-windows"><code>list-windows</code></a></td><td>List windows with ids, titles, bounds, and focus state.</td></tr>
+    <tr><td><a href="/desktop/commands/app-window#focus-window"><code>focus-window</code></a></td><td>Bring a window to the front and confirm the OS reports it focused.</td></tr>
+    <tr><td><a href="/desktop/commands/app-window#resize-window"><code>resize-window</code></a></td><td>Set a window's width and height.</td></tr>
+    <tr><td><a href="/desktop/commands/app-window#move-window"><code>move-window</code></a></td><td>Move a window to screen coordinates.</td></tr>
+    <tr><td><a href="/desktop/commands/app-window#minimize"><code>minimize</code></a></td><td>Minimize a window.</td></tr>
+    <tr><td><a href="/desktop/commands/app-window#maximize"><code>maximize</code></a></td><td>Maximize or zoom a window.</td></tr>
+    <tr><td><a href="/desktop/commands/app-window#restore"><code>restore</code></a></td><td>Restore a minimized or maximized window.</td></tr>
+    <tr><th colSpan="2">Observation</th></tr>
+    <tr><td><a href="/desktop/commands/observation#snapshot"><code>snapshot</code></a></td><td>Capture the accessibility tree as JSON with qualified refs.</td></tr>
+    <tr><td><a href="/desktop/commands/observation#find"><code>find</code></a></td><td>Search for elements by role, name, value, text, description, native id, or state.</td></tr>
+    <tr><td><a href="/desktop/commands/observation#get"><code>get</code></a></td><td>Read one property of a ref: text, value, title, bounds, role, or states.</td></tr>
+    <tr><td><a href="/desktop/commands/observation#is"><code>is</code></a></td><td>Check one state of a ref: visible, enabled, checked, focused, expanded, or selected.</td></tr>
+    <tr><td><a href="/desktop/commands/observation#screenshot"><code>screenshot</code></a></td><td>Capture an app window or a display as an image.</td></tr>
+    <tr><td><a href="/desktop/commands/observation#list-displays"><code>list-displays</code></a></td><td>List displays with bounds, scale factor, and primary flag.</td></tr>
+    <tr><td><a href="/desktop/commands/observation#list-surfaces"><code>list-surfaces</code></a></td><td>List the overlays an app presents now, such as sheets and menus.</td></tr>
+    <tr><td><a href="/desktop/commands/observation#open-system-surface"><code>open-system-surface</code></a></td><td>Raise an OS shell surface and return the window it presents.</td></tr>
+    <tr><th colSpan="2">Interaction</th></tr>
+    <tr><td><a href="/desktop/commands/interaction#click"><code>click</code></a></td><td>Activate an element with its primary action.</td></tr>
+    <tr><td><a href="/desktop/commands/interaction#double-click"><code>double-click</code></a></td><td>Double-click an element. Usually needs <code>--headed</code>.</td></tr>
+    <tr><td><a href="/desktop/commands/interaction#triple-click"><code>triple-click</code></a></td><td>Triple-click an element. Needs <code>--headed</code>.</td></tr>
+    <tr><td><a href="/desktop/commands/interaction#right-click"><code>right-click</code></a></td><td>Open an element's context menu.</td></tr>
+    <tr><td><a href="/desktop/commands/interaction#type"><code>type</code></a></td><td>Insert text into a text target.</td></tr>
+    <tr><td><a href="/desktop/commands/interaction#set-value"><code>set-value</code></a></td><td>Write a value directly through the accessibility value path.</td></tr>
+    <tr><td><a href="/desktop/commands/interaction#clear"><code>clear</code></a></td><td>Empty a text target.</td></tr>
+    <tr><td><a href="/desktop/commands/interaction#focus"><code>focus</code></a></td><td>Move keyboard focus to an element without clicking it.</td></tr>
+    <tr><td><a href="/desktop/commands/interaction#select"><code>select</code></a></td><td>Pick an option in a list, dropdown, or combo box.</td></tr>
+    <tr><td><a href="/desktop/commands/interaction#toggle"><code>toggle</code></a></td><td>Flip a checkbox or switch.</td></tr>
+    <tr><td><a href="/desktop/commands/interaction#check"><code>check</code></a></td><td>Set a checkbox or switch to checked, idempotently.</td></tr>
+    <tr><td><a href="/desktop/commands/interaction#uncheck"><code>uncheck</code></a></td><td>Set a checkbox or switch to unchecked, idempotently.</td></tr>
+    <tr><td><a href="/desktop/commands/interaction#expand"><code>expand</code></a></td><td>Expand a disclosure triangle, tree item, or accordion.</td></tr>
+    <tr><td><a href="/desktop/commands/interaction#collapse"><code>collapse</code></a></td><td>Collapse a disclosure triangle, tree item, or accordion.</td></tr>
+    <tr><th colSpan="2">Scroll</th></tr>
+    <tr><td><a href="/desktop/commands/scroll#scroll"><code>scroll</code></a></td><td>Scroll a scroll area in a direction by a number of units.</td></tr>
+    <tr><td><a href="/desktop/commands/scroll#scroll-to"><code>scroll-to</code></a></td><td>Bring an element into the visible area.</td></tr>
+    <tr><th colSpan="2">Keyboard</th></tr>
+    <tr><td><a href="/desktop/commands/keyboard#press"><code>press</code></a></td><td>Send a key combo such as <code>return</code> or <code>ctrl+s</code>.</td></tr>
+    <tr><td><a href="/desktop/commands/keyboard#key-down"><code>key-down</code></a></td><td>Reserved. Fails closed instead of holding a key.</td></tr>
+    <tr><td><a href="/desktop/commands/keyboard#key-up"><code>key-up</code></a></td><td>Reserved. Fails closed instead of releasing a key.</td></tr>
+    <tr><th colSpan="2">Mouse</th></tr>
+    <tr><td><a href="/desktop/commands/mouse#hover"><code>hover</code></a></td><td>Move the cursor to an element's center or to coordinates. Needs <code>--headed</code>.</td></tr>
+    <tr><td><a href="/desktop/commands/mouse#drag"><code>drag</code></a></td><td>Drag from one element or point to another. Needs <code>--headed</code>.</td></tr>
+    <tr><td><a href="/desktop/commands/mouse#mouse-move"><code>mouse-move</code></a></td><td>Move the cursor to screen coordinates. Needs <code>--headed</code>.</td></tr>
+    <tr><td><a href="/desktop/commands/mouse#mouse-click"><code>mouse-click</code></a></td><td>Click at screen coordinates. Needs <code>--headed</code>.</td></tr>
+    <tr><td><a href="/desktop/commands/mouse#mouse-down"><code>mouse-down</code></a></td><td>Reserved. Fails closed instead of pressing a button.</td></tr>
+    <tr><td><a href="/desktop/commands/mouse#mouse-up"><code>mouse-up</code></a></td><td>Reserved. Fails closed instead of releasing a button.</td></tr>
+    <tr><td><a href="/desktop/commands/mouse#mouse-wheel"><code>mouse-wheel</code></a></td><td>Scroll the mouse wheel at screen coordinates. Needs <code>--headed</code>.</td></tr>
+    <tr><th colSpan="2">Notifications</th></tr>
+    <tr><td><a href="/desktop/commands/notifications#list-notifications"><code>list-notifications</code></a></td><td>List entries in the OS notification surface.</td></tr>
+    <tr><td><a href="/desktop/commands/notifications#dismiss-notification"><code>dismiss-notification</code></a></td><td>Dismiss one notification by index.</td></tr>
+    <tr><td><a href="/desktop/commands/notifications#dismiss-all-notifications"><code>dismiss-all-notifications</code></a></td><td>Dismiss every notification, optionally for one app.</td></tr>
+    <tr><td><a href="/desktop/commands/notifications#notification-action"><code>notification-action</code></a></td><td>Press an action button on a notification.</td></tr>
+    <tr><th colSpan="2">Clipboard</th></tr>
+    <tr><td><a href="/desktop/commands/clipboard#clipboard-get"><code>clipboard-get</code></a></td><td>Read text, an image, or file references from the clipboard.</td></tr>
+    <tr><td><a href="/desktop/commands/clipboard#clipboard-set"><code>clipboard-set</code></a></td><td>Write text, an image, or file references to the clipboard.</td></tr>
+    <tr><td><a href="/desktop/commands/clipboard#clipboard-clear"><code>clipboard-clear</code></a></td><td>Clear the clipboard.</td></tr>
+    <tr><th colSpan="2">Wait</th></tr>
+    <tr><td><a href="/desktop/commands/wait#wait"><code>wait</code></a></td><td>Block until a time, element, window, text, menu, event, or notification condition holds.</td></tr>
+    <tr><th colSpan="2">System</th></tr>
+    <tr><td><a href="/desktop/commands/system#status"><code>status</code></a></td><td>Report adapter health, platform, permissions, and supported surfaces.</td></tr>
+    <tr><td><a href="/desktop/commands/system#permissions"><code>permissions</code></a></td><td>Check, request, or guide the grant of OS permissions.</td></tr>
+    <tr><td><a href="/desktop/commands/system#version"><code>version</code></a></td><td>Print the version, target architecture, and OS.</td></tr>
+    <tr><td><a href="/desktop/commands/system#skills"><code>skills</code></a></td><td>List and read the skills compiled into the binary.</td></tr>
+    <tr><td><a href="/desktop/commands/system#session"><code>session</code></a></td><td>Start, end, list, and clean up sessions.</td></tr>
+    <tr><td><a href="/desktop/commands/system#cursor-overlay"><code>cursor-overlay</code></a></td><td>Configure the presentation-only agent cursor.</td></tr>
+    <tr><td><a href="/desktop/commands/system#trace"><code>trace</code></a></td><td>Read merged session trace timelines.</td></tr>
+    <tr><th colSpan="2">Batch</th></tr>
+    <tr><td><a href="/desktop/commands/batch#batch"><code>batch</code></a></td><td>Run a bounded, sequential, non-atomic list of commands in one process.</td></tr>
+  </tbody>
+</table>

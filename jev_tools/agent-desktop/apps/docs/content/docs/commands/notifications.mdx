@@ -1,0 +1,100 @@
+---
+title: Notification commands
+navTitle: Notifications
+description: Reference for list-notifications, dismiss-notification, dismiss-all-notifications, and notification-action on the operating system notification surface.
+---
+
+These commands drive the OS notification surface: Notification Center on macOS, Action Center on Windows, and the GNOME Shell message list on Linux. Command names, arguments, and JSON fields are the same everywhere. Titles and bodies are returned verbatim and are not redacted, so treat them as sensitive.
+
+- **Listing** is read-only. Linux lists without `--headed`, even when the list is closed. On macOS and Windows a headless call works only while the surface is already open; otherwise it returns `POLICY_DENIED`, and `--headed` may open the surface.
+- **Mutations** (`dismiss-notification`, `dismiss-all-notifications`, `notification-action`) always need `--headed`, because they open and focus the notification surface.
+- **Identity guard.** Notifications reorder between listings, so `dismiss-notification` and `notification-action` need `--expected-app` or `--expected-title` copied from the same `list-notifications` result. If the row at `INDEX` no longer matches, nothing is pressed and the command returns `NOTIFICATION_NOT_FOUND`.
+
+To block until a new notification arrives, use [`wait --notification`](/desktop/commands/wait#notification). The JSON examples on this page are built from the command code and tests; notifications could not be exercised in the Linux session the other examples came from, which had no notification service:
+
+```json
+{
+  "code": "PLATFORM_NOT_SUPPORTED",
+  "message": "No notification service is running in this session",
+  "details": { "daemon": "absent", "detail": "no service owns org.freedesktop.Notifications" }
+}
+```
+
+## list-notifications
+
+Lists the notifications on the OS surface.
+
+```bash
+agent-desktop list-notifications [--app NAME] [--text TEXT] [--limit N]
+```
+
+<table>
+  <thead>
+    <tr><th>Flag</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>--app NAME</code></td><td>all apps</td><td>Only notifications from this app, ignoring case.</td></tr>
+    <tr><td><code>--text TEXT</code></td><td>none</td><td>Only notifications that contain this text.</td></tr>
+    <tr><td><code>--limit N</code></td><td>no limit</td><td>Maximum number returned.</td></tr>
+  </tbody>
+</table>
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "list-notifications",
+  "data": {
+    "count": 1,
+    "notifications": [
+      { "index": 1, "app_name": "Calendar", "title": "Standup in 10 minutes", "body": "Room 4", "actions": ["Snooze", "Open"] }
+    ]
+  }
+}
+```
+
+`index` is 1-based and counts the unfiltered list, so a filtered result can start above 1. `body` and `actions` are omitted when empty. Errors: `POLICY_DENIED` on macOS or Windows with the surface closed, and `PLATFORM_NOT_SUPPORTED` when there is no notification service (on Linux, an owner other than GNOME Shell).
+
+## dismiss-notification
+
+Dismisses one notification by index.
+
+```bash
+agent-desktop --headed dismiss-notification INDEX --expected-app NAME
+agent-desktop --headed dismiss-notification 2 --expected-title "Standup in 10 minutes"
+```
+
+<table>
+  <thead>
+    <tr><th>Flag or argument</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>INDEX</code></td><td>required</td><td>1-based index from <code>list-notifications</code>.</td></tr>
+    <tr><td><code>--expected-app APP</code>, <code>--expected-title TITLE</code></td><td>at least one</td><td>The app or title the notification at <code>INDEX</code> must have.</td></tr>
+    <tr><td><code>--app NAME</code></td><td>none</td><td>Require the notification to come from this app.</td></tr>
+  </tbody>
+</table>
+
+`data.dismissed` is the removed notification, in the `list-notifications` row shape. Errors: `INVALID_ARGS` without an `--expected-*` flag, `POLICY_DENIED` without `--headed`, and `NOTIFICATION_NOT_FOUND` when the row no longer matches.
+
+## dismiss-all-notifications
+
+Dismisses every notification, or every one from one app.
+
+```bash
+agent-desktop --headed dismiss-all-notifications [--app NAME]
+```
+
+`data.dismissed_count` counts the removed notifications. When some could not be closed, `data.failures` and `data.failed_count` are added.
+
+## notification-action
+
+Presses a named action button on a notification.
+
+```bash
+agent-desktop --headed notification-action INDEX ACTION --expected-app NAME
+```
+
+`ACTION` is a name from the notification's `actions`. The result is an action report, usually `delivered_unverified`: check the effect in the app. Errors: as for `dismiss-notification`, plus `ACTION_NOT_SUPPORTED` when the notification has no button with that name.
+
+Platform limits: GNOME Shell only on Linux, with mutations on X11; see [macOS](/desktop/platforms/macos), [Windows](/desktop/platforms/windows), and [Linux](/desktop/platforms/linux).

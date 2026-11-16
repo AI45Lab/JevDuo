@@ -1,0 +1,5 @@
+minimumReleaseAge: 2880
+allowBuilds:
+  esbuild: false
+overrides:
+  zod: 4.6.7

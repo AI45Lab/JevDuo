@@ -1,0 +1,90 @@
+---
+title: Headed mode
+navTitle: Headed mode
+description: What headless ref actions do by default, what the --headed flag permits, which commands need it, and how to handle POLICY_DENIED without switching modes by reflex.
+---
+
+agent-desktop runs ref actions headless by default. The global `--headed` flag is a permission to use physical input: take focus, move the real cursor, and synthesize keys and pointer events.
+
+## What headless actions do
+
+A headless ref action calls the app's accessibility actions. It does not take focus, move the cursor, synthesize keystrokes, or use the clipboard, which keeps it safe to run while a person uses the desktop. When the accessibility API cannot do what you asked, the action fails closed with a structured error such as `ACTION_NOT_SUPPORTED` or `POLICY_DENIED`. It never silently switches to physical input.
+
+A result shows which mechanism ran: in `data.steps`, `semantic_api` is an accessibility call and `physical_synthetic` is synthesized input.
+
+## What `--headed` permits
+
+`--headed` authorizes the focus and cursor side effects an action declares:
+
+- For a ref, core focuses the exact source window before headed pointer input and verifies the target point before delivery. A process-owned ref has no window to focus, but physical input still requires a verified point.
+- On macOS, clicking a native menu-bar item uses `AXPress`; it works headless and does not move the pointer under `--headed`. A headless `right-click` can use `AXShowMenu` when the target provides it.- Raw coordinates (`--xy`) carry no window identity, so they never focus anything.
+- It applies to every entry of a [batch](/desktop/guides/batch).
+- It permits physical input; it does not force it. Each platform decides per action whether to use a physical or a semantic path, and `check`, `set-value`, and `expand` stay semantic under `--headed` everywhere.
+- It does not lift other guards. A blocked key combo still needs `--force`, and a platform that cannot deliver physical input, such as pointer input on Wayland, still refuses.
+
+```bash
+agent-desktop --headed double-click @s8f3k2p9:e3    # a physical gesture
+```
+
+Physical input gets no confirmation from the OS, so a physical result is usually `delivered_unverified`. Confirm the effect with a read, as in [the observe, act, verify loop](/desktop/guides/observe-act-verify).
+
+## Which commands need `--headed`
+
+On every platform: `triple-click`, `hover`, `drag`, `mouse-move`, `mouse-click`, and `mouse-wheel`. `double-click` needs it too, except on macOS when the element offers `AXOpen`. `key-down`, `key-up`, `mouse-down`, and `mouse-up` never deliver input in either mode; see the [keyboard](/desktop/commands/keyboard#key-down) and [mouse](/desktop/commands/mouse#mouse-down) references.
+
+Depending on the OS:
+
+<table>
+  <thead>
+    <tr><th>Command</th><th>macOS</th><th>Windows</th><th>Linux</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>right-click</code></td><td>Headless</td><td><code>--headed</code></td><td>Headless, if the element has a context-menu action</td></tr>
+    <tr><td><code>type</code></td><td>Headless</td><td><code>--headed</code></td><td>Headless, except into a terminal text node</td></tr>
+    <tr><td><code>focus</code></td><td>Headless</td><td><code>--headed</code></td><td><code>--headed</code></td></tr>
+    <tr><td><code>scroll</code></td><td>Headless</td><td>Headless</td><td><code>--headed</code>, X11 only</td></tr>
+    <tr><td>Listing notifications</td><td>Headless while the surface is open</td><td>Headless while the surface is open</td><td>Headless</td></tr>
+    <tr><td>Notification mutations</td><td><code>--headed</code></td><td><code>--headed</code></td><td><code>--headed</code>, X11 only</td></tr>
+    <tr><td><code>open-system-surface</code></td><td>Headless</td><td><code>--headed</code></td><td><code>--headed</code></td></tr>
+  </tbody>
+</table>
+
+`press` is keyboard input and does not need `--headed` for an unscoped press; scoped presses have platform rules. Each platform page has the full capability table: [macOS](/desktop/platforms/macos), [Windows](/desktop/platforms/windows), [Linux](/desktop/platforms/linux).
+
+## Handle `POLICY_DENIED`
+
+`POLICY_DENIED` means the interaction policy blocked a physical or focus path. Nothing was delivered, so the disposition is `not_delivered`. This is `hover` without `--headed`:
+
+```json
+{
+  "version": "2.6",
+  "ok": false,
+  "command": "hover",
+  "error": {
+    "code": "POLICY_DENIED",
+    "message": "hover moves the cursor and is disabled in headless mode",
+    "recovery": {
+      "strategy": "request_explicit_policy_then_retry_original",
+      "retryable": true,
+      "requires_fresh_snapshot": false
+    },
+    "disposition": { "delivery": "not_delivered", "retry": "safe" }
+  }
+}
+```
+
+Get an explicit decision from the user before you retry. Some `POLICY_DENIED` errors need something other than `--headed`: a blocked key combo needs `--force`, and a failed `supported_action` check in `error.details.checks` means the element offers no route for that action.
+
+<Callout title="Do not switch to headed to recover from a failure">
+  Use `--headed` only when the task needs physical input and the user permits it. Do not add it after a headless action fails.
+</Callout>
+
+A headless failure usually means the semantic path is missing or the UI changed. A headed retry would move the user's cursor or steal focus to work around that, and if the first attempt may have been delivered, a retry can act twice. Instead:
+
+1. Read `error.code`, `error.disposition`, and `error.details`.
+2. Fix the cause: take a fresh snapshot, run `wait --element REF --predicate actionable`, or pick the semantic command (`set-value` for `type`, `check` for `click`).
+3. If the step is physical by nature, such as a drag or a hover, and the user permits it, run that step with `--headed` from the start.
+
+## See where actions land
+
+The agent cursor overlay draws a cursor, a ripple, and an element highlight where each action lands. It is presentation only and never changes what an action does. Enable it once per session with `session start --cursor` or `cursor-overlay enable`; a headed command hides it while it dispatches real input. See [`cursor-overlay`](/desktop/commands/system#cursor-overlay).

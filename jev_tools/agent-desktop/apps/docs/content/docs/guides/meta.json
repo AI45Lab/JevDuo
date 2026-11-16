@@ -1,0 +1,12 @@
+{
+  "title": "Guides",
+  "pages": [
+    "observe-act-verify",
+    "waiting",
+    "batch",
+    "chromium-and-electron",
+    "headed-mode",
+    "traces",
+    "mcp"
+  ]
+}

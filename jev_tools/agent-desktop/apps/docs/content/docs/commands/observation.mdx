@@ -1,0 +1,279 @@
+---
+title: Observation commands
+navTitle: Observation
+description: Reference for snapshot, find, get, is, screenshot, list-displays, list-surfaces, and open-system-surface.
+---
+
+Observation commands read UI state. All of them except `open-system-surface` leave the UI as it was, and their errors carry `not_delivered` because nothing was sent to the app.
+
+Concepts behind the flags are explained in [Skeleton and drill-down](/desktop/skeleton-and-drill-down) (`--skeleton`, `--root`, `--max-depth`, partial observations, timeouts, scoped search), [Snapshots and refs](/desktop/snapshots-and-refs) (refs, `-i`, `--compact`, `--include-bounds`, window selection), and [Surfaces](/desktop/surfaces).
+
+## snapshot
+
+Captures an application's accessibility tree as JSON. Window-owned surfaces are read from a window; on macOS, `menu` and `menubar` are application-owned and need no document window. Interactive elements get qualified refs that later commands accept.
+
+```bash
+agent-desktop snapshot [--app NAME] [--window-id ID] [-i] [--compact] [--skeleton] \
+                       [--root REF] [--surface KIND] [--max-depth N] [--include-bounds] \
+                       [--timeout-ms MS] [--force-electron-a11y]
+```
+
+<table>
+  <thead>
+    <tr><th>Flag</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>--app NAME</code></td><td>focused app or window</td><td>Application to read. The selected surface determines whether a window is required. See <a href="/desktop/snapshots-and-refs#choose-the-window">Choose the window</a>.</td></tr>
+    <tr><td><code>--window-id ID</code></td><td>none</td><td>Read one window by id from <code>list-windows</code>. For macOS <code>menu</code> and <code>menubar</code>, it selects the owning app.</td></tr>
+    <tr><td><code>-i</code>, <code>--interactive-only</code></td><td>off</td><td>Drop leaves without a ref. See <a href="/desktop/snapshots-and-refs#what-a-snapshot-contains">What a snapshot contains</a>.</td></tr>
+    <tr><td><code>--compact</code></td><td>off</td><td>Collapse single-child unnamed wrappers.</td></tr>
+    <tr><td><code>--include-bounds</code></td><td>off</td><td>Add <code>bounds</code> to each node.</td></tr>
+    <tr><td><code>--skeleton</code></td><td>off</td><td>Clamp depth to 3 and mark cut containers with <code>children_count</code>. See <a href="/desktop/skeleton-and-drill-down#take-a-skeleton">Take a skeleton</a>.</td></tr>
+    <tr><td><code>--root REF</code></td><td>none</td><td>Drill into one ref's subtree and replace that region's refs. Cannot combine with <code>--surface</code> or <code>--wait-for</code>. See <a href="/desktop/skeleton-and-drill-down#drill-into-a-region">Drill into a region</a>.</td></tr>
+    <tr><td><code>--max-depth N</code></td><td><code>10</code></td><td>Maximum depth, up to 50. See <a href="/desktop/skeleton-and-drill-down#depth-with-max-depth">Depth with max-depth</a>.</td></tr>
+    <tr><td><code>--timeout-ms MS</code></td><td><code>3000</code></td><td>Observation deadline. A full snapshot that runs out succeeds with <code>complete: false</code>. See <a href="/desktop/skeleton-and-drill-down#partial-observations">Partial observations</a>.</td></tr>
+    <tr><td><code>--surface KIND</code></td><td><code>window</code></td><td>Read the selected UI surface. On macOS, <code>menu</code> and <code>menubar</code> are application-owned. See <a href="/desktop/surfaces#surface-kinds">Surface kinds</a>.</td></tr>
+    <tr><td><code>--force-electron-a11y</code></td><td>off</td><td>Assume Chromium renderer accessibility is already forced, which skips the activation guidance.</td></tr>
+  </tbody>
+</table>
+
+`data` carries `app`, `snapshot_id`, `ref_count`, `complete`, and `tree`. Window-owned snapshots also carry `window`; macOS application-owned `menu` and `menubar` snapshots, and process-owned snapshots of a background app with no window, omit it. [Snapshots and refs](/desktop/snapshots-and-refs) shows the window-owned shape. With a post-action `--wait-for` ([Configuration](/desktop/configuration#post-action-wait-flags)), a successful snapshot adds `elapsed_ms` and `matched_selector`.
+
+Errors specific to `snapshot`: `INVALID_ARGS` for `--root` with `--surface` or `--wait-for`, a bare ref, `--max-depth` above 50, or an unsupported `--surface` when the platform supports other surfaces; `PLATFORM_NOT_SUPPORTED` when the adapter supports no surfaces; `WINDOW_NOT_FOUND` when a window-owned surface has no window; `APP_NOT_FOUND` when an application-owned surface has no matching app; `AMBIGUOUS_TARGET` when a window-owned lookup has several candidate windows; `ELEMENT_NOT_FOUND` when a macOS application-owned menu surface is absent; `STALE_REF`, `SNAPSHOT_NOT_FOUND`, or `TIMEOUT` for a `--root` drill. See [What a drill refuses](/desktop/skeleton-and-drill-down#what-a-drill-refuses).
+Platform limits: supported surfaces and Chromium settle time differ by OS. See [macOS](/desktop/platforms/macos), [Windows](/desktop/platforms/windows), and [Linux](/desktop/platforms/linux).
+
+## find
+
+Searches by role, name, value, text, description, native id, or state, and returns refs you can act on. Use it when you know the target.
+
+```bash
+agent-desktop find [--app NAME] [--window-id ID] [--role ROLE] [--name TEXT] [--value TEXT] \
+                   [--text TEXT] [--description TEXT] [--native-id ID] [--exact] \
+                   [--state TOKEN[=BOOL]]... [--root REF] [--surface KIND] [--timeout-ms MS] \
+                   [--count | --first | --last | --nth N | --limit N]
+```
+
+<table>
+  <thead>
+    <tr><th>Flag</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>--app NAME</code>, <code>--window-id ID</code></td><td>focused app or window</td><td>Which owner to search, with the same rules as <code>snapshot</code>.</td></tr>
+    <tr><td><code>--role ROLE</code></td><td>none</td><td>Accessibility role, case-insensitive. <code>textarea</code>, <code>textbox</code>, and <code>searchfield</code> fold to <code>textfield</code>.</td></tr>
+    <tr><td><code>--name TEXT</code></td><td>none</td><td>Accessible name. Fuzzy unless <code>--exact</code>.</td></tr>
+    <tr><td><code>--value TEXT</code></td><td>none</td><td>Current value. Unnamed elements carry their content here.</td></tr>
+    <tr><td><code>--text TEXT</code></td><td>none</td><td>Text in the name, value, or description. Also matches ancestors whose subtree contains it; use <code>--name</code> to match the node itself.</td></tr>
+    <tr><td><code>--description TEXT</code></td><td>none</td><td>Accessible description.</td></tr>
+    <tr><td><code>--native-id ID</code></td><td>none</td><td>Native automation id, such as an <code>AXIdentifier</code> or AutomationId.</td></tr>
+    <tr><td><code>--exact</code></td><td>off</td><td>Case-insensitive equality instead of a fuzzy match.</td></tr>
+    <tr><td><code>--state TOKEN[=BOOL]</code></td><td>none</td><td>Filter by a state, repeatable. A bare token means true. Tokens: <code>focused</code>, <code>disabled</code>, <code>secure</code>, <code>expanded</code>, <code>checked</code>, <code>selected</code>, <code>hidden</code>, <code>busy</code>, <code>modal</code>, <code>required</code>, <code>indeterminate</code>, <code>pressed</code>, <code>readonly</code>, <code>offscreen</code>, <code>invalid</code>, <code>multiselectable</code>, <code>haspopup</code>.</td></tr>
+    <tr><td><code>--root REF</code></td><td>none</td><td>Search one ref's subtree. See <a href="/desktop/skeleton-and-drill-down#scope-a-search">Scope a search</a>.</td></tr>
+    <tr><td><code>--surface KIND</code></td><td><code>window</code></td><td>Search an overlay. Cannot combine with <code>--root</code>.</td></tr>
+    <tr><td><code>--timeout-ms MS</code></td><td><code>5000</code></td><td>Traversal deadline.</td></tr>
+    <tr><td><code>--count</code></td><td>off</td><td>Return the match count only.</td></tr>
+    <tr><td><code>--first</code>, <code>--last</code>, <code>--nth N</code></td><td>off</td><td>Return one match: the first, the last, or zero-based index <code>N</code>.</td></tr>
+    <tr><td><code>--limit N</code></td><td><code>50</code></td><td>Return at most <code>N</code> matches. <code>0</code> returns all. Use <code>--limit 2</code> before a mutation to check the match is unique.</td></tr>
+  </tbody>
+</table>
+
+`--count`, `--first`, `--last`, `--nth`, and `--limit` are mutually exclusive. The result shapes and match fields are in [JSON output](/desktop/json-output#find-results).
+
+```bash
+agent-desktop find --app gnome-calculator --role button --name 7 --exact --first
+```
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "find",
+  "data": {
+    "match": {
+      "interactive": true,
+      "name": "7",
+      "path": ["window:Calculator", "group", "group", "group", "group", "group", "group", "group", "group", "group", "group", "group"],
+      "ref_id": "@s3jjre8xzrvo2l:e1",
+      "role": "button",
+      "states": [],
+      "value": null
+    },
+    "snapshot_id": "s3jjre8xzrvo2l"
+  }
+}
+```
+
+When a `--role` filter matches nothing, `roles_present` lists the roles in the searched tree, which tells a wrong role name from an empty screen. Errors specific to `find`: `INVALID_ARGS` for conflicting shaping flags, `--root` with `--surface`, or an unknown `--state` token; `TIMEOUT` with `details.kind: "locator_incomplete"` when the traversal ran out of budget, which does not mean the app hangs. Raise `--timeout-ms` or narrow the search.
+
+## get
+
+Reads one property of a ref.
+
+```bash
+agent-desktop get <REF> [--property text|value|title|bounds|role|states]
+```
+
+<table>
+  <thead>
+    <tr><th>Flag or argument</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>REF</code></td><td>required</td><td>Qualified ref.</td></tr>
+    <tr><td><code>--property</code></td><td><code>text</code></td><td><code>text</code> is what a person reads: the value for <code>textfield</code>, <code>combobox</code>, <code>listbox</code>, <code>datefield</code>, and <code>timefield</code>, and the name for every other role, each falling back to the other. <code>value</code> is the raw value. <code>title</code> is the accessible name. <code>bounds</code>, <code>role</code>, and <code>states</code> are as named.</td></tr>
+  </tbody>
+</table>
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "get",
+  "data": { "property": "value", "ref": "@s30sxlstqzdq8x:e19", "value": "entry" }
+}
+```
+
+`text`, `value`, `bounds`, and `states` read live state when the adapter can and fall back to the snapshot's saved values otherwise; a missing value is `null`. Only `bounds` reports whether it was live, in `data.live`. When `live` is `false`, the rectangle came from the snapshot and may be out of date, so check it before you pass bounds to `mouse-click`.
+
+Errors specific to `get`: `INVALID_ARGS` for a bare ref or an unknown property, and the ref errors `SNAPSHOT_NOT_FOUND`, `STALE_REF`, and `AMBIGUOUS_TARGET`. See [Snapshots and refs](/desktop/snapshots-and-refs#how-a-ref-resolves).
+
+## is
+
+Checks one boolean state of a ref.
+
+```bash
+agent-desktop is <REF> [--property visible|enabled|checked|focused|expanded|selected]
+```
+
+<table>
+  <thead>
+    <tr><th>Flag or argument</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>REF</code></td><td>required</td><td>Qualified ref.</td></tr>
+    <tr><td><code>--property</code></td><td><code>visible</code></td><td>The state to test.</td></tr>
+  </tbody>
+</table>
+
+```bash
+agent-desktop is @s30sxlstqzdq8x:e45 --property enabled
+```
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "is",
+  "data": { "applicable": true, "property": "enabled", "ref": "@s30sxlstqzdq8x:e45", "result": false }
+}
+```
+
+`applicable: false` means the property does not apply or could not be read, so `result: false` then means unknown, not disabled or unchecked. Errors are the same as [`get`](#get).
+
+## screenshot
+
+Captures an app window or a display as a PNG. A screenshot is evidence for you, not proof that an action worked.
+
+```bash
+agent-desktop screenshot [PATH] [--app NAME] [--window-id ID] [--screen N]
+```
+
+<table>
+  <thead>
+    <tr><th>Flag or argument</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>PATH</code></td><td>none</td><td>Save the image to this file. Without it, the image returns base64-encoded in <code>data.data</code>.</td></tr>
+    <tr><td><code>--app NAME</code></td><td>none</td><td>Capture this app's window.</td></tr>
+    <tr><td><code>--window-id ID</code></td><td>none</td><td>Capture one window by id.</td></tr>
+    <tr><td><code>--screen N</code></td><td>none</td><td>Capture the display at index <code>N</code> of <code>list-displays</code>, where <code>0</code> is the primary. Cannot combine with <code>--app</code> or <code>--window-id</code>.</td></tr>
+  </tbody>
+</table>
+
+```bash
+agent-desktop screenshot --screen 0 screen.png
+```
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "screenshot",
+  "data": { "format": "png", "height": 900, "path": "/tmp/screen.png", "scale_factor": 1.0, "width": 1440 }
+}
+```
+
+Errors specific to `screenshot`: `PERM_DENIED` without screen-capture permission; `INVALID_ARGS` for `--screen` with a window selector, an out-of-range index, or an unwritable `PATH`; `WINDOW_NOT_FOUND` or `APP_NOT_FOUND` for an unknown target. On Linux, a covered window on a non-compositing window manager fails with `ACTION_FAILED` and `details.reason: "covered"`, and a display capture under a compositing one returns `PLATFORM_NOT_SUPPORTED`.
+
+Platform limits: macOS needs Screen Recording permission, and Wayland asks for portal consent. See [macOS](/desktop/platforms/macos) and [Linux](/desktop/platforms/linux).
+
+## list-displays
+
+Lists connected displays, primary first. It takes no flags.
+
+```bash
+agent-desktop list-displays
+```
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "list-displays",
+  "data": [
+    { "bounds": { "height": 900.0, "width": 1440.0, "x": 0.0, "y": 0.0 }, "id": "screen", "is_primary": true, "scale": 1.0 }
+  ]
+}
+```
+
+Use the array index, not `id`, with `screenshot --screen`.
+
+## list-surfaces
+
+Lists the overlays an app presents now: the values `snapshot --surface` and `find --surface` accept for it.
+
+```bash
+agent-desktop list-surfaces [--app NAME]
+```
+
+<table>
+  <thead>
+    <tr><th>Flag</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>--app NAME</code></td><td>focused app</td><td>Application to inspect.</td></tr>
+  </tbody>
+</table>
+
+`data` is `pid` and `surfaces`, each with `id`, `type`, and, when known, `title`, `item_count`, and `unclassified`. [Surfaces](/desktop/surfaces#list-what-is-open) shows an example and explains `unclassified`. Errors: `APP_NOT_FOUND`, `AMBIGUOUS_TARGET` when several instances match, and `TIMEOUT`.
+
+## open-system-surface
+
+Raises an OS shell surface, such as the Start menu or Action Center, and returns the window it presents. A surface that is already present returns without being raised again.
+
+```bash
+agent-desktop --headed open-system-surface --surface KIND
+```
+
+<table>
+  <thead>
+    <tr><th>Flag</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>--surface KIND</code></td><td>required</td><td>The shell surface: <code>start-menu</code>, <code>taskbar</code>, <code>system-tray</code>, <code>system-tray-overflow</code>, <code>action-center</code>, <code>dock</code>, or <code>menu-bar-extras</code>. <code>dock</code> and <code>menu-bar-extras</code> are the macOS kinds.</td></tr>
+  </tbody>
+</table>
+
+`data` is `surface` and, on Windows and Linux, `window`, with the same fields as a [`list-windows`](/desktop/commands/app-window#list-windows) entry. On macOS no window owns the surface, so `data` is only `{"surface": "dock"}` and `window` is left out. This shape comes from the command's unit test:
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "open-system-surface",
+  "data": {
+    "surface": "action-center",
+    "window": { "app_name": "ShellExperienceHost.exe", "id": "w-4242", "is_focused": true, "pid": 99, "title": "Action center" }
+  }
+}
+```
+
+The command takes the foreground, so on Windows and Linux headless mode refuses it with `POLICY_DENIED` before anything is raised; pass `--headed`. A kind the OS does not expose returns `INVALID_ARGS`, with the kinds to use in `suggestion` and the alternative in `platform_detail` where one exists. On macOS, `dock` and `menu-bar-extras` are always on screen, so the command returns them at once, headless, with no `--headed`; open Control Center or Notification Center by clicking its `menu-bar-extras` item. Which kinds open on Windows and Linux is on their platform pages.
