@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skeleton, drill-down, act, verify</title>
+<script>
+  var t = new URLSearchParams(location.search).get("theme");
+  if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+  if (window.self === window.top) document.documentElement.setAttribute("data-top", "");
+</script>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #000; --panel: #0a0a0a; --node: #111; --border: #5c5c5c;
+    --fg: #ededed; --muted: #8f8f8f; --line: #8f8f8f; --line-strong: #ededed;
+    --hl-fill: #0a2a5e; --hl-ring: #1e5fd6; --hl-icon: #cfe0ff;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme]) {
+      color-scheme: light;
+      --bg: #fff; --panel: #fafafa; --node: #fff; --border: #b8b8b8;
+      --fg: #171717; --muted: #666; --line: #7a7a7a; --line-strong: #171717;
+      --hl-fill: #dbe8ff; --hl-ring: #2563eb; --hl-icon: #1d4ed8;
+    }
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #fff; --panel: #fafafa; --node: #fff; --border: #b8b8b8;
+    --fg: #171717; --muted: #666; --line: #7a7a7a; --line-strong: #171717;
+    --hl-fill: #dbe8ff; --hl-ring: #2563eb; --hl-icon: #1d4ed8;
+  }
+  html, body { margin: 0; background: transparent; }
+  :root[data-top], :root[data-top] body { background: var(--bg); }
+  svg { display: block; width: 100%; height: auto; font-family: Geist, "Geist Sans", system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .box { fill: var(--panel); stroke: var(--border); stroke-width: 1; stroke-dasharray: 4 4; vector-effect: non-scaling-stroke; }
+  .node { fill: var(--node); }
+  .label { fill: var(--fg); font-size: 15px; text-anchor: middle; }
+  .sub { fill: var(--muted); font-size: 11.5px; text-anchor: middle; }
+  .head { fill: var(--fg); font-size: 16px; font-weight: 500; }
+  .tag { fill: var(--muted); font-size: 12.5px; text-anchor: middle; }
+  .wire { fill: none; stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; marker-end: url(#arrow); }
+  .wire.strong { stroke: var(--line-strong); }
+  .icon { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+  .icon.fg { stroke: var(--fg); }
+  .hl { fill: var(--hl-fill); stroke: var(--hl-ring); stroke-width: 1; vector-effect: non-scaling-stroke; }
+  .hl-icon { fill: none; stroke: var(--hl-icon); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+  #arrow path { fill: none; stroke: var(--line); stroke-width: 1; stroke-linecap: round; stroke-linejoin: round; }
+  .label, .sub { text-anchor: start; }
+  .tag.start { text-anchor: start; }
+  .ico { fill: var(--muted); }
+  .ico.fg { fill: var(--fg); }
+  .hl-ico { fill: var(--hl-icon); }
+  .label.dim { fill: var(--muted); }
+</style>
+</head>
+<body>
+<svg viewBox="0 0 720 464" role="img" aria-labelledby="t d">
+  <title id="t">Skeleton, drill-down, act, verify</title>
+  <desc id="d">From top to bottom: start with snapshot --skeleton, a depth 3 map with children_count on cut branches. Pick a node with a ref and children_count and run snapshot --root on it to read that region into the same snapshot. Act on a ref from the drill, such as click. Verify with wait, get, or a re-drill of the same root. Then loop back to act again or drill another region.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" refX="6" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1.5 1.5 L5.5 4 L1.5 6.5"/>
+    </marker>
+  </defs>
+  <circle class="hl" cx="360" cy="40" r="28"/>
+  <svg class="hl-ico" x="349" y="29" width="22" height="22" viewBox="0 0 16 16"><path d="M8.75 2.8a1.5 1.5 0 1 0-1.5 0V5H7a6 6 0 0 0-5.92 5H0v3h1v3h14v-3h1v-3h-1.08A6 6 0 0 0 9 5h-.25zM7 6.5A4.5 4.5 0 0 0 2.5 11v3.5h11V11A4.5 4.5 0 0 0 9 6.5zm.25 4.75a1.75 1.75 0 1 1-3.5 0 1.75 1.75 0 0 1 3.5 0M10.5 13a1.75 1.75 0 1 0 0-3.5 1.75 1.75 0 0 0 0 3.5" fill-rule="evenodd" clip-rule="evenodd"/></svg>
+  <text class="label" x="402" y="36">calling agent</text>
+  <text class="sub" x="402" y="53">starts with a shallow map</text>
+  <path class="wire strong" d="M360 74V94"/>
+  <rect class="box node" x="220" y="100" width="280" height="56" rx="6"/>
+  <svg class="ico" x="236" y="119.0" width="18" height="18" viewBox="0 0 16 16"><path d="M9 2h6v1.5H9zm0 10h6v1.5H9zm.75-5H9v1.5h6V7H9.75M1 12h2v1.5H1zm.75-10H1v1.5h2V2H1.75M1 7h2v1.5H1zm4.75 5H5v1.5h2V12H5.75M5 2h2v1.5H5zm.75 5H5v1.5h2V7H5.75" fill-rule="evenodd" clip-rule="evenodd"/></svg>
+  <text class="label" x="264" y="124.0">snapshot --skeleton</text>
+  <text class="sub" x="264" y="141.0">depth 3, children_count on cut branches</text>
+  <path class="wire strong" d="M360 162V190"/>
+  <text class="tag start" x="370" y="181">pick a node with ref_id and children_count</text>
+  <rect class="box node" x="220" y="196" width="280" height="56" rx="6"/>
+  <svg class="ico" x="236" y="215.0" width="18" height="18" viewBox="0 0 16 16"><path d="M13.5 4v2h-11V2.5H6l1.33 1q.68.49 1.5.5zM1 6V1h5.17a1 1 0 0 1 .6.2l1.46 1.1a1 1 0 0 0 .6.2H15V6h1l-.17 1.5-.58 5.28A2.5 2.5 0 0 1 12.76 15H3.24a2.5 2.5 0 0 1-2.49-2.22L.17 7.5 0 6zm13 1.5H1.68l.56 5.11a1 1 0 0 0 1 .89h9.52a1 1 0 0 0 1-.89l.56-5.11z" fill-rule="evenodd" clip-rule="evenodd"/></svg>
+  <text class="label" x="264" y="220.0">snapshot --root &lt;ref&gt;</text>
+  <text class="sub" x="264" y="237.0">same snapshot_id, new refs</text>
+  <path class="wire strong" d="M360 258V286"/>
+  <text class="tag start" x="370" y="277">act on a ref from the drill</text>
+  <rect class="box node" x="220" y="292" width="280" height="56" rx="6"/>
+  <svg class="ico" x="236" y="311.0" width="18" height="18" viewBox="0 0 16 16"><path d="M8.47 1.47a4.29 4.29 0 1 1 6.06 6.06l-2.5 2.5-1.06-1.06 2.5-2.5a2.79 2.79 0 0 0-3.94-3.94l-2.5 2.5-1.06-1.06zm3.06 4.06-6 6-1.06-1.06 6-6zm-10.06 9a4.3 4.3 0 0 0 6.06 0l2.5-2.5-1.06-1.06-2.5 2.5a2.79 2.79 0 0 1-3.94-3.94l2.5-2.5-1.06-1.06-2.5 2.5a4.3 4.3 0 0 0 0 6.06" fill-rule="evenodd" clip-rule="evenodd"/></svg>
+  <text class="label" x="264" y="316.0">click @s…:eN</text>
+  <text class="sub" x="264" y="333.0">or set-value, select, check</text>
+  <path class="wire strong" d="M360 354V382"/>
+  <text class="tag start" x="370" y="373">verify</text>
+  <rect class="box node" x="220" y="388" width="280" height="56" rx="6"/>
+  <svg class="ico" x="236" y="407.0" width="18" height="18" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0m-4.47-1.47.53-.53L11 4.94l-.53.53L6.5 9.44l-.97-.97L5 7.94 3.94 9l.53.53 1.5 1.5c.3.3.77.3 1.06 0z" fill-rule="evenodd" clip-rule="evenodd"/></svg>
+  <text class="label" x="264" y="412.0">wait, get, or re-drill</text>
+  <text class="sub" x="264" y="429.0">read the result back</text>
+  <path class="wire" d="M506 416H526a14 14 0 0 0 14-14V238a14 14 0 0 0-14-14H506"/>
+  <text class="tag start" x="552" y="316">next action</text>
+  <text class="tag start" x="552" y="333">or region</text>
+</svg>
+</body>
+</html>

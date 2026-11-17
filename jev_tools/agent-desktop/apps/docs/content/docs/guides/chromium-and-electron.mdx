@@ -1,0 +1,102 @@
+---
+title: Chromium and Electron apps
+navTitle: Chromium and Electron
+description: Drive the web contents of a Chromium or Electron app with agent-browser over a DevTools port that agent-desktop opens, and keep the native UI on agent-desktop.
+---
+
+agent-desktop reads every app through the OS accessibility tree, and that path works for Chromium and Electron apps too. Their web contents can be dense and slow to walk, though. For an app you can launch fresh, `launch --cdp` starts it with a loopback-only Chrome DevTools Protocol (CDP) port, and [agent-browser](https://agent-browser.dev) connects to that port to drive the web contents. agent-desktop never speaks CDP itself; it opens and verifies the port, and keeps the native UI.
+
+<table>
+  <thead>
+    <tr><th>Part of the app</th><th>Drive it with</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Web contents: pages, panels, editors, forms inside the app</td><td>agent-browser, over the CDP port</td></tr>
+    <tr><td>Native menu bar, file dialogs and sheets, window management, notifications, screenshots</td><td>agent-desktop</td></tr>
+    <tr><td>An app that is already running, or one you did not launch</td><td>agent-desktop only. The port exists only on a process launched with it</td></tr>
+  </tbody>
+</table>
+
+## 1. Launch the app with a DevTools port
+
+```bash
+agent-desktop launch chrome --cdp --env ACCESSIBILITY_ENABLED=1 \
+  --arg=--force-renderer-accessibility --arg=--user-data-dir=/tmp/chrome-profile
+```
+
+`--cdp` adds the remote-debugging switches, waits until the endpoint answers, and returns it in `data.cdp`. Omit the port, as here, to let the OS pick a free one, or pass one (`--cdp 9229`). The `--env` and `--force-renderer-accessibility` arguments are for Linux, where Chromium joins the accessibility bus only when asked, so that agent-desktop can still see the native UI; see [Linux](/desktop/platforms/linux#chromium-qt-and-electron). An Electron app needs no extra arguments.
+
+This is Google Chrome on Linux, with the suggestion and the window object trimmed:
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "launch",
+  "data": {
+    "app": "chrome",
+    "cdp": {
+      "http_endpoint": "http://127.0.0.1:44297",
+      "port": 44297,
+      "product": "Chrome/156.0.8078.79",
+      "websocket_url": "ws://127.0.0.1:44297/devtools/browser/4a28a252-c7ea-4288-9985-50e34fc49b8f"
+    },
+    "pid": 11342,
+    "process_instance": "1e1c1e2e:168278",
+    "renderer": "chromium",
+    "suggestion": "Next: run `agent-browser connect 44297` (preferred; `agent-browser skills get electron` has the guide) or connect any CDP client such as Playwright or Puppeteer. ...",
+    "window": { "id": "w-1.10-org-a11y-atspi-accessible-1", "title": "Untitled - Google Chrome" }
+  }
+}
+```
+
+Pass the app name that `list-apps` prints (`chrome`, `Slack`, `Obsidian`). agent-desktop refuses `--cdp` for an app that is already running, because a running process has no port and quitting it would lose the user's state. It finds the running app by that name, so a launcher alias such as `google-chrome` on Linux skips the check and the launch times out instead.
+
+## 2. Connect agent-browser to the port
+
+```bash
+agent-browser connect 44297      # the port from data.cdp.port
+agent-browser snapshot -i
+# - heading "Settings" [level=1, ref=e1]
+# - textbox "Name" [ref=e3]
+# - button "Save" [ref=e2]
+agent-browser fill @e3 "Ada"
+agent-browser click @e2
+```
+
+From here the web contents follow agent-browser's own snapshot, ref, and act loop; see [agent-browser](https://agent-browser.dev) and `agent-browser skills get electron`. Playwright, Puppeteer, and other CDP clients can use `data.cdp.websocket_url` instead. Do not write raw CDP or call app-internal APIs.
+
+## 3. Keep the native UI on agent-desktop
+
+The window chrome, menus, and dialogs are not in the web contents, so they stay on agent-desktop, in the same run:
+
+```bash
+agent-desktop find --app chrome --role button --name Reload --first
+agent-desktop find --app chrome --role textfield --first          # the address bar
+```
+
+Against the session above, the second `find` returned the address bar, `"name": "Address and search bar"`, with the page agent-browser had opened as its value. Use `snapshot --surface` for a native file dialog or sheet the web contents open; see [Surfaces](/desktop/surfaces).
+
+## 4. Close the app
+
+```bash
+agent-desktop close-app chrome
+```
+
+`close-app` ends the process and with it the port; the run above returned `delivered_verified` with `details.evidence: "process_instance_exited"`, and the endpoint stopped answering. While the port is open, any local process can control the app's web contents, including processes of other accounts on the same machine, because the DevTools port has no authentication. Request `--cdp` only for the steps that need it.
+
+## When `--cdp` fails
+
+<table>
+  <thead>
+    <tr><th>Error</th><th>Cause</th><th>What to do</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>ACTION_FAILED</code>, <code>details.kind: cdp_requires_fresh_launch</code></td><td>The app is already running. <code>details.pids</code> lists it, and nothing was launched (<code>not_delivered</code>).</td><td>Run <code>close-app</code>, confirm the exit, and launch again with <code>--cdp</code>, or drive the running app through accessibility.</td></tr>
+    <tr><td><code>ACTION_FAILED</code>, <code>details.kind: cdp_endpoint_unavailable</code></td><td>The app started, but no DevTools endpoint answered before the deadline. The app keeps running (<code>delivered_unverified</code>).</td><td>Use the accessibility path, or <code>close-app</code> and check the app name and arguments.</td></tr>
+    <tr><td><code>INVALID_ARGS</code>, <code>details.kind: cdp_port_in_use</code></td><td>The port you named is bound.</td><td>Name another port, or omit it.</td></tr>
+    <tr><td><code>INVALID_ARGS</code>, <code>details.kind: cdp_switch_conflict</code></td><td>An <code>--arg</code> sets <code>--remote-debugging-*</code> or <code>--remote-allow-origins</code>, which <code>--cdp</code> owns.</td><td>Drop that <code>--arg</code>.</td></tr>
+  </tbody>
+</table>
+
+The flags are in the [`launch` reference](/desktop/commands/app-window#launch). For a dense app you cannot relaunch, map it with a skeleton and drill into one region instead; see [Skeleton and drill-down](/desktop/skeleton-and-drill-down).

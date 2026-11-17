@@ -17,6 +17,7 @@ from northcua.agentinfra.context.adapters import (
     is_context_overflow_error,
 )
 from northcua.agentinfra.context.bootstrap import ContextSideEffectFence, prepare_context_messages
+from northcua.agentinfra.nexau_compat.adapters.openai_chat import register_chat_capture_caller
 from northcua.agentinfra.providers.llm_fallback import (
     agent_config_for_llm_candidate,
     conservative_context_budget_inputs,
@@ -118,6 +119,7 @@ class AgentKitModelStepExecutor:
         configure_agent: AgentConfigMutator | None = None,
         build_shadow_envelope: EnvelopeBuilder[EnvelopeT] | None = None,
         tool_choice_override: ProviderToolChoice = None,
+        before_provider_call: Callable[[], None] | None = None,
     ) -> AgentKitModelStepResult[EnvelopeT]:
         """Run one model/tool step with provider fallback and trace capture.
 
@@ -179,9 +181,12 @@ class AgentKitModelStepExecutor:
                     [side_effect_fence.before_tool] if context_mode == ContextManagementMode.ENFORCE else []
                 ),
             )
+            agent_config = agent_config_for_llm_candidate(agent_config, candidate)
             if configure_agent is not None:
                 configure_agent(agent_config)
-            agent_config = agent_config_for_llm_candidate(agent_config, candidate)
+            # Candidate installation replaces llm_config. Apply per-step
+            # settings afterwards and trace that exact effective config.
+            trace_capture_service.llm_config = agent_config.llm_config or candidate.llm_config
             resolved_tool_choice_override = _apply_provider_tool_choice_override(
                 agent_config,
                 tool_choice_override,
@@ -195,6 +200,13 @@ class AgentKitModelStepExecutor:
                     externalize_tools=externalize_tools,
                     transport_capabilities=self.transport_capabilities,
                 )
+                register_chat_capture_caller(prepared_agent.executor.llm_caller)
+                if before_provider_call is not None:
+                    install_provider_context_budget_guard(
+                        prepared_agent.executor.llm_caller,
+                        provider_guard or ProviderContextBudgetGuard(model=str(candidate.llm_config.model)),
+                        before_dispatch=before_provider_call,
+                    )
                 candidate_recovery_is_side_effect_safe = remote or supports_stepwise_local_execution(prepared_agent)
                 tool_surface = self.tool_surface_service.activate_for_agent(
                     prepared_agent,
@@ -380,7 +392,12 @@ class AgentKitModelStepExecutor:
                     meta=meta if isinstance(meta, dict) else {},
                     envelope=envelope,
                 )
-            except Exception as exc:
+            except BaseException as exc:
+                # Preserve prepared input even if a provider/normalizer aborts
+                # before an AgentKitModelStepResult can be returned to its owner.
+                exc.model_step_trace_state = trace_state
+                if not isinstance(exc, Exception):
+                    raise
                 if isinstance(exc, (ContextBudgetExceededError, ContextSummaryError)):
                     raise
                 side_effect_fence.raise_if_candidate_replay_unsafe(exc)

@@ -1,0 +1,120 @@
+---
+title: Errors and recovery
+navTitle: Errors and recovery
+description: The error object, all 16 error codes, delivery and retry dispositions, recovery strategies, and when it is safe to retry.
+---
+
+A failed command prints an envelope with `ok: false` and exits `1` (or `2` for a parse error). Branch on `error.code` and `error.disposition`, never on `message` or `suggestion`, whose wording can change. Before you retry or substitute an action, read `error.disposition.retry`.
+
+```json
+{
+  "version": "2.6",
+  "ok": false,
+  "command": "click",
+  "error": {
+    "code": "SNAPSHOT_NOT_FOUND",
+    "message": "Snapshot 's3tufs86hddhyl' not found",
+    "suggestion": "Re-run a snapshot and retry with a ref from the returned snapshot (CLI: snapshot, then use the printed @<snapshot_id>:eN ref; ...)",
+    "recovery": {
+      "strategy": "refresh_snapshot_then_retry_original",
+      "retryable": true,
+      "requires_fresh_snapshot": true
+    },
+    "disposition": { "delivery": "not_delivered", "retry": "safe" }
+  }
+}
+```
+
+## The error object
+
+<table>
+  <thead>
+    <tr><th>Field</th><th>Present</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>code</code></td><td>always</td><td>One of the 16 codes below.</td></tr>
+    <tr><td><code>message</code></td><td>always</td><td>Human-readable text. Not a stable interface.</td></tr>
+    <tr><td><code>disposition</code></td><td>always</td><td>What the failure says about delivery and retry. See <a href="#disposition">Disposition</a>.</td></tr>
+    <tr><td><code>suggestion</code></td><td>when set</td><td>A hint for a person or an agent. Check any command it names before you run it.</td></tr>
+    <tr><td><code>recovery</code></td><td>only when retry is safe</td><td>A declared recovery plan. See <a href="#recovery-strategies">Recovery strategies</a>.</td></tr>
+    <tr><td><code>platform_detail</code></td><td>when set</td><td>The native platform's own error text.</td></tr>
+    <tr><td><code>details</code></td><td>when set</td><td>Structured context. <code>details.kind</code> names the cause for many codes, for example <code>actionability_timeout</code>, <code>focus_verification</code>, <code>surface_absent</code>, <code>wait_timeout</code>, <code>session_ended</code>, or <code>post_action_verification</code>.</td></tr>
+  </tbody>
+</table>
+
+## Error codes
+
+<table>
+  <thead>
+    <tr><th>Code</th><th>What it means</th><th>What to do</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>PERM_DENIED</code></td><td>A required operating system permission is missing, such as Accessibility or Screen Recording.</td><td>Run <code>agent-desktop permissions</code> and grant it. See the <a href="/desktop/platforms/macos">macOS</a>, <a href="/desktop/platforms/windows">Windows</a>, and <a href="/desktop/platforms/linux">Linux</a> pages.</td></tr>
+    <tr><td><code>ELEMENT_NOT_FOUND</code></td><td>No element matched the ref or query, or a requested surface is absent.</td><td>Read <code>details.kind</code> and <code>details.surface</code>. For an absent menu, open the menu first; otherwise check the UI before refreshing a ref.</td></tr>
+    <tr><td><code>APP_NOT_FOUND</code></td><td>No matching application process exists.</td><td>Check the name with <code>list-apps</code>. Run <code>launch</code> if it is not running.</td></tr>
+    <tr><td><code>ACTION_FAILED</code></td><td>The action was rejected or blocked, or its observed result contradicted the request.</td><td>Read <code>details</code> and <code>disposition.retry</code>. It never carries <code>recovery</code>.</td></tr>
+    <tr><td><code>ACTION_NOT_SUPPORTED</code></td><td>The target, or this platform for this input, does not expose the requested action.</td><td>Use a different command or element. Repeating it fails the same way.</td></tr>
+    <tr><td><code>STALE_REF</code></td><td>The ref no longer matches a live element.</td><td>Take a fresh snapshot and use the new ref. See <a href="/desktop/snapshots-and-refs">Snapshots and refs</a>.</td></tr>
+    <tr><td><code>AMBIGUOUS_TARGET</code></td><td>Several live elements, windows, or app instances match, or the ref was not unique when it was captured, and the command refuses to guess.</td><td>Take a fresh snapshot. When the matches are different elements, narrow the target with <code>find</code>, <code>--root</code>, or <code>--window-id</code>; off macOS, identical twins have no ref path. It never carries <code>recovery</code>.</td></tr>
+    <tr><td><code>WINDOW_NOT_FOUND</code></td><td>The requested window does not exist, including a <code>--window-id</code> that matches no window or a closed shell surface.</td><td>Run <code>list-windows --app &lt;name&gt;</code> and use an id it reports.</td></tr>
+    <tr><td><code>PLATFORM_NOT_SUPPORTED</code></td><td>This platform's adapter does not implement the method. A surface kind this OS does not have is <code>INVALID_ARGS</code>.</td><td>Use another approach. The platform pages list what each OS supports.</td></tr>
+    <tr><td><code>TIMEOUT</code></td><td>A wait expired, the target never became actionable, or a read stayed incomplete until the deadline.</td><td>Read <code>details.kind</code>. Retry only when <code>disposition.retry</code> is <code>safe</code>.</td></tr>
+    <tr><td><code>INVALID_ARGS</code></td><td>An argument is invalid. Also returned for a bare <code>@eN</code> ref and an ended session.</td><td>Fix the input. Repeating the same arguments fails the same way.</td></tr>
+    <tr><td><code>NOTIFICATION_NOT_FOUND</code></td><td>The notification index or identity no longer matches.</td><td>Run <code>list-notifications</code> again.</td></tr>
+    <tr><td><code>SNAPSHOT_NOT_FOUND</code></td><td>The snapshot id is missing, pruned, or belongs to another <a href="/desktop/sessions">session</a> namespace.</td><td>Take a snapshot in the same session scope you act in, then use its refs.</td></tr>
+    <tr><td><code>POLICY_DENIED</code></td><td>Headless mode blocked a physical or headed path.</td><td>Do not switch modes to recover. See <a href="/desktop/guides/headed-mode">Headed mode</a>.</td></tr>
+    <tr><td><code>APP_UNRESPONSIVE</code></td><td>The application stopped responding.</td><td>Wait, take a fresh snapshot, then retry only if <code>disposition.retry</code> is <code>safe</code>.</td></tr>
+    <tr><td><code>INTERNAL</code></td><td>An unexpected error.</td><td>Read <code>message</code>. Retry once only if <code>disposition.retry</code> is <code>safe</code>.</td></tr>
+  </tbody>
+</table>
+
+For <code>ELEMENT_NOT_FOUND</code>, read <code>details.kind</code>, <code>details.surface</code>, and <code>details.complete</code>. A macOS lookup with <code>kind: "surface_absent"</code> and <code>complete: true</code> has confirmed that the requested surface is absent. An absent <code>menubar</code> can mean the app exposes no menu bar. For <code>surface: "menu"</code>, open the application menu first: snapshot <code>menubar</code> when it exists, click its menu-bar item without <code>--headed</code>, then snapshot <code>--surface menu</code>. Missing <code>complete</code>, <code>complete: false</code>, a timeout, or an incomplete read is unknown. If the command followed an action with <code>disposition.retry: unsafe</code>, inspect the current UI before another action; do not repeat the action because the snapshot failed.
+
+A macOS <code>TIMEOUT</code> with <code>details.kind: "focus_verification"</code> means the app never reported <code>AXFrontmost</code>, or the target window never reported <code>AXMain</code>, before the bounded focus readback ended. <code>details.physical_delivery_started: false</code> means target input had not started; it does not mean a prior focus or window-raise request was never dispatched. Read <code>disposition</code>, which can still be <code>delivered_unverified</code>.
+
+## Disposition
+
+`disposition` says whether input reached the application, and from that, whether repeating the command is safe. Every error carries it. Commands that act on a target also carry it on success, as `data.disposition`.
+
+<table>
+  <thead>
+    <tr><th><code>delivery</code></th><th><code>retry</code></th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>not_delivered</code></td><td><code>safe</code></td><td>The input never reached the application. Repeating the command cannot duplicate an effect.</td></tr>
+    <tr><td><code>delivery_uncertain</code></td><td><code>unsafe</code></td><td>The input may have landed, and nothing proves either way.</td></tr>
+    <tr><td><code>delivered_unverified</code></td><td><code>unsafe</code></td><td>The input was dispatched, and its effect was not confirmed.</td></tr>
+    <tr><td><code>delivered_verified</code></td><td><code>unsafe</code></td><td>The input was dispatched and the effect was read back. Repeating it would apply it twice.</td></tr>
+    <tr><td><code>unknown</code></td><td><code>unknown</code></td><td>The command established nothing about delivery, for example a <code>TIMEOUT</code> on an operation that may already have landed.</td></tr>
+  </tbody>
+</table>
+
+`retry` follows from `delivery`: only `not_delivered` is `safe`, `unknown` stays `unknown`, and every other value is `unsafe`. A refusal that cannot have delivered anything is stamped `not_delivered`: an argument error, a failure before dispatch, and any error from a read-only command such as `snapshot` or `find`.
+
+**Retry or substitute an action only when `disposition.retry` is `safe`.** When it is `unsafe` or `unknown`, observe first: take a snapshot, read the element with `get` or `is`, or check the app, and decide from what you see. A repeated `click` can submit twice, and a repeated `toggle` undoes itself.
+
+## Recovery strategies
+
+`recovery` appears only when `disposition.retry` is `safe`, the code has a declared plan, and the adapter has not marked the failure non-retryable with `details.retryable: false`. It has `strategy`, `retryable`, `requires_fresh_snapshot`, and, for two codes, `retry_after_ms`.
+
+<table>
+  <thead>
+    <tr><th><code>strategy</code></th><th>Codes</th><th>What the caller does</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>refresh_snapshot_then_retry_original</code></td><td><code>STALE_REF</code>, <code>SNAPSHOT_NOT_FOUND</code></td><td>Take a fresh snapshot (or <code>find</code>), locate the same element, and run the original command again with the new qualified ref.</td></tr>
+    <tr><td><code>inspect_state_then_retry_original</code></td><td><code>TIMEOUT</code>, <code>APP_UNRESPONSIVE</code>, and <code>STALE_REF</code> when <code>details.process_state</code> is <code>exited</code></td><td>Inspect the app first (<code>list-apps</code>, a snapshot, or a <code>wait</code>), wait <code>retry_after_ms</code> if present, then run the original command. For an exited process, launch the app again and take a new snapshot first.</td></tr>
+    <tr><td><code>request_explicit_policy_then_retry_original</code></td><td><code>POLICY_DENIED</code></td><td>Retry only after someone has explicitly chosen the policy the command needs, such as <code>--headed</code> when physical input is intended. Never switch to headed mode on your own to get past the error.</td></tr>
+  </tbody>
+</table>
+
+`STALE_REF` uses `inspect_state_then_retry_original` only when `details.process_state` is `exited`, and `refresh_snapshot_then_retry_original` otherwise. Every other code, such as `ACTION_FAILED`, `INVALID_ARGS`, or `AMBIGUOUS_TARGET`, never carries `recovery`. Follow the "What to do" column instead.
+
+`retry_after_ms` is set only for `TIMEOUT` and `APP_UNRESPONSIVE` (250 ms in this release). `details.retryable` is the adapter's own judgment: `false` means waiting cannot change the outcome, so try a different approach, and it suppresses `recovery` even for a code that would otherwise carry one.
+
+## Decide whether to retry
+
+1. Read `error.code`. For `INVALID_ARGS`, `ACTION_NOT_SUPPORTED`, `PLATFORM_NOT_SUPPORTED`, or `PERM_DENIED`, change the input or the environment. A retry will not help.
+2. Read `error.disposition.retry`. If it is `unsafe` or `unknown`, observe the application before you act again.
+3. If it is `safe` and `recovery` is present, follow the strategy.
+4. If it is `safe` and `recovery` is absent, fix the cause from the code table, then repeat the command, for example with a new ref from `find`.

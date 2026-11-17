@@ -1,0 +1,420 @@
+---
+title: App and window commands
+navTitle: App and window
+description: Reference for launch, close-app, list-apps, list-windows, focus-window, resize-window, move-window, minimize, maximize, and restore.
+---
+
+These commands start and stop apps and manage their windows. `--app` takes the name that `list-apps` prints. A window id from `list-windows` is the exact selector when an app has several windows.
+
+The window commands (`resize-window`, `move-window`, `minimize`, `maximize`, `restore`) pick their target the same way:
+
+- `--window-id` selects that window. `--app` can narrow the search but is not required.
+- `--app` alone selects the app, then one of its windows: its only window if it has one, otherwise the visible ones, then the single focused one, then the accessible ones. If that does not settle on one window, the command fails with `AMBIGUOUS_TARGET`.
+- With neither flag, the target is the focused window.
+
+`close-app` and the five window commands return an [OperationReport](/desktop/json-output#operationreport): read `disposition.delivery` to learn what was proved. Lookup failures such as `APP_NOT_FOUND` and `WINDOW_NOT_FOUND` carry `not_delivered`, so they are safe to retry once the name or id is fixed. The examples on this page are real output from GNOME apps on Linux.
+
+## launch
+
+Starts an app, or attaches to a running instance, and returns once its process is running. A running process and a visible window are separate facts, so `window` appears in the result only when the app already has one.
+
+```bash
+agent-desktop launch <APP> [--timeout MS] [--arg VALUE]... [--env KEY=VALUE]... [--cwd PATH] \
+                           [--no-attach] [--activate] [--cdp [PORT]]
+```
+
+<table>
+  <thead>
+    <tr><th>Flag or argument</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>APP</code></td><td>required</td><td>Application name, bundle ID, or path. The accepted forms depend on the platform.</td></tr>
+    <tr><td><code>--timeout MS</code></td><td><code>30000</code></td><td>Upper bound for the whole launch.</td></tr>
+    <tr><td><code>--arg VALUE</code></td><td>none</td><td>Command-line argument for the app. Repeatable, order preserved. Write <code>--arg=-x</code> for a value that starts with a hyphen.</td></tr>
+    <tr><td><code>--env KEY=VALUE</code></td><td>none</td><td>Environment variable for the launched process. Repeatable. A repeated key is <code>INVALID_ARGS</code>.</td></tr>
+    <tr><td><code>--cwd PATH</code></td><td>none</td><td>Working directory for the launched process.</td></tr>
+    <tr><td><code>--no-attach</code></td><td>off</td><td>Start a fresh instance instead of attaching to a running one.</td></tr>
+    <tr><td><code>--activate</code></td><td>off</td><td>Bring the app forward so it presents a window, and wait for one up to <code>--timeout</code>. This takes the foreground.</td></tr>
+    <tr><td><code>--cdp [PORT]</code></td><td>off</td><td>Launch with a loopback-only Chrome DevTools Protocol endpoint and verify that it answers. Omit <code>PORT</code>, or pass <code>0</code>, to pick a free port.</td></tr>
+  </tbody>
+</table>
+
+```bash
+agent-desktop launch gtk3-demo
+```
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "launch",
+  "data": {
+    "app": "gtk3-demo",
+    "pid": 21766,
+    "process_instance": "6d91df60:120710",
+    "window": {
+      "accessible": true,
+      "app_name": "gtk3-demo",
+      "bounds": { "height": 656.0, "width": 810.0, "x": 630.0, "y": 0.0 },
+      "id": "w-1.105-org-a11y-atspi-accessible-48",
+      "is_focused": true,
+      "minimized": false,
+      "pid": 21766,
+      "process_instance": "6d91df60:120710",
+      "title": "Application Class",
+      "visible": true
+    }
+  }
+}
+```
+
+The result also carries `cdp` when `--cdp` was verified, `renderer: "chromium"` for a detected Chromium or Electron app, and sometimes a `suggestion`. A missing `window` is not a failure. With `--cdp`, `data.cdp` holds `http_endpoint`, `port`, `product`, and `websocket_url` for a CDP client such as agent-browser; [Chromium and Electron apps](/desktop/guides/chromium-and-electron) walks through the handoff.
+
+Errors specific to `launch`:
+
+<table>
+  <thead>
+    <tr><th>Code and detail</th><th>Cause</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>APP_NOT_FOUND</code></td><td>The name does not resolve to an app.</td></tr>
+    <tr><td><code>AMBIGUOUS_TARGET</code></td><td>Several running instances match.</td></tr>
+    <tr><td><code>APP_UNRESPONSIVE</code></td><td>The process exited before it showed a window.</td></tr>
+    <tr><td><code>ACTION_FAILED</code>, <code>details.kind: cdp_requires_fresh_launch</code></td><td><code>--cdp</code> on an app that is already running. <code>launch</code> never quits a running app for you; run <code>close-app</code>, then launch again.</td></tr>
+    <tr><td><code>INVALID_ARGS</code>, <code>details.kind: cdp_port_in_use</code> or <code>cdp_switch_conflict</code></td><td>The named port is bound, or an <code>--arg</code> sets a remote-debugging switch that <code>--cdp</code> owns.</td></tr>
+    <tr><td><code>ACTION_FAILED</code>, <code>details.kind: cdp_endpoint_unavailable</code></td><td>The app started but no verified DevTools endpoint answered. The app stays running.</td></tr>
+  </tbody>
+</table>
+
+Platform limits: the accepted `APP` forms differ by OS. See [macOS](/desktop/platforms/macos#app-naming), [Windows](/desktop/platforms/windows#app-naming), and [Linux](/desktop/platforms/linux#app-naming).
+
+## close-app
+
+Quits an app and all its windows, and succeeds only after the process is seen gone. No command closes a single window: click that window's Close button instead.
+
+```bash
+agent-desktop close-app <APP> [--force]
+```
+
+<table>
+  <thead>
+    <tr><th>Flag or argument</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>APP</code></td><td>required</td><td>Application name as <code>list-apps</code> prints it.</td></tr>
+    <tr><td><code>--force</code></td><td>off</td><td>Terminate the process instead of quitting gracefully.</td></tr>
+  </tbody>
+</table>
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "close-app",
+  "data": {
+    "action": "close-app",
+    "app": "gtk3-demo",
+    "details": { "evidence": "process_instance_exited" },
+    "disposition": { "delivery": "delivered_verified", "retry": "unsafe" },
+    "method": "graceful",
+    "steps": [
+      { "label": "terminate_request", "mechanism": "semantic_api", "outcome": "succeeded" },
+      { "label": "process_exit", "mechanism": "semantic_api", "outcome": "succeeded", "verified": true }
+    ],
+    "target": {
+      "kind": "app",
+      "name": "gtk3-demo",
+      "process": { "instance": "6d91df60:120710", "pid": 21766 }
+    }
+  }
+}
+```
+
+`method` is `graceful` or `force`. If the app had already exited, the report is `not_delivered` with `details.evidence: "process_instance_not_running"`. Errors specific to `close-app`:
+
+- `APP_NOT_FOUND` when no running app matches, `AMBIGUOUS_TARGET` when several instances share the name.
+- `INVALID_ARGS` for a protected system process, with or without `--force`.
+- A save prompt keeps the app open. Read it with `snapshot --surface sheet`, answer it, then close again.
+
+Platform limits: graceful close needs an X11 client on Linux, and the protected processes differ by OS. See [macOS](/desktop/platforms/macos), [Windows](/desktop/platforms/windows), and [Linux](/desktop/platforms/linux).
+
+## list-apps
+
+Lists running GUI apps.
+
+```bash
+agent-desktop list-apps [--app NAME] [--timeout-ms MS]
+```
+
+<table>
+  <thead>
+    <tr><th>Flag</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>--app NAME</code></td><td>all apps</td><td>Filter by name, case-insensitively.</td></tr>
+    <tr><td><code>--timeout-ms MS</code></td><td><code>5000</code></td><td>Deadline for the inventory.</td></tr>
+  </tbody>
+</table>
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "list-apps",
+  "data": {
+    "apps": [
+      {
+        "bundle_id": "org.gnome.Calculator",
+        "name": "gnome-calculator",
+        "pid": 8255,
+        "presentation": "foreground",
+        "process_instance": "6d91df60:28340"
+      }
+    ]
+  }
+}
+```
+
+`presentation` is `foreground` for apps with ordinary windows and `background` for apps with no Dock or taskbar entry. When the platform could not read every process in time, the result adds `complete: false` and a `skipped` array: treat a missing app as unknown, not absent.
+
+`--app` takes the `list-apps` name; Linux also accepts a desktop-entry name. See [Linux](/desktop/platforms/linux#app-naming).
+
+## list-windows
+
+Lists windows. `data` is the array itself.
+
+```bash
+agent-desktop list-windows [--app NAME] [--timeout-ms MS]
+```
+
+<table>
+  <thead>
+    <tr><th>Flag</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>--app NAME</code></td><td>all apps</td><td>Filter to one app by exact, case-insensitive name.</td></tr>
+    <tr><td><code>--timeout-ms MS</code></td><td><code>5000</code></td><td>Deadline for the inventory.</td></tr>
+  </tbody>
+</table>
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "list-windows",
+  "data": [
+    {
+      "accessible": true,
+      "app_name": "gnome-calculator",
+      "bounds": { "height": 616.0, "width": 370.0, "x": 535.0, "y": 142.0 },
+      "id": "w-1.11-org-gnome-Calculator-a11y-948fd89a_9bda_453b_9c10_4a9e9eed3feb",
+      "is_focused": false,
+      "minimized": false,
+      "pid": 8255,
+      "process_instance": "6d91df60:28340",
+      "title": "Calculator",
+      "visible": true
+    }
+  ]
+}
+```
+
+`accessible: false` means semantic commands cannot reach that window; it still accepts screenshots and coordinate input. Errors: `APP_NOT_FOUND` for an unknown `--app`, `APP_UNRESPONSIVE` for a stopped app, and `TIMEOUT` when a busy app left every window unanswered. A timeout is not an empty list.
+
+## focus-window
+
+Brings a window to the front and succeeds only when the OS reports that window as focused on two consecutive reads.
+
+```bash
+agent-desktop focus-window [--window-id ID] [--app NAME] [--title TEXT]
+```
+
+<table>
+  <thead>
+    <tr><th>Flag</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>--window-id ID</code></td><td>none</td><td>Window id from <code>list-windows</code>.</td></tr>
+    <tr><td><code>--app NAME</code></td><td>none</td><td>Application name.</td></tr>
+    <tr><td><code>--title TEXT</code></td><td>none</td><td>Window title, partial match. Combine with <code>--app</code> to narrow.</td></tr>
+  </tbody>
+</table>
+
+Pass at least one flag; with none the command fails with `INVALID_ARGS`. `data.focused` is the window that holds focus afterward, with the same fields as a `list-windows` entry. When a modal dialog holds the focus, `focused` is the dialog, so read `focused.title` before you act.
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "focus-window",
+  "data": {
+    "focused": {
+      "app_name": "gedit",
+      "id": "w-1.10-org-a11y-atspi-accessible-162",
+      "is_focused": true,
+      "title": "Untitled Document 1 - gedit"
+    }
+  }
+}
+```
+
+The example above is trimmed to four fields. Errors: `WINDOW_NOT_FOUND` when nothing matches, `AMBIGUOUS_TARGET` when several windows still match, and `ACTION_FAILED` when the OS never reports the window focused. The command takes the foreground but does not need `--headed`.
+
+Platform limits: Linux needs X11. See [Linux](/desktop/platforms/linux) and [Windows](/desktop/platforms/windows).
+
+## resize-window
+
+Sets a window's width and height.
+
+```bash
+agent-desktop resize-window --width PX --height PX [--app NAME] [--window-id ID]
+```
+
+<table>
+  <thead>
+    <tr><th>Flag</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>--width PX</code>, <code>--height PX</code></td><td>required</td><td>New window size.</td></tr>
+    <tr><td><code>--app NAME</code></td><td>focused app</td><td>Application name.</td></tr>
+    <tr><td><code>--window-id ID</code></td><td>none</td><td>Window id from <code>list-windows</code>.</td></tr>
+  </tbody>
+</table>
+
+```bash
+agent-desktop resize-window --app gedit --width 800 --height 600
+```
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "resize-window",
+  "data": {
+    "action": "resize-window",
+    "details": {
+      "observed": {
+        "height": 600, "hidden": false, "maximized_horizontal": false,
+        "maximized_vertical": false, "width": 800, "x": 0, "y": 0
+      },
+      "tolerance": 2.0,
+      "units": "pixels",
+      "verification_scope": "window_size"
+    },
+    "disposition": { "delivery": "delivered_verified", "retry": "unsafe" },
+    "height": 600.0,
+    "steps": [{ "label": "window_resize", "mechanism": "semantic_api", "outcome": "succeeded", "verified": true }],
+    "target": {
+      "id": "w-1.10-org-a11y-atspi-accessible-162",
+      "kind": "window",
+      "process": { "instance": "6d91df60:28341", "pid": 8261 },
+      "title": "Untitled Document 1 - gedit"
+    },
+    "width": 800.0
+  }
+}
+```
+
+`delivered_verified` means the adapter read the size back within `details.tolerance`. `details.observed` is a Linux addition. Errors: `INVALID_ARGS` for a non-finite or out-of-range size, `STALE_REF` when the window identity changed before the write, and `ACTION_FAILED` when the window manager clamped or ignored the request. After a failed write, read the bounds before you retry.
+
+Platform limits: the tolerance differs by OS, and on Linux window control uses an X11 client, so Wayland-native windows are refused. See [Linux](/desktop/platforms/linux).
+
+## move-window
+
+Moves a window to screen coordinates.
+
+```bash
+agent-desktop move-window --x=X --y=Y [--app NAME] [--window-id ID]
+```
+
+<table>
+  <thead>
+    <tr><th>Flag</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>--x X</code>, <code>--y Y</code></td><td>required</td><td>New position. Write a negative value with <code>=</code>, as in <code>--x=-100</code>.</td></tr>
+    <tr><td><code>--app NAME</code></td><td>focused app</td><td>Application name.</td></tr>
+    <tr><td><code>--window-id ID</code></td><td>none</td><td>Window id from <code>list-windows</code>.</td></tr>
+  </tbody>
+</table>
+
+The result has the same shape as [`resize-window`](#resize-window), with step label `window_move`, request fields `x` and `y`, and `details.verification_scope: "window_position"`. Errors and platform limits are the same as `resize-window`.
+
+## minimize
+
+Minimizes a window.
+
+```bash
+agent-desktop minimize [--app NAME] [--window-id ID]
+```
+
+<table>
+  <thead>
+    <tr><th>Flag</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>--app NAME</code></td><td>focused app</td><td>Application name.</td></tr>
+    <tr><td><code>--window-id ID</code></td><td>none</td><td>Window id from <code>list-windows</code>.</td></tr>
+  </tbody>
+</table>
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "minimize",
+  "data": {
+    "action": "minimize",
+    "details": { "verification_scope": "window_minimized_state" },
+    "disposition": { "delivery": "delivered_verified", "retry": "unsafe" },
+    "steps": [{ "label": "window_minimize", "mechanism": "semantic_api", "outcome": "succeeded", "verified": true }],
+    "target": {
+      "id": "w-1.10-org-a11y-atspi-accessible-162",
+      "kind": "window",
+      "process": { "instance": "6d91df60:28341", "pid": 8261 },
+      "title": "Untitled Document 1 - gedit"
+    }
+  }
+}
+```
+
+A minimized window reports its elements as offscreen, so ref actions on it fail until you [`restore`](#restore) it. A window manager can ignore a minimize sent within about 250 ms of a restore, so read the window state before you retry. Platform limits are the same as `resize-window`.
+
+## maximize
+
+Maximizes a window, or zooms it on macOS. Flags are the same as [`minimize`](#minimize). The step label is `window_maximize`, and a verified report names `details.verification_scope: "window_maximized_state"`.
+
+```bash
+agent-desktop maximize [--app NAME] [--window-id ID]
+```
+
+## restore
+
+Restores a minimized or maximized window. Flags are the same as [`minimize`](#minimize).
+
+```bash
+agent-desktop restore [--app NAME] [--window-id ID]
+```
+
+`restore` has no single read-back across its cases, so a successful report is `delivered_unverified`:
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "restore",
+  "data": {
+    "action": "restore",
+    "disposition": { "delivery": "delivered_unverified", "retry": "unsafe" },
+    "steps": [{ "label": "window_restore", "mechanism": "semantic_api", "outcome": "succeeded" }],
+    "target": {
+      "id": "w-1.10-org-a11y-atspi-accessible-162",
+      "kind": "window",
+      "process": { "instance": "6d91df60:28341", "pid": 8261 },
+      "title": "Untitled Document 1 - gedit"
+    }
+  }
+}
+```
+
+Check the window with `list-windows` afterward. Platform limits are the same as `resize-window`.

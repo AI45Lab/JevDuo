@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# Pre-commit hook for agent-desktop.
+# Mirrors the CI quality gates so a failing commit never reaches origin.
+#
+# Setup (once per clone):
+#   git config core.hooksPath .githooks
+#
+# Bypass for a single commit (only when truly necessary):
+#   git commit --no-verify
+
+set -euo pipefail
+
+if [ -n "${SKIP_PRECOMMIT:-}" ]; then
+    echo "pre-commit: SKIP_PRECOMMIT set, skipping"
+    exit 0
+fi
+
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "pre-commit: cargo not found in PATH, skipping (install Rust to enable)"
+    exit 0
+fi
+
+cd "$(git rev-parse --show-toplevel)"
+
+staged_files="$(git diff --cached --name-only --diff-filter=ACMR)"
+
+staged_matches() {
+    printf '%s\n' "$2" | grep -E "$1" >/dev/null
+}
+
+selftest_haystack="$(
+    printf 'crates/core/src/lib.rs\n'
+    awk 'BEGIN { for (i = 0; i < 20000; i++) print "docs/filler/note-" i ".md" }'
+)"
+if ! staged_matches '\.(rs|toml)$' "$selftest_haystack"; then
+    echo "pre-commit: staged-file matching reported no match for a staged .rs file" >&2
+    echo "pre-commit: refusing the commit - the gate selection below cannot be trusted." >&2
+    exit 1
+fi
+if staged_matches '^crates/ffi/' "$selftest_haystack"; then
+    echo "pre-commit: staged-file matching reported a match that is not present" >&2
+    echo "pre-commit: refusing the commit - the gate selection below cannot be trusted." >&2
+    exit 1
+fi
+
+if staged_matches '\.(rs|toml)$' "$staged_files"; then
+    HAS_RUST_CHANGES=1
+else
+    HAS_RUST_CHANGES=0
+fi
+
+if staged_matches '^crates/ffi/' "$staged_files"; then
+    HAS_FFI_CHANGES=1
+else
+    HAS_FFI_CHANGES=0
+fi
+
+if [ "$HAS_RUST_CHANGES" -eq 0 ] && [ "$HAS_FFI_CHANGES" -eq 0 ]; then
+    if staged_matches '^(tests/e2e-linux/|scripts/|\.githooks/|\.github/workflows/)' "$staged_files"; then
+        echo "pre-commit: checking harness and script files"
+        scripts/check-bash3-compat.sh
+        scripts/check-no-phase-references.sh
+        echo "pre-commit: harness and script checks passed"
+    else
+        echo "pre-commit: no Rust or FFI changes staged, skipping cargo checks"
+    fi
+    exit 0
+fi
+
+HOST_KERNEL="$(uname -s)"
+case "$HOST_KERNEL" in
+    Darwin*)
+        HOST_PACKAGES=(-p agent-desktop-core -p agent-desktop-macos -p agent-desktop -p agent-desktop-ffi)
+        ;;
+    MINGW* | MSYS* | CYGWIN* | Windows_NT)
+        HOST_PACKAGES=(-p agent-desktop-core -p agent-desktop-windows -p agent-desktop -p agent-desktop-ffi)
+        ;;
+    Linux*)
+        HOST_PACKAGES=(-p agent-desktop-core -p agent-desktop-linux -p agent-desktop -p agent-desktop-ffi)
+        ;;
+    *)
+        HOST_PACKAGES=(-p agent-desktop-core -p agent-desktop -p agent-desktop-ffi)
+        printf 'pre-commit: unrecognised host "%s", scoping cargo to the platform-neutral crates\n' "$HOST_KERNEL"
+        ;;
+esac
+
+case "$HOST_KERNEL" in
+    Darwin*)
+        UNBUILDABLE_HERE=(agent-desktop-windows agent-desktop-linux)
+        ;;
+    MINGW* | MSYS* | CYGWIN* | Windows_NT)
+        UNBUILDABLE_HERE=(agent-desktop-macos)
+        ;;
+    *)
+        UNBUILDABLE_HERE=(agent-desktop-macos agent-desktop-windows)
+        ;;
+esac
+for unbuildable in "${UNBUILDABLE_HERE[@]}"; do
+    case " ${HOST_PACKAGES[*]} " in
+        *" $unbuildable "*)
+            echo "pre-commit: package set names $unbuildable on $HOST_KERNEL, which cannot build it" >&2
+            echo "pre-commit: refusing the commit - the cargo gates below would fail for the wrong reason." >&2
+            exit 1
+            ;;
+    esac
+done
+
+printf 'pre-commit: host %s, cargo scoped to %s\n' "$HOST_KERNEL" "${HOST_PACKAGES[*]}"
+
+run() {
+    local label="$1"
+    shift
+    printf '\033[1;34m▶ %s\033[0m\n' "$label"
+    if ! "$@"; then
+        printf '\033[1;31m✗ %s failed\033[0m\n' "$label" >&2
+        echo "" >&2
+        echo "pre-commit: refusing the commit. Fix the issues above or rerun with SKIP_PRECOMMIT=1 to bypass." >&2
+        exit 1
+    fi
+}
+
+run "Rust source rules" scripts/check-rust-file-size.sh
+run "Architecture boundaries" scripts/check-architecture.sh
+run "No delivery-plan references in source" scripts/check-no-phase-references.sh
+run "stale_ref constructors take only ref ids" scripts/check-stale-ref-constructor-misuse.sh
+run "cargo fmt --all -- --check" cargo fmt --all -- --check
+run "cargo clippy --all-targets -- -D warnings" \
+    cargo clippy "${HOST_PACKAGES[@]}" --all-targets -- -D warnings
+run "cargo test --lib" \
+    scripts/cargo-test-isolated-home.sh test "${HOST_PACKAGES[@]}" --lib
+
+# FFI-specific gates are skipped when no FFI files are staged. Runtime panic
+# and Python smoke proofs remain CI-only to keep commits fast.
+if [ "$HAS_FFI_CHANGES" -eq 1 ]; then
+    run "FFI stub passthrough" cargo test --locked -p agent-desktop-ffi --features stub-adapter --test c_abi_passthrough
+
+    export PATH="${HOME}/.cargo/bin:${PATH}"
+    _cbindgen_cmd=""
+    if command -v cbindgen >/dev/null 2>&1; then
+        _cbindgen_cmd="cbindgen"
+    fi
+    if [ -n "${_cbindgen_cmd}" ]; then
+        _cbindgen_ver=$("${_cbindgen_cmd}" --version 2>&1 | head -1)
+        if [[ "${_cbindgen_ver}" == "cbindgen 0.29.4" ]]; then
+            run "FFI header drift (cbindgen --verify)" \
+                "${_cbindgen_cmd}" crates/ffi --config crates/ffi/cbindgen.toml \
+                --output crates/ffi/include/agent_desktop.h --verify
+        else
+            printf 'pre-commit: cbindgen version mismatch (want 0.29.4, got: %s) — skipping header drift check (CI gate)\n' "${_cbindgen_ver}"
+        fi
+    else
+        printf 'pre-commit: cbindgen not found in PATH or ~/.cargo/bin — skipping header drift check (CI gate)\n'
+    fi
+fi
+
+printf '\033[1;32m✓ pre-commit checks passed\033[0m\n'

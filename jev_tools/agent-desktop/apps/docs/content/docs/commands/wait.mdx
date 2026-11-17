@@ -1,0 +1,174 @@
+---
+title: wait
+navTitle: Wait
+description: Reference for the wait command, with every mode, the element predicates, the event kinds, timeouts and their defaults, and the timeout error details.
+---
+
+`wait` blocks until a condition holds, so you do not need a fixed sleep. Each call uses exactly one mode. When to use `wait` and when to use the post-action `--wait-for` flags is in [Waiting without sleeps](/desktop/guides/waiting); those flags are in [Configuration](/desktop/configuration#post-action-wait-flags). The examples are real output from Linux.
+
+## wait
+
+```bash
+agent-desktop wait MS
+agent-desktop wait --element REF [--predicate NAME] [--value TEXT] [--action NAME]
+agent-desktop wait --window TITLE [--app NAME]
+agent-desktop wait --text TEXT [--count N] [--app NAME]
+agent-desktop wait --menu [--app NAME]
+agent-desktop wait --menu-closed [--app NAME]
+agent-desktop wait --notification [--text TEXT] [--app NAME]
+agent-desktop wait --event KIND [--app NAME] [--window TITLE] [--window-id ID]
+```
+
+<table>
+  <thead>
+    <tr><th>Flag or argument</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>MS</code></td><td>none</td><td>Pause for this many milliseconds.</td></tr>
+    <tr><td><code>--element REF</code></td><td>none</td><td>Wait until the element behind this qualified ref satisfies <code>--predicate</code>.</td></tr>
+    <tr><td><code>--predicate NAME</code></td><td><code>exists</code></td><td><code>exists</code>, <code>enabled</code>, <code>visible</code>, <code>actionable</code>, or <code>value</code>. Requires <code>--element</code>.</td></tr>
+    <tr><td><code>--value TEXT</code></td><td>none</td><td>Expected value for <code>--predicate value</code>. Required there and rejected otherwise.</td></tr>
+    <tr><td><code>--action NAME</code></td><td><code>click</code></td><td>For <code>--predicate actionable</code>: <code>click</code>, <code>type</code>, <code>set-value</code>, or <code>clear</code>.</td></tr>
+    <tr><td><code>--window TITLE</code></td><td>none</td><td>Wait until a window whose title contains this text exists. With <code>--event</code>, it narrows the event to an exact title instead.</td></tr>
+    <tr><td><code>--text TEXT</code></td><td>none</td><td>Wait until this text appears in the app's tree. With <code>--notification</code>, it filters notification text instead.</td></tr>
+    <tr><td><code>--count N</code></td><td>none</td><td>For <code>--text</code>: wait until exactly N nodes match.</td></tr>
+    <tr><td><code>--menu</code>, <code>--menu-closed</code></td><td>off</td><td>Wait until a menu surface is open, or dismissed.</td></tr>
+    <tr><td><code>--notification</code></td><td>off</td><td>Wait until a new notification arrives.</td></tr>
+    <tr><td><code>--event KIND</code></td><td>none</td><td>Wait for a lifecycle signal: <code>window-opened</code>, <code>window-closed</code>, <code>app-launched</code>, <code>app-terminated</code>, <code>focus-changed</code>, <code>surface-appeared</code>, or <code>surface-dismissed</code>.</td></tr>
+    <tr><td><code>--window-id ID</code></td><td>none</td><td>Narrow <code>window-opened</code>, <code>window-closed</code>, or <code>focus-changed</code> to one window.</td></tr>
+    <tr><td><code>--app NAME</code></td><td>none</td><td>Scope a window, text, menu, notification, or event wait to one application. Element and time waits ignore it.</td></tr>
+    <tr><td><code>--timeout MS</code></td><td><code>30000</code></td><td>Timeout for every mode except <code>MS</code>, at most 86400000.</td></tr>
+  </tbody>
+</table>
+
+Flags from two modes, or no mode at all, return `INVALID_ARGS`. The wait polls about every 100 ms and wakes early when the platform signals a change. `wait` never changes the application, so a failed wait leaves nothing half-applied; a successful `--text` wait saves a snapshot.
+
+### Time
+
+`wait MS` sleeps and returns `{ "waited_ms": MS }`. Use it only to space two actions apart when nothing observable marks readiness.
+
+### Element
+
+`--element REF` polls the live element behind a ref until the predicate holds. The ref names its snapshot, so no `--app` is needed. This waits for the calculator display to read `7`:
+
+```bash
+agent-desktop wait --element @s2txcl95uvubmn:e6 --predicate value --value 7 --timeout 5000
+```
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "wait",
+  "data": {
+    "elapsed_ms": 286,
+    "found": true,
+    "observed": { "expected_chars": 1, "matched": true, "value_chars": 1, "value_present": true },
+    "predicate": "value",
+    "ref": "@s2txcl95uvubmn:e6"
+  }
+}
+```
+
+`observed` depends on the predicate: `exists`; `enabled` or `visible` with `applicable`; `actionable` with `checks`; or the value counts above, which never echo the value itself. `actionable` runs the checks the action would run; use `--action type` before typing, because the editability check runs only for editing actions. A ref that does not resolve yet keeps being retried until the timeout.
+
+### Window
+
+`--window TITLE` waits for any window whose title contains `TITLE`, focused or not.
+
+```bash
+agent-desktop wait --window Calculator --app gnome-calculator --timeout 3000
+```
+
+The result is `{ "elapsed_ms", "found": true, "window": WINDOW }`, where `WINDOW` has the fields `list-windows` returns.
+
+### Text
+
+`--text TEXT` snapshots the app's window each poll and looks for the text in node names, values, and descriptions, as a case-insensitive substring.
+
+```bash
+agent-desktop wait --text Calculator --app gnome-calculator --timeout 3000
+```
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "wait",
+  "data": { "elapsed_ms": 112, "found": true, "ref": null, "role": "window", "snapshot_id": "s2uiek94hz3vms", "text": "Calculator" }
+}
+```
+
+`ref` and `role` describe the first match, and `ref` is `null` when that node has no ref. The wait saves its snapshot, so `snapshot_id` is fresh and acts like any snapshot. When an app has several eligible windows, such as a document and its save dialog, the wait returns `AMBIGUOUS_TARGET` before it checks any text: wait for the dialog with `--window` instead.
+
+### Menu
+
+`--menu` waits until a menu surface is open, and `--menu-closed` until it is gone. Both return `{ "elapsed_ms", "found": true }`. On Linux, `--menu-closed` on a menu that never opened is true at once, so wait for `--menu` first.
+
+### Notification
+
+`--notification` takes a baseline of the notification list when it starts and returns the first notification not in it. `--text` and `--app` filter which notifications count. The result is `{ "condition": "notification", "matched": true, "notification": {...}, "elapsed_ms" }`. Headless limits on macOS and Windows are on the [notification commands](/desktop/commands/notifications) page.
+
+### Event
+
+`--event KIND` compares a baseline taken at the start with fresh reads and returns the first matching change, so you need no window id or title in advance. Put the action that causes the event and the wait in one [batch](/desktop/commands/batch): the batch captures the baseline before the action runs. This entry waited for the window of an app the previous entry launched:
+
+```json
+{
+  "command": "wait",
+  "data": {
+    "elapsed_ms": 144,
+    "event": {
+      "app": "gtk3-demo",
+      "kind": "window_opened",
+      "pid": 23270,
+      "title": "Application Class",
+      "window_id": "w-1.167-org-a11y-atspi-accessible-44"
+    },
+    "found": true
+  },
+  "execution": "completed",
+  "index": 1,
+  "ok": true,
+  "version": "2.6"
+}
+```
+
+`event.kind` uses snake_case. Surface events add `surface` and require `--app`; `--window` and `--window-id` apply only to the three window kinds.
+
+`--app` resolves once, at the start, to one process. When no app matches, `app-launched`, `window-opened`, and `surface-appeared` keep polling, so you can race a launch. `app-terminated`, `window-closed`, and `surface-dismissed` return at once with `found: true` and `target_unresolved: true`, which a misspelled `--app` also produces. `focus-changed` returns `APP_NOT_FOUND`.
+
+### Errors
+
+A wait that runs out of time returns `TIMEOUT` with `details.kind: "wait_timeout"`, `details.predicate`, `details.timeout_ms`, and what the wait last saw:
+
+```json
+{
+  "version": "2.6",
+  "ok": false,
+  "command": "wait",
+  "error": {
+    "code": "TIMEOUT",
+    "message": "Window title (7 chars) not found within 1000ms",
+    "recovery": {
+      "strategy": "inspect_state_then_retry_original",
+      "retryable": true,
+      "requires_fresh_snapshot": true,
+      "retry_after_ms": 250
+    },
+    "details": {
+      "app": "gedit",
+      "kind": "wait_timeout",
+      "last_observed": { "count": 1, "titles": ["Untitled Document 1 - gedit"], "truncated": false },
+      "predicate": "window",
+      "timeout_ms": 1000,
+      "title": "Save As"
+    },
+    "disposition": { "delivery": "not_delivered", "retry": "safe" }
+  }
+}
+```
+
+Element waits carry `ref` and `last_observed`; text waits carry `text_chars` and `expected_count` but not the text; event waits carry `baseline_counts`; any mode can carry `last_error`. Other errors: `INVALID_ARGS` for a bad mode combination or a bare ref, the ref errors for `--element`, `APP_UNRESPONSIVE` when the app stops answering, and `PERM_DENIED`.
+
+Platform limits: see [macOS](/desktop/platforms/macos), [Windows](/desktop/platforms/windows), and [Linux](/desktop/platforms/linux).

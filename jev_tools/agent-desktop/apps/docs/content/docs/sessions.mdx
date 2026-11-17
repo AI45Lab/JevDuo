@@ -1,0 +1,108 @@
+---
+title: Sessions
+navTitle: Sessions
+description: A session is an on-disk namespace for snapshots and traces. How to start, select, and end one, how agent ids work, and how sessions relate to traces and the cursor overlay.
+---
+
+A session is a directory under the state root that owns a set of snapshot refmaps and, when tracing is on, a trace. You use one when several runs, or several agents, share a machine and each needs its own snapshots, or when you want a trace of everything a run did. Without a session, every command uses one global namespace.
+
+## What a session owns
+
+`session start` creates `sessions/<session-id>/` under the [state root](/desktop/configuration#layout), with a `session.json` manifest, its own `snapshots/` namespace, and, when tracing is on, a `trace/` directory. The session id has the form `run-<unix-ms>-<pid>-<counter>`. An id you pass yourself with `--session` must be 1 to 64 letters, digits, `-`, or `_`.
+
+## Start, list, end, and clean up
+
+```bash
+agent-desktop session start --name docs-example   # create the session and print its id
+agent-desktop session list                        # manifests, oldest first
+agent-desktop session end <session-id>            # seal the manifest
+agent-desktop session gc --ended                  # delete ended sessions nothing is using
+```
+
+`session start` returns the id and the line that activates it:
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "session",
+  "data": {
+    "activation": {
+      "environment": "AGENT_DESKTOP_SESSION",
+      "value": "run-1793352720537-17009-0"
+    },
+    "artifacts": "events",
+    "created_at": 1793352720537,
+    "name": "docs-example",
+    "next": "export AGENT_DESKTOP_SESSION=run-1793352720537-17009-0",
+    "session_id": "run-1793352720537-17009-0",
+    "trace": "on"
+  }
+}
+```
+
+`session list` returns `data.sessions`, one object per manifest with `session_id`, `name`, `created_at`, `ended_at` (`null` while the session is open), `trace` and `artifacts`. `session end` returns `session_id` and `ended_at`, and you can run it again on a session that already ended. `session gc` returns `data.removed`, the ids it deleted.
+
+Ending a session seals the manifest and stops its trace. After that, every other command that resolves to the ended session fails with `INVALID_ARGS` and `details.kind: "session_ended"`, except `version` and `skills`:
+
+```json
+{
+  "version": "2.6",
+  "ok": false,
+  "command": "snapshot",
+  "error": {
+    "code": "INVALID_ARGS",
+    "message": "Session 'run-1793352720537-17009-0' has ended",
+    "suggestion": "Unset AGENT_DESKTOP_SESSION and omit --session, then run the command or start a new session",
+    "details": { "kind": "session_ended", "session_id": "run-1793352720537-17009-0" },
+    "disposition": { "delivery": "not_delivered", "retry": "safe" }
+  }
+}
+```
+
+`session gc` deletes ended sessions that nothing is using; its retention rules are in [`session`](/desktop/commands/system#session).
+
+## Select a session
+
+A command picks its session in this order:
+
+<table>
+  <thead>
+    <tr><th>Order</th><th>Source</th><th>Notes</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>1</td><td><code>--session &lt;id&gt;</code></td><td>Wins over the environment variable.</td></tr>
+    <tr><td>2</td><td><code>AGENT_DESKTOP_SESSION</code></td><td>An empty value is <code>INVALID_ARGS</code>.</td></tr>
+    <tr><td>3</td><td>none</td><td>The global namespace, stored directly in the state root.</td></tr>
+  </tbody>
+</table>
+
+An id that is not 1 to 64 letters, digits, `-` or `_` fails with `INVALID_ARGS`. A `--session <id>` with no manifest still works as a snapshot namespace, but it writes no trace.
+
+`session start` does not activate the session for later commands. Each command is its own process, so pass the id to every one, or export it once in your shell:
+
+```bash
+export AGENT_DESKTOP_SESSION=$(agent-desktop session start --name docs-example | jq -r '.data.session_id')
+agent-desktop snapshot --app gnome-calculator -i   # runs inside the session
+agent-desktop session end "$AGENT_DESKTOP_SESSION"
+```
+
+`session end` with no id ends the session selected by `--session` or `AGENT_DESKTOP_SESSION`. On Windows, `data.next` prints the PowerShell form (`$env:AGENT_DESKTOP_SESSION = '...'`); see [Windows](/desktop/platforms/windows) for quoting rules.
+
+## Snapshot namespaces
+
+A session is also a snapshot namespace. Snapshots taken in a session are saved under that session's directory, and every lookup is confined to the selected namespace. A qualified ref such as `@s8f3k2p9:e1` embeds its snapshot id, but the id is not a cross-session handle. Acting on that ref with a different `--session` (or none) fails with `SNAPSHOT_NOT_FOUND`. Take the snapshot and act on its refs under the same session scope.
+
+Several agents may share one session id. Each should act on refs from its own snapshot, because the session keeps one latest-snapshot pointer. Retention and pruning of refmaps are described in [Snapshots and refs](/desktop/snapshots-and-refs).
+
+## Agent identity
+
+`--agent-id <id>` (or `AGENT_DESKTOP_AGENT_ID`) names the harness subagent that is running a command. The flag wins over the variable. An id is 1 to 64 letters, digits, `-` or `_`, and an invalid id fails with `INVALID_ARGS`. It is scoped by session.
+
+The identity matters in one mode: a session started with `session start --cursor --multi-agent`. There, desktop actions such as `click` and `type` require an agent id and fail with `INVALID_ARGS` without one. Observation, clipboard and session commands do not. Each distinct id gets its own cursor, and a reused id reuses its cursor. A headless action moves its cursor before it takes the interaction lease, so several agents' cursors travel at the same time while their actions take turns. Commands that draw the same cursor take turns from its travel to its click effect, so a shared cursor never clicks while showing another command's target. Snapshots stay shared by session.
+
+## Sessions, traces, and the cursor overlay
+
+A new session records a trace by default: the manifest has `trace: "on"` and commands append segments under `trace/` until the session ends. `--no-trace` creates a namespace with no trace. `--screenshots` also stores pre-action and post-action screenshots and refmap copies, which can contain private screen content. Reading and exporting traces is covered in [Traces](/desktop/guides/traces).
+
+The agent cursor overlay is configured once per session, either with `session start --cursor` or with `cursor-overlay enable`, and action commands inherit it. Presentation settings, per-agent profiles and platform support are in [`cursor-overlay`](/desktop/commands/system#cursor-overlay).

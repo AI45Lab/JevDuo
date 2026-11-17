@@ -1,0 +1,44 @@
+---
+title: C library
+navTitle: Overview
+description: Call agent-desktop in process through libagent_desktop_ffi, the C ABI over the same core and platform adapters as the CLI.
+---
+
+The C library exposes agent-desktop as a shared library: `libagent_desktop_ffi.dylib` on macOS, `libagent_desktop_ffi.so` on Linux, and `agent_desktop_ffi.dll` on Windows. Your program calls `ad_*` functions instead of starting the CLI for each command. Any language with a C FFI can load it; `tests/ffi-python/smoke.py` is the tested reference. The header is `crates/ffi/include/agent_desktop.h`.
+
+## Relationship to the CLI
+
+The library and the CLI run the same core and the same platform adapter; the `agent-desktop` binary and the `agent-desktop-ffi` crate are the only two places that connect a platform adapter to core.
+
+- **Same envelope.** The command-backed functions return the CLI's JSON envelope as an owned string. See [JSON output](/desktop/json-output).
+- **Same refs.** `ad_snapshot` writes a refmap under the same [state root](/desktop/configuration#state-root) and returns qualified refs, which `ad_execute_by_ref` resolves strictly. A bare `@e5` returns `AD_RESULT_ERR_INVALID_ARGS`.
+- **Same safety rules.** Ref actions run the same resolution, actionability checks, and interaction policy as the CLI, and mutations take the same cross-process input lock, so CLI and library calls from one user serialize.
+- **Same sessions.** `ad_adapter_create_with_session` scopes refmaps to a [session](/desktop/sessions) like `--session`.
+
+## Two layers
+
+<table>
+  <thead>
+    <tr><th>Layer</th><th>Functions</th><th>Use when</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>JSON entrypoints</td><td><code>ad_snapshot</code>, <code>ad_execute_by_ref</code>, <code>ad_execute_by_ref_timeout</code>, <code>ad_wait</code>, <code>ad_status</code>, <code>ad_version</code>, <code>ad_trace_show</code>, <code>ad_trace_export</code></td><td>You run the observe, act, and verify loop: parse the envelope and pass refs back.</td></tr>
+    <tr><td>Struct-based exact APIs</td><td><code>ad_list_windows_exact</code>, <code>ad_launch_app_exact</code>, <code>ad_find_exact</code>, <code>ad_get_tree_exact</code>, and the rest of the <code>*_exact</code> family, plus clipboard, mouse, display, notification, and screenshot calls</td><td>You need typed results without JSON. These carry process-generation evidence in versioned, size-pinned structs.</td></tr>
+  </tbody>
+</table>
+
+## What the library does not expose
+
+- `ad_snapshot` reads the owner selected by `surface`. On macOS, `menu` and `menubar` are application-owned and need no document window; window-owned snapshots include `data.window`. The ABI has no window id, skeleton mode, or `--root` drill-down; use the CLI for those.
+- `ad_wait` does not expose `wait --event` or `--window-id`.
+- The library carries no skills. Read the FFI guide with `agent-desktop skills get ffi` from the CLI.
+
+## ABI version
+
+`AD_ABI_VERSION_MAJOR` is 7 in this header. The major increments when a symbol is removed or changes incompatibly: a struct layout change, or a call that now fails where it used to succeed. ABI 7 makes `ad_execute_ref_action_exact_with_policy` and `ad_resolve_element_exact` fail closed with `AD_RESULT_ERR_ACTION_NOT_SUPPORTED`. New functions and new result codes are additive. Call `ad_init(AD_ABI_VERSION_MAJOR)` once after loading the library: a mismatch returns `AD_RESULT_ERR_INVALID_ARGS`, and you should call nothing else.
+
+## Next steps
+
+- [Build and link](/desktop/ffi/build-and-link): build the library, link it, and run a minimal program.
+- [API](/desktop/ffi/api): every function, struct, and enum, grouped by area.
+- [Ownership, threading, errors](/desktop/ffi/ownership-and-threading): who frees what, which threads may call, and how to read failures.

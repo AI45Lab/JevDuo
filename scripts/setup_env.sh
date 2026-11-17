@@ -7,8 +7,17 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UPSTREAM="$ROOT/src/upstream"
 VENV="$ROOT/venv"
+JEV_PACKAGE="${JEVDUO_JEV_PACKAGE:-$ROOT/jev_tools/jev-desktop}"
 
 [ -f "$UPSTREAM/pyproject.toml" ] || { echo "缺少 $UPSTREAM/pyproject.toml（src/upstream 应由 git subtree 提供）" >&2; exit 2; }
+case "$JEV_PACKAGE" in
+  /*) ;;
+  *) JEV_PACKAGE="$ROOT/$JEV_PACKAGE" ;;
+esac
+[ -f "$JEV_PACKAGE/pyproject.toml" ] && [ -f "$JEV_PACKAGE/src/jev_desktop/__init__.py" ] || {
+  echo "缺少完整的 jev-desktop 包: $JEV_PACKAGE（可用 JEVDUO_JEV_PACKAGE 指定）" >&2; exit 2;
+}
+JEV_PACKAGE="$(cd "$JEV_PACKAGE" && pwd)"
 
 # 上游 uv.lock 要求 uv>=0.13.6；系统 uv 常偏旧，按候选顺序挑第一个满足的。
 UV_REQUIRED=0.13.6
@@ -40,11 +49,15 @@ rm -rf "$VENV"
 cd "$UPSTREAM"
 "$UV" sync --locked --python 3.12 --extra local --extra device
 
+"$UV" pip install --python "$VENV/bin/python" --no-deps -e "$JEV_PACKAGE"
+
 "$VENV/bin/python" - <<'PY'
-import northcua, nexau, yaml, sys
+import northcua, nexau, yaml, sys, jev_desktop
+from jev_desktop import AgentDesktop, DesktopConfig, JevLoop, Limits, RunOptions, Scope, TypeSafeModel
 print("northcua:", northcua.__file__)
 print("nexau:", nexau.__file__)
 print("yaml:", yaml.__version__)
+print("jev_desktop:", jev_desktop.__file__)
 print("sys.executable:", sys.executable)
 PY
 INTERP="$(readlink -f "$VENV/bin/python")"

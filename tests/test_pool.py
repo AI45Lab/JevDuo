@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -50,7 +52,9 @@ class SpecTest(unittest.TestCase):
         config = {
             "models": {"default": "m", "apis": {"m": {"model": "m", "base_url": "http://x/v1",
                                                        "api_key_env": "JEVDUO_TEST_KEY"}}},
-            "harness": {"max_steps": 5, "max_wall_seconds": 60},
+            "harness": {"max_steps": 5, "max_wall_seconds": 60,
+                                "orchestration": {"max_cycles": 5, "max_seconds": 60,
+                                                  "max_model_calls": 1300, "max_tool_calls": 1000}},
             "benchmark": {"name": "osworld21", "task_root": "/r", "vm": "/v"},
             "log": {"screenshots": True, "llm_calls": True},
         }
@@ -62,11 +66,29 @@ class SpecTest(unittest.TestCase):
         self.assertEqual(spec["output_root"], "/tmp/run/jobs/job-00")
         self.assertEqual(settings.masked(spec)["model"]["api_key"], "***")
 
+    def test_subagent_credentials_are_carried_in_private_spec_and_masked(self):
+        config = {
+            "harness": {"orchestration": {"max_cycles": 20, "max_seconds": 60,
+                                              "max_model_calls": 100, "max_tool_calls": 1000}},
+            "benchmark": {"name": "osworld21", "task_root": "/r", "vm": "/v"},
+            "log": {},
+        }
+        from unittest.mock import patch
+
+        with patch.dict(os.environ, {"TYPESAFE_API_KEY": "private-jev-key", "TYPESAFE_MODEL": "jev-latest"}):
+            spec = settings.render_spec(config, run_id="r", job_id=0, tasks=["061"],
+                                        api_name="m", api={"base_url": "http://test", "model": "m"},
+                                        run_root=Path("/tmp/test"))
+        self.assertEqual(spec["subagent_env"]["TYPESAFE_API_KEY"], "private-jev-key")
+        self.assertEqual(settings.masked(spec)["subagent_env"]["TYPESAFE_API_KEY"], "***")
+
     def test_missing_key_raises(self):
         config = {
             "models": {"default": "m", "apis": {"m": {"model": "m", "base_url": "u",
                                                        "api_key_env": "JEVDUO_ABSENT_KEY"}}},
-            "harness": {}, "benchmark": {"name": "osworld21", "task_root": "/r", "vm": "/v"},
+            "harness": {"orchestration": {"max_cycles": 20, "max_seconds": 60,
+                                              "max_model_calls": 100, "max_tool_calls": 1000}},
+            "benchmark": {"name": "osworld21", "task_root": "/r", "vm": "/v"},
             "log": {},
         }
         name, api = settings.select_model(config, None)
@@ -83,6 +105,11 @@ class SpecTest(unittest.TestCase):
 
 
 class RjobStatusTest(unittest.TestCase):
+    def test_worker_uses_the_current_checkout(self):
+        config = {"cluster": {"image": "unused"}}
+        regular = pool.submit_argv(config, run_id="r", job_id=0, spec_path=Path("/spec.json"))
+        self.assertEqual(regular[-2:], [str(pool.ROOT / "infra/worker.sh"), "/spec.json"])
+
     def test_status_line(self):
         self.assertEqual(rjob.parse_status("rjob jevduo-x: Succeeded"), "succeeded")
         self.assertEqual(rjob.parse_status("replica jevduo-x-abc: FAILED"), "failed")
@@ -93,6 +120,33 @@ class RjobStatusTest(unittest.TestCase):
 
     def test_unknown(self):
         self.assertEqual(rjob.parse_status("weird output"), "unknown")
+
+    def test_actual_platform_status_with_showname_and_logger_prefix(self):
+        for word in ("Running", "Succeeded", "Failed", "Stopped"):
+            with self.subTest(word=word):
+                output = (f"11-16 12:45:41 [INFO] rjob jevduo-r-00-92432325 "
+                          f"(showname=jevduo-r-00): {word}\n"
+                          "{'active': 0, 'failed': 0, 'succeeded': 0, 'stopped': 1}")
+                self.assertEqual(rjob.parse_status(output), word.lower())
+
+    def test_stopped_finishes_watch_without_polling_again(self):
+        client = Mock()
+        client.get.return_value = "rjob actual-name (showname=display): Stopped"
+        sleep = Mock()
+        self.assertEqual(rjob.watch(client, "actual-name", sleep=sleep), "stopped")
+        sleep.assert_not_called()
+
+    def test_status_query_failure_retries_reads_until_deadline(self):
+        client = Mock()
+        client.get.side_effect = [rjob.RjobError("temporary outage"), "rjob actual: Succeeded"]
+        sleep = Mock()
+        self.assertEqual(rjob.watch(client, "actual", timeout_seconds=60, sleep=sleep), "succeeded")
+        self.assertEqual(client.get.call_count, 2)
+        sleep.assert_called_once()
+        client.get.side_effect = rjob.RjobError("continued outage")
+        with patch.object(rjob.time, "monotonic", side_effect=[0, 61]):
+            with self.assertRaisesRegex(TimeoutError, "query_error"):
+                rjob.watch(client, "actual", timeout_seconds=60, sleep=sleep)
 
 
 def _episode(run_root: Path, job: str, task: str, *, status: str = "scored",
@@ -165,27 +219,205 @@ class ResumeTest(unittest.TestCase):
             self.assertEqual(pool._resume_state(root, args), (set(), []))
 
 
-class AdoptTest(unittest.TestCase):
-    """接管判断：只有明确 running 才接管；不存在的 job 解析为 unknown，必须重新提交。"""
+class PoolRunTest(unittest.TestCase):
+    """One ordinary entry supports fresh reruns without replaying uncertain submissions."""
 
-    class _Client:
-        def __init__(self, output: str):
-            self._output = output
+    def config(self):
+        return {
+            "project": {"run_root": "runs"},
+            "models": {"default": "m", "apis": {"m": {"model": "m", "base_url": "http://test"}}},
+            "benchmark": {"name": "osworld21", "task_root": "/tasks", "vm": "/image"},
+            "harness": {"max_steps": 20, "max_wall_seconds": 10800, "orchestration": {
+                "max_cycles": 20, "max_seconds": 10800, "max_model_calls": 1300, "max_tool_calls": 1000,
+            }},
+            "pool": {"tasks_per_job": 1, "max_parallel": 1},
+            "cluster": {"image": "test", "private_machine": False}, "log": {},
+        }
 
-        def get(self, name: str) -> str:
-            return self._output
+    def run_job(self, root, client, **overrides):
+        return pool.run_one(self.config(), run_id="r", job_id=0, tasks=["005"], api_name="m",
+                            api={"base_url": "http://test", "model": "m"},
+                            run_root=root, keep=False, client=client, **overrides)
 
-    def test_running_is_adopted(self):
-        self.assertTrue(pool._is_running(self._Client("rjob jevduo-x: Running"), "jevduo-x"))
+    def test_actual_name_is_persisted_and_used_for_monitoring_and_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            calls = []
 
-    def test_unknown_is_not_adopted(self):
-        # rjob get 对不存在的 job 返回空输出且退出 0
-        self.assertFalse(pool._is_running(self._Client(""), "jevduo-x"))
+            def command(argv):
+                calls.append(argv)
+                if argv[1] == "submit":
+                    record = json.loads((root / "jobs/job-00/job.json").read_text())
+                    self.assertEqual(record["status"], "submission_unknown")
+                    return 0, "11-16 [INFO] created rjob_name: actual-92432325"
+                if argv[1] == "get":
+                    return 0, "rjob actual-92432325 (showname=jevduo-r-00): Succeeded"
+                return 0, "worker log"
 
-    def test_terminal_is_not_adopted(self):
-        for word in ("Succeeded", "Failed", "Stopped"):
-            self.assertFalse(pool._is_running(
-                self._Client(f"rjob jevduo-x: {word}"), "jevduo-x"))
+            result = self.run_job(root, rjob.Client(command))
+            self.assertEqual(result["rjob"], "actual-92432325")
+            self.assertEqual(result["status"], "succeeded")
+            self.assertEqual(result["requested_name"], "jevduo-r-00")
+            self.assertEqual([argv[1] for argv in calls], ["submit", "get", "get", "logs", "stop", "delete"])
+            self.assertTrue(all("actual-92432325" in argv for argv in calls[1:]))
+
+    def test_unknown_submission_is_never_replayed_or_cleaned_up(self):
+        for outcome in ("connection ended without receipt", rjob.RjobError("CLI error"),
+                        subprocess.TimeoutExpired(["rjob", "submit"], 600)):
+            with self.subTest(outcome=type(outcome).__name__), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                calls = []
+
+                def command(argv, calls=calls, outcome=outcome):
+                    calls.append(argv)
+                    self.assertEqual(argv[1], "submit")
+                    if isinstance(outcome, Exception):
+                        raise outcome
+                    return 0, outcome
+
+                client = rjob.Client(command)
+                first = self.run_job(root, client)
+                spec = (root / "job_specs/job-00.json").read_bytes()
+                second = self.run_job(root, client)
+                self.assertEqual(first["status"], "submission_unknown")
+                self.assertEqual(second["status"], "submission_unknown")
+                self.assertEqual(len(calls), 1)
+                self.assertEqual((root / "job_specs/job-00.json").read_bytes(), spec)
+
+    def test_saved_attempt_is_observed_without_rewriting_spec_or_restarting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            directory = root / "jobs/job-00"
+            directory.mkdir(parents=True)
+            (directory / "job.json").write_text(json.dumps({
+                "job_id": 0, "rjob": "saved-actual", "tasks": ["005"], "status": "running",
+            }))
+            with patch.object(settings, "render_spec", side_effect=AssertionError("do not rewrite")):
+                client = Mock()
+                client.get.return_value = "rjob saved-actual (showname=display): Stopped"
+                client.logs.return_value = "worker log"
+                result = self.run_job(root, client)
+            self.assertEqual(result["status"], "stopped")
+            client.submit.assert_not_called()
+            client.stop.assert_not_called()
+            client.delete.assert_not_called()
+            self.assertEqual(client.get.call_args_list[0].args, ("saved-actual",))
+
+    def test_retry_plan_preserves_old_directories_and_observes_unfinished_jobs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for job_id, tasks, status in ((0, ["005"], "failed"), (1, ["018", "024"], "running"),
+                                         (2, ["054"], "submission_unknown")):
+                directory = root / "jobs" / f"job-{job_id:02d}"
+                directory.mkdir(parents=True)
+                (directory / "job.json").write_text(json.dumps({
+                    "tasks": tasks, "status": status,
+                }))
+            self.assertEqual(pool._plan_jobs(root, ["005", "018", "054", "055"], 1), [
+                (1, ["018", "024"]), (2, ["054"]), (3, ["005"]), (4, ["055"]),
+            ])
+
+    def test_local_pre_submit_failure_can_be_retried_after_fixing_credentials(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            client = Mock()
+            with patch.object(settings, "render_spec", side_effect=settings.ConfigError("missing API key")):
+                result = self.run_job(root, client)
+            self.assertEqual(result["status"], "pre_submit_error")
+            client.submit.assert_not_called()
+            client.get.assert_not_called()
+            client.stop.assert_not_called()
+            client.delete.assert_not_called()
+            self.assertEqual(pool._plan_jobs(root, ["005"], 1), [(1, ["005"])])
+            client.submit.return_value = "created rjob_name: retry-actual"
+            client.get.return_value = "rjob retry-actual: Succeeded"
+            client.logs.return_value = "log"
+            result = pool.run_one(self.config(), run_id="r", job_id=1, tasks=["005"], api_name="m",
+                                  api={"base_url": "http://test", "model": "m"},
+                                  run_root=root, keep=True, client=client)
+            self.assertEqual(result["status"], "succeeded")
+            client.submit.assert_called_once()
+
+    def test_cleaned_timeout_is_finished_but_unresolved_timeout_is_observed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for job_id, cleanup in ((0, {"stopped": True, "deleted": True}), (1, {"kept": True})):
+                directory = root / "jobs" / f"job-{job_id:02d}"
+                directory.mkdir(parents=True)
+                (directory / "job.json").write_text(json.dumps({
+                    "tasks": ["005" if job_id == 0 else "018"], "status": "timeout", "cleanup": cleanup,
+                }))
+            self.assertEqual(pool._plan_jobs(root, ["005", "018"], 1), [(1, ["018"]), (2, ["005"])])
+
+    def test_invalid_cluster_argument_fails_before_submission_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self.config()
+            config["cluster"]["cpu"] = "invalid"
+            client = Mock()
+            result = pool.run_one(config, run_id="r", job_id=0, tasks=["005"], api_name="m",
+                                  api={"base_url": "http://test", "model": "m"},
+                                  run_root=root, keep=True, client=client)
+            self.assertEqual(result["status"], "pre_submit_error")
+            self.assertNotIn("submission_started_at", result)
+            client.submit.assert_not_called()
+            self.assertEqual(pool._plan_jobs(root, ["005"], 1), [(1, ["005"])])
+
+    def test_cli_selected_tasks_and_failed_retry_use_new_job_directories(self):
+        import yaml
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "external-config.yaml"
+            config_path.write_text(yaml.safe_dump(self.config()))
+            calls = []
+
+            def command(argv):
+                calls.append(argv)
+                if argv[1] == "submit":
+                    spec_path = Path(argv[-1])
+                    spec = json.loads(spec_path.read_text())
+                    self.assertEqual(len(spec["tasks"]), 1)
+                    self.assertEqual(spec["harness"]["max_wall_seconds"], 120)
+                    task = spec["tasks"][0]
+                    job = f"job-{spec['job_id']:02d}"
+                    _episode(spec_path.parent.parent, job, task,
+                             status="scored" if task == "005" or spec["job_id"] == 2 else "failed_unscored",
+                             score=0.0 if task == "005" else 0.5, finished_at=spec["job_id"] + 1)
+                    return 0, f"created rjob_name: actual-{spec['job_id']}"
+                if argv[1] == "get":
+                    return 0, f"rjob {argv[2]} (showname=display): Succeeded"
+                return 0, "log"
+
+            client = rjob.Client(command)
+            args = ["--config", str(config_path), "--run-id", "rerun", "--tasks", "005,018",
+                    "--jobs", "1", "--per-job", "1", "--max-wall", "120", "--keep", "1"]
+            with patch.object(pool, "ROOT", root), patch.object(rjob, "Client", return_value=client):
+                self.assertEqual(pool.main(args), 1)
+                old = (root / "runs/rerun/jobs/job-01/episodes/018/episode.json").read_bytes()
+                self.assertEqual(pool.main([*args, "--retry-failed", "1"]), 0)
+            self.assertEqual(sum(argv[1] == "submit" for argv in calls), 3)
+            self.assertEqual((root / "runs/rerun/jobs/job-01/episodes/018/episode.json").read_bytes(), old)
+            summary = json.loads((root / "runs/rerun/summary.json").read_text())
+            self.assertEqual((summary["scored"], summary["failed_unscored"]), (2, 0))
+            self.assertFalse((root / "runs/rerun/source-snapshot").exists())
+
+    def test_missing_episode_or_stopped_job_is_not_cli_success(self):
+        import yaml
+
+        for status in ("Stopped", "Succeeded"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                config_path = root / "config.yaml"
+                config_path.write_text(yaml.safe_dump(self.config()))
+                client = Mock()
+                client.submit.return_value = "created rjob_name: actual"
+                client.get.return_value = f"rjob actual (showname=display): {status}"
+                client.logs.return_value = "log"
+                with patch.object(pool, "ROOT", root), patch.object(rjob, "Client", return_value=client):
+                    self.assertEqual(pool.main(["--config", str(config_path), "--run-id", "r",
+                                                "--tasks", "005"]), 1)
+                client.submit.assert_called_once()
 
 
 class ToolPairRepairTest(unittest.TestCase):
@@ -276,6 +508,15 @@ class EvaluationReasonTest(unittest.TestCase):
 
     def test_plain_score_has_no_reason(self):
         self.assertEqual(recorder.evaluation_failure_reason(0.5), "")
+
+    def test_successful_replay_does_not_become_a_failure_label(self):
+        raw = {"score": 0.15, "replay_validation": {"passed": True, "reason": "ok"}}
+        self.assertEqual(recorder.evaluation_failure_reason(raw), "")
+
+    def test_explicit_evaluator_failure_still_takes_precedence(self):
+        raw = {"failure_reason": "evaluation_data_missing",
+               "replay_validation": {"passed": True, "reason": "ok"}}
+        self.assertEqual(recorder.evaluation_failure_reason(raw), "evaluation_data_missing")
 
 
 if __name__ == "__main__":

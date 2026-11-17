@@ -1,0 +1,116 @@
+---
+title: batch
+navTitle: Batch
+description: Reference for batch, with the input format, limits, validation, stop-on-error behavior, which commands are refused, and the output shape.
+---
+
+`batch` runs a JSON array of commands in order, in one process. It is bounded, sequential, and non-atomic: a failed entry does not undo earlier ones. When to batch is in [Batching commands](/desktop/guides/batch).
+
+## batch
+
+```bash
+agent-desktop batch JSON [--stop-on-error] [--timeout-ms MS]
+agent-desktop batch '[{"command":"version"},{"command":"wait","args":{"ms":100}}]' --stop-on-error
+```
+
+<table>
+  <thead>
+    <tr><th>Flag or argument</th><th>Default</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>JSON</code></td><td>required</td><td>A JSON array of entries.</td></tr>
+    <tr><td><code>--stop-on-error</code></td><td>off</td><td>Halt after the first entry that fails. Without it, later entries still run.</td></tr>
+    <tr><td><code>--timeout-ms MS</code></td><td><code>60000</code></td><td>Wall-clock budget for the whole batch, at most 86400000. Each entry's own deadlines are capped by what remains.</td></tr>
+  </tbody>
+</table>
+
+### Entry format
+
+<table>
+  <thead>
+    <tr><th>Key</th><th>Required</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>command</code></td><td>yes</td><td>A command name such as <code>click</code> or <code>wait</code>.</td></tr>
+    <tr><td><code>args</code></td><td>no</td><td>The command's arguments. Omit it for a command with no arguments.</td></tr>
+    <tr><td><code>session</code></td><td>no</td><td>Session id for this entry. Without it, the entry uses the batch's own session.</td></tr>
+  </tbody>
+</table>
+
+`args` keys are the CLI flag names with hyphens turned into underscores (`window_id`, `timeout_ms`). A positional argument is named after its placeholder in lowercase (`ref_id`, `text`, `combo`, `app`). Repeatable flags take arrays. `wait` uses flat keys: `ms`, `element`, `predicate`, `value`, `action`, `window`, `text`, `count`, `menu`, `menu_closed`, `notification`, `event`, `window_id`, `app`, `timeout`. `skills`, `session`, and `trace` take their subcommand as `action`, as in `{"command":"session","args":{"action":"list"}}`. Unknown keys anywhere are rejected.
+
+`--headed` and the agent id apply to every entry. A global `--wait-for` does not; put a `wait` entry where you need one.
+
+### Limits
+
+<table>
+  <thead>
+    <tr><th>Limit</th><th>Value</th><th>When exceeded</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Input size</td><td>1 MiB</td><td><code>INVALID_ARGS</code> before parsing.</td></tr>
+    <tr><td>Entries</td><td>64</td><td><code>INVALID_ARGS</code>.</td></tr>
+    <tr><td>Output size</td><td>4 MiB</td><td>The entry that crosses it becomes an <code>INVALID_ARGS</code> entry with <code>details.result_omitted: true</code>, and the batch stops with <code>stopped.reason: "output_limit"</code>.</td></tr>
+  </tbody>
+</table>
+
+### Validation before the first entry
+
+The whole array is checked before any entry runs, and one bad entry rejects the batch with nothing run:
+
+- The JSON must parse, and every entry must decode against its command's arguments.
+- Each entry gets the preflight a direct call gets: ref syntax (a bare `@e1` is rejected), flag combinations such as `snapshot --root` with `--surface`, and notification identity flags.
+- Each entry needs the permissions its command needs; a missing one returns `PERM_DENIED` for the whole batch.
+- In a multi-agent session, every mutating desktop entry needs an agent id.
+- `batch` (`Batch commands cannot be nested`) and `cursor-overlay` are refused inside a batch.
+
+The rejection names the entry in `details.batch_index` and `details.batch_command`, with `not_delivered`. Checks that need the live desktop, such as a stale ref or a headless physical command, happen when that entry runs and appear as that entry's own error.
+
+### Execution and output
+
+Entries run one at a time through the same dispatch as the CLI, so each entry's `data` or `error` is what a direct call returns. Nothing is retried. The batch itself returns `ok: true` and exit code `0` even when entries fail, so read each entry's `ok`.
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "batch",
+  "data": {
+    "completed_entries": 2,
+    "elapsed_ms": 100,
+    "limits": { "max_entries": 64, "max_input_bytes": 1048576, "max_output_bytes": 4194304 },
+    "not_started_entries": 0,
+    "results": [
+      { "command": "version", "data": { "os": "linux", "target": "x86_64", "version": "1.0.1" }, "execution": "completed", "index": 0, "ok": true, "version": "2.6" },
+      { "command": "wait", "data": { "waited_ms": 100 }, "execution": "completed", "index": 1, "ok": true, "version": "2.6" }
+    ],
+    "semantics": {
+      "atomic": false,
+      "batch_retries": false,
+      "command_retry_contracts": "preserved",
+      "error_disposition": "error.disposition",
+      "order": "sequential",
+      "successful_action_disposition": "data.disposition"
+    },
+    "timeout_ms": 60000,
+    "total_entries": 2
+  }
+}
+```
+
+<table>
+  <thead>
+    <tr><th>Field</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>results[]</code></td><td>One envelope per entry, with <code>index</code> and <code>execution</code> (<code>completed</code> or <code>not_started</code>). A <code>not_started</code> entry has <code>not_started_reason</code> and a <code>not_delivered</code> error.</td></tr>
+    <tr><td><code>total_entries</code>, <code>completed_entries</code>, <code>not_started_entries</code></td><td>Counts. Entries after a stop are counted in <code>not_started_entries</code> without a row.</td></tr>
+    <tr><td><code>stopped</code></td><td>Present when the batch ended early: <code>reason</code> is <code>stop_on_error</code>, <code>deadline</code>, <code>output_limit</code>, or <code>pre_action_baseline_failed</code>, with the <code>index</code>.</td></tr>
+  </tbody>
+</table>
+
+- **Deadline.** Before each entry the batch checks `--timeout-ms`. If it expired, that entry is `not_started` with reason `deadline` and the batch stops.
+- **Event waits.** When a `wait` entry with `event` follows another entry, the batch captures the event baseline before that earlier entry runs. If the capture fails, the earlier entry does not start (`pre_action_baseline_failed`).
+- **Sessions.** An entry whose session ended before it starts is `not_started` with reason `session_ended`.
+
+Refs in `args` must already exist when you write the array. A `snapshot` entry inside the batch creates refs you cannot name in later entries, so take the snapshot in a separate call.

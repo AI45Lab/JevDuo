@@ -1,0 +1,347 @@
+---
+title: Skeleton and drill-down
+navTitle: Skeleton and drill-down
+description: Read a dense app in two passes. Take a shallow skeleton, drill into one region by ref, re-drill after a change, and scope searches the same way.
+---
+
+A dense app, such as an Electron client or an IDE, can expose thousands of accessibility nodes. A full snapshot of it is slow, costs many tokens, and can run out of budget before it finishes. A skeleton snapshot reads only the top levels. You then drill into the one region you need with `snapshot --root`, so the refs you read and act on cover that region instead of the whole window. Only macOS makes the drill read less of the window. Off macOS a drill re-identifies its root over a complete read of the window, as [Drill into a region](#drill-into-a-region) explains.
+
+## The loop
+
+<Diagram name="snapshot-loop" title="Skeleton, drill-down, act, verify" aspectRatio="720 / 464" />
+
+1. `snapshot --skeleton -i --compact` reads the window to depth 3. Cut containers carry `children_count`, and drill targets carry a `ref_id`.
+2. Pick a node that has both `children_count` and `ref_id`.
+3. `snapshot --root <ref> -i --compact` reads that region and adds its refs to the same snapshot.
+4. Act with a ref from the drill, such as `click` or `set-value`. See the [interaction commands](/desktop/commands/interaction).
+5. Verify with `wait` or `get` on a ref from the drill, or re-read the region with the same `snapshot --root`. If the action result lists a menu, sheet, or alert in `data.surfaces`, read that [surface](/desktop/surfaces) next.
+6. If another region matters, drill it. If the layout changed, or the root ref itself is `STALE_REF`, take a new skeleton.
+
+`-i` keeps only interactive nodes, so a row's static text is dropped. To tell which row a repeated button belongs to, drill that row's container with `--root` and leave out `-i`, then match the button to the label beside it.
+
+Two shortcuts skip the loop: a small app needs only `snapshot -i`, and a known target needs only `find`. See [When to skip the skeleton](#when-to-skip-the-skeleton).
+
+## Take a skeleton
+
+```bash
+agent-desktop snapshot --app gnome-calculator --skeleton -i --compact
+```
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "snapshot",
+  "data": {
+    "app": "gnome-calculator",
+    "complete": true,
+    "ref_count": 2,
+    "snapshot_id": "s2txcl95uvubmn",
+    "window": {
+      "id": "w-1.11-org-gnome-Calculator-a11y-948fd89a_9bda_453b_9c10_4a9e9eed3feb",
+      "title": "Calculator"
+    },
+    "tree": {
+      "role": "window",
+      "name": "Calculator",
+      "native_id": { "kind": "ax_identifier", "value": "MathWindow" },
+      "children": [
+        {
+          "children_count": 2,
+          "native_id": { "kind": "ax_identifier", "value": "___object_3___" },
+          "ref_id": "@s2txcl95uvubmn:e1",
+          "role": "group"
+        },
+        {
+          "children_count": 1,
+          "native_id": { "kind": "ax_identifier", "value": "headerbar" },
+          "ref_id": "@s2txcl95uvubmn:e2",
+          "role": "group"
+        }
+      ]
+    }
+  }
+}
+```
+
+The tree above omits the unnamed wrapper groups between the window and the two drill targets. The calculator's main area is `e1`, and its header bar is `e2`.
+
+`--skeleton` changes two things:
+
+- **Depth is clamped to 3.** The effective depth is the smaller of `--max-depth` and 3, so a bare `--skeleton` reads three levels. Depth counts semantic levels: GTK and web wrappers can make the output nest deeper than three JSON levels.
+- **Cut containers carry `children_count`.** A container at the depth boundary lists no children. It reports how many direct children it did not expand.
+
+Interactive elements inside the first three levels get ordinary refs. `children_count` appears on any node a depth limit cuts, not only under `--skeleton`, and with `-i` agent-desktop keeps a cut container in the output even when it has no ref.
+
+## Find the drill target
+
+A drill target is a node with both a `ref_id` and a `children_count`. Which node carries it depends on how the cut container can be recognized later:
+
+1. **The container is ref-able.** An interactive role or a primary action gives it a normal ref, and that ref is the drill target.
+2. **The container is not ref-able but has identity.** If it has a name, a description, a typed native id, or bounds with an area, it gets a drill ref of its own, as `e1` and `e2` do above. Its available actions are not stored, so use it to drill, not as an action target.
+3. **The container has no usable identity.** The target moves up to the nearest ancestor that qualifies under rule 1 or 2. One ancestor ref covers every unidentified cut container beneath it. The window root is never a target.
+4. **Several candidates sit on one path.** The deepest one wins.
+
+In practice, drill a node that has both `children_count` and `ref_id`. A cut container with `children_count` and no `ref_id` is covered by an ancestor that has one. If no ancestor qualifies, raise `--max-depth` or use `find` to reach what is under it.
+
+## Drill into a region
+
+```bash
+agent-desktop snapshot --root @s2txcl95uvubmn:e1 -i --compact
+```
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "snapshot",
+  "data": {
+    "app": "gnome-calculator",
+    "complete": true,
+    "ref_count": 33,
+    "snapshot_id": "s2txcl95uvubmn",
+    "tree": {
+      "role": "group",
+      "native_id": { "kind": "ax_identifier", "value": "___object_3___" },
+      "children": [
+        {
+          "available_actions": ["RightClick", "SetValue", "TypeText", "SetFocus"],
+          "native_id": { "kind": "ax_identifier", "value": "source_view" },
+          "ref_id": "@s2txcl95uvubmn:e6",
+          "role": "textfield"
+        },
+        {
+          "available_actions": ["Click", "SetFocus"],
+          "description": "Clear Display [Escape]",
+          "name": "C",
+          "native_id": { "kind": "ax_identifier", "value": "calc_clear_button" },
+          "ref_id": "@s2txcl95uvubmn:e8",
+          "role": "button"
+        },
+        {
+          "available_actions": ["Click", "SetFocus"],
+          "name": "7",
+          "native_id": { "kind": "ax_identifier", "value": "calc_7_button" },
+          "ref_id": "@s2txcl95uvubmn:e11",
+          "role": "button"
+        }
+      ]
+    }
+  }
+}
+```
+
+The tree above is trimmed to the display and two of the 31 buttons and fields the drill found (`e3` to `e33`). `--root` takes a qualified ref from an earlier snapshot, `find`, or drill. The command then:
+
+1. Loads that ref's snapshot and its `RefEntry`.
+2. Resolves the entry strictly against the live UI, with the same rules as any [ref action](/desktop/snapshots-and-refs#how-a-ref-resolves).
+3. Reads the element's subtree to `--max-depth` (default 10). `--app` and `--window-id` are not used, because the ref already names its window, and `--skeleton` has no effect.
+4. Allocates refs for the subtree and writes them into the same snapshot, so `snapshot_id` does not change.
+
+Off macOS the drill re-identifies its root over a complete read of the window and counts its new refs against that same read, so a drill's refs resolve by exactly the rules the skeleton's do.
+
+The result's root is the drilled element, and `ref_count` is the whole snapshot's count: 2 skeleton refs plus 31 drill refs. New refs continue the snapshot's counter, which is why this drill starts at `e3`. The ref you drilled stays valid.
+
+## Re-drill after a change
+
+Run the same `--root` again to re-read the region after an action. The re-drill replaces that region's refs and leaves every other ref alone.
+
+<Diagram name="redrill-refs" title="A re-drill replaces one region's refs" aspectRatio="720 / 400" />
+
+1. Before: snapshot `s2txcl95uvubmn` holds the skeleton refs `e1` and `e2` and the refs `e3` to `e33` from the drill of `e1`.
+2. You click `e11` (the `7` button) and run `snapshot --root @s2txcl95uvubmn:e1` again.
+3. The re-drill removes the refs that the previous drill of `e1` created: `e3` to `e33`. It keeps `e1` itself and every ref outside its subtree, here `e2`.
+4. The new read allocates `e34` to `e64`. The counter continues, so a number is never reused.
+5. After: the old `e3` to `e33` return `STALE_REF`, and `e1`, `e2`, and refs from other drilled regions still resolve. `ref_count` stays 33.
+
+A re-drill removes refs created by earlier drills of that root, refs from a full snapshot that sit under the root in the same window, and refs from drills nested inside the region. Refs for other regions, other windows, and the drilled root itself survive.
+
+```bash
+agent-desktop get @s2txcl95uvubmn:e2 --property role   # outside the region: still resolves
+agent-desktop get @s2txcl95uvubmn:e11                  # inside the region: replaced
+```
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "get",
+  "data": { "property": "role", "ref": "@s2txcl95uvubmn:e2", "value": "group" }
+}
+```
+
+```json
+{
+  "version": "2.6",
+  "ok": false,
+  "command": "get",
+  "error": {
+    "code": "STALE_REF",
+    "message": "@s2txcl95uvubmn:e11 not found in current RefMap",
+    "recovery": {
+      "strategy": "refresh_snapshot_then_retry_original",
+      "retryable": true,
+      "requires_fresh_snapshot": true
+    },
+    "disposition": { "delivery": "not_delivered", "retry": "safe" }
+  }
+}
+```
+
+The second envelope omits `suggestion`.
+
+## What a drill refuses
+
+A drill changes a saved snapshot, so it refuses anything that could leave the snapshot half updated.
+
+<table>
+  <thead>
+    <tr><th>Situation</th><th>Result</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>--root</code> with <code>--surface</code></td><td><code>INVALID_ARGS</code>, "--root cannot be combined with --surface". A ref already carries the surface it was captured from. An explicit <code>--surface window</code>, the default, is allowed.</td></tr>
+    <tr><td><code>--root</code> with <code>--wait-for</code> or <code>--wait-for-gone</code></td><td><code>INVALID_ARGS</code>, "--root cannot be combined with --wait-for or --wait-for-gone". Run <code>snapshot</code> without <code>--root</code>, or omit the wait flags.</td></tr>
+    <tr><td>The read of the region is incomplete or misses the deadline</td><td><code>TIMEOUT</code>. The read happens before any write, so the saved snapshot is untouched.</td></tr>
+    <tr><td>The root ref is not in its snapshot, or no live element matches it</td><td><code>STALE_REF</code>. A missing snapshot is <code>SNAPSHOT_NOT_FOUND</code>.</td></tr>
+    <tr><td>The ref's source window is gone</td><td><code>WINDOW_NOT_FOUND</code>. Nothing is saved.</td></tr>
+  </tbody>
+</table>
+
+A drill is all or nothing. It replaces refs inside an existing snapshot, and a partial read could not re-allocate the descendants it removed, so an incomplete read of the region fails with `TIMEOUT` instead of returning a partial tree. Raise `--timeout-ms`, lower `--max-depth`, or drill a smaller region from a deeper ref.
+
+```json
+{
+  "version": "2.6",
+  "ok": false,
+  "command": "snapshot",
+  "error": {
+    "code": "TIMEOUT",
+    "message": "Operation exceeded its deadline",
+    "suggestion": "The target application may be busy or unresponsive",
+    "recovery": {
+      "strategy": "inspect_state_then_retry_original",
+      "retryable": true,
+      "requires_fresh_snapshot": true,
+      "retry_after_ms": 250
+    },
+    "details": { "elapsed_ms": 1, "kind": "deadline", "timeout_ms": 1 },
+    "disposition": { "delivery": "not_delivered", "retry": "safe" }
+  }
+}
+```
+
+That is `snapshot --root @s2txcl95uvubmn:e1 --timeout-ms 1`. The completeness rule applies to the drill's own read of the region, so you can drill a ref that came from a partial snapshot.
+
+## Scope a search
+
+`find` takes the same two scopes, so you can search a region without reading it:
+
+```bash
+agent-desktop find --root @s2txcl95uvubmn:e1 --role button --name C --exact --first
+agent-desktop find --app gtk3-widget-factory --surface menu --name "Dark Theme" --exact --first
+```
+
+- `find --root <ref>` resolves the ref strictly, then searches only that element's subtree. It needs no `--app`.
+- `find --surface <kind>` searches an overlay instead of the window. See [Surfaces](/desktop/surfaces).
+
+They cannot combine. `find --root <ref> --surface menu` returns `INVALID_ARGS`, "--root cannot be combined with --surface", with the suggestion to run `find --surface` without `--root`, or to drop `--surface`.
+
+A `find` that returns matches saves its own new snapshot, and its refs are qualified with the returned `data.snapshot_id`:
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "find",
+  "data": {
+    "match": {
+      "interactive": true,
+      "name": "C",
+      "path": ["group", "group", "group", "group", "group", "group"],
+      "ref_id": "@s3ufwq4n1uswjj:e1",
+      "role": "button",
+      "states": [],
+      "value": null
+    },
+    "snapshot_id": "s3ufwq4n1uswjj"
+  }
+}
+```
+
+It does not change the snapshot of the root ref you searched. `find --count` saves nothing. A search that runs out of budget fails with `TIMEOUT` instead of returning partial matches. The filters are in the [commands reference](/desktop/commands/observation#find).
+
+## Depth with max-depth
+
+`--max-depth` limits how many levels `snapshot` reads. The default is 10, and the largest accepted value is 50:
+
+```json
+{
+  "code": "INVALID_ARGS",
+  "message": "max depth 60 exceeds the supported maximum of 50",
+  "suggestion": "Use a max depth of 50 or less, or drill into a subtree with snapshot --root <ref>"
+}
+```
+
+Depth counts meaningful levels. Under `--skeleton` the depth is the smaller of `--max-depth` and 3. For a drill, `--max-depth` is the depth below the drilled element, so to go deeper than 10 levels, drill a node near the boundary. That is what the `children_count` markers are for.
+
+## When to skip the skeleton
+
+- **A small app.** With fewer than about 50 interactive elements, a full `snapshot -i --compact` is cheaper than two passes. GNOME Calculator, with 40 refs, is in this range; it appears above because its tree is small enough to show.
+- **A known target.** If you know the role or the exact name, `find --role --name --exact` returns the ref in one command.
+- **A surface.** Do not use `--skeleton` with `--surface menu`, `sheet`, `alert`, or `popover`. A surface is already a small, focused tree. The command does not reject the combination, but it only adds a second pass.
+
+## Partial observations
+
+A full snapshot that runs out of budget still succeeds, and returns what it saw:
+
+```bash
+agent-desktop snapshot --app gtk3-widget-factory -i --compact --timeout-ms 50
+```
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "snapshot",
+  "data": {
+    "app": "gtk3-widget-factory",
+    "complete": false,
+    "truncated": true,
+    "nodes_observed": 73,
+    "ref_count": 27,
+    "snapshot_id": "s2ck1chz8ypcwk",
+    "tree": { "role": "window", "subtree_truncated": true, "children": [] }
+  }
+}
+```
+
+The `tree` above is emptied for space; the real one holds the nodes that were read, with `subtree_truncated` on every node whose descendants were cut.
+
+<table>
+  <thead>
+    <tr><th>Field</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>complete</code></td><td>On every snapshot. <code>false</code> means the tree is not whole.</td></tr>
+    <tr><td><code>truncated</code>, <code>nodes_observed</code></td><td>Added when <code>complete</code> is <code>false</code>. <code>nodes_observed</code> counts the nodes read.</td></tr>
+    <tr><td><code>subtree_truncated: true</code></td><td>On each node whose descendants the budget cut, so you can walk from the root to every boundary.</td></tr>
+    <tr><td><code>children_count</code></td><td>Set by a depth cut. A node cut by the budget may carry no count, so treat <code>subtree_truncated</code> as the signal.</td></tr>
+  </tbody>
+</table>
+
+Read `complete` instead of waiting for a `TIMEOUT`. Only a full snapshot can be partial; a drill never is. To finish a partial tree, raise `--timeout-ms` or drill the regions you need. Reading the same window with `--timeout-ms 150` returned a complete tree.
+
+A cold Chromium or Electron app can take 10 to 25 seconds to expose its web tree. If a fresh snapshot comes back thin, raise `--timeout-ms` and snapshot again.
+
+## Timeouts
+
+<table>
+  <thead>
+    <tr><th>Command</th><th><code>--timeout-ms</code> default</th><th>At the deadline</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>snapshot</code></td><td>3000</td><td>A partial tree with <code>complete: false</code>.</td></tr>
+    <tr><td><code>snapshot --root</code></td><td>3000, shared by resolving the root and reading it</td><td><code>TIMEOUT</code>. Nothing is saved.</td></tr>
+    <tr><td><code>find</code></td><td>5000</td><td><code>TIMEOUT</code> with no partial matches.</td></tr>
+  </tbody>
+</table>

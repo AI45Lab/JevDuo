@@ -1,0 +1,101 @@
+---
+title: macOS
+navTitle: macOS
+description: Requirements, permissions, per-command capabilities, app naming, surfaces, and troubleshooting for agent-desktop on macOS.
+---
+
+agent-desktop reads macOS apps through the Accessibility (AX) API. The loop, refs, JSON envelope, sessions, and traces match every platform, so this page covers only what differs on macOS. The macOS behavior here is checked against the macOS adapter, its tests, and the macOS skill (`agent-desktop skills get macos`); it was not run for these docs.
+
+## Requirements
+
+- macOS 13 or later, Intel or Apple Silicon.
+- Accessibility permission for the app that launches agent-desktop, such as Terminal, iTerm2, VS Code, or your agent's host app. If System Settings lists the `agent-desktop` binary separately, grant it too.
+- Screen Recording permission, only for `screenshot` and for `session start --screenshots`.
+- Automation permission for System Events, only where a command reports it missing, such as opening Notification Center.
+
+## Grant and check permissions
+
+The grant belongs to the app that launched agent-desktop, not to the shell. A different terminal or an IDE needs its own grant.
+
+1. Run `agent-desktop permissions`. It does not prompt.
+2. If a permission is `denied`, run `agent-desktop permissions --guide`. It opens System Settings at the missing permission with a panel that shows which app to add, and returns at once with `data.guide` set to `started`, `already_running`, or `not_needed`.
+3. If the guide cannot run, open **System Settings > Privacy & Security > Accessibility**, add the launching app, and turn it on.
+4. Run `agent-desktop permissions` again and confirm `granted`. The app does not need a restart.
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "permissions",
+  "data": {
+    "accessibility": { "state": "granted" },
+    "automation": { "state": "unknown" },
+    "screen_recording": { "state": "granted" }
+  }
+}
+```
+
+`automation` stays `unknown` until macOS would need to prompt. `permissions --request` is the only path that prompts, and it covers Automation; `--guide` covers Accessibility and Screen Recording. Under tmux or SSH there is no launching app, so add the terminal app that started tmux by hand.
+
+## What works headless
+
+Ref actions are headless by default. Under `--headed`, `click`, `right-click`, `type`, `clear`, and `scroll` use physical paths first, except a click on an item in the application's native menu bar hierarchy: agent-desktop activates the owning app and calls `AXPress` without moving the cursor. A headless click on these menu items calls `AXPress` without activating the app. `right-click` can use `AXShowMenu` headless when the item provides it. Under `--headed`, right-click, double-click, and triple-click support windowless native menu items by focusing the app and keeping pointer verification. `hover` and `drag` still require the ref's source window and fail with `ACTION_NOT_SUPPORTED` when it has none. Other ref-target pointer actions focus the exact owning window and verify the hit target before delivery. A window-backed popup uses its live owning window even when its snapshot is application-owned. `expand`, `collapse`, `set-value`, `select`, `toggle`, `check`, `uncheck`, `focus`, and `scroll-to` stay semantic. See [Headed mode](/desktop/guides/headed-mode).
+
+<table>
+  <thead>
+    <tr><th>Group</th><th>Works headless</th><th>Needs <code>--headed</code></th><th>Fails closed or not supported</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Observation</td><td><code>snapshot</code>, <code>find</code>, <code>get</code>, <code>is</code>, <code>list-surfaces</code>, <code>list-displays</code></td><td></td><td></td></tr>
+    <tr><td>Capture</td><td><code>screenshot</code>, with Screen Recording permission</td><td></td><td></td></tr>
+    <tr><td>Ref actions</td><td><code>click</code>, <code>right-click</code>, <code>type</code>, <code>clear</code>, <code>scroll</code>, <code>expand</code>, <code>collapse</code>, <code>set-value</code>, <code>select</code>, <code>toggle</code>, <code>check</code>, <code>uncheck</code>, <code>focus</code>, <code>scroll-to</code></td><td>None required</td><td></td></tr>
+    <tr><td>Multi-click and pointer</td><td><code>double-click</code> when the element offers <code>AXOpen</code></td><td><code>double-click</code>, <code>triple-click</code>, <code>hover</code>, <code>drag</code>, <code>mouse-move</code>, <code>mouse-click</code>, <code>mouse-wheel</code></td><td>Headless: <code>POLICY_DENIED</code></td></tr>
+    <tr><td>Keyboard</td><td><code>press</code>, always physical keyboard input; it never runs a menu item, so <code>click</code> the item instead</td><td></td><td>Quit shortcuts such as <code>cmd+q</code>: <code>POLICY_DENIED</code> without <code>--force</code></td></tr>
+    <tr><td>Held input</td><td></td><td></td><td><code>key-down</code>, <code>key-up</code>, <code>mouse-down</code>, <code>mouse-up</code></td></tr>
+    <tr><td>App and window</td><td><code>launch</code>, <code>close-app</code>, <code>list-apps</code>, <code>list-windows</code>, <code>focus-window</code>, <code>resize-window</code>, <code>move-window</code>, <code>minimize</code>, <code>maximize</code>, <code>restore</code></td><td></td><td></td></tr>
+    <tr><td>Clipboard</td><td><code>clipboard-get</code>, <code>clipboard-set</code> (read back: <code>delivered_verified</code>), <code>clipboard-clear</code></td><td></td><td></td></tr>
+    <tr><td>Wait</td><td>All modes. <code>wait --notification</code> sees only an already-open Notification Center</td><td></td><td></td></tr>
+    <tr><td>Notifications</td><td><code>list-notifications</code> while Notification Center is open</td><td>Listing while it is closed, and every dismiss and action</td><td>Headless listing with the center closed: <code>POLICY_DENIED</code></td></tr>
+    <tr><td>Shell surfaces</td><td><code>open-system-surface</code> for <code>dock</code> and <code>menu-bar-extras</code>, returned at once because they are always on screen</td><td></td><td><code>start-menu</code>, <code>taskbar</code>, <code>system-tray</code>, <code>system-tray-overflow</code>, <code>action-center</code>: <code>INVALID_ARGS</code></td></tr>
+    <tr><td>System</td><td><code>status</code>, <code>permissions</code>, <code>version</code>, <code>batch</code>, <code>skills</code>, <code>session</code>, <code>cursor-overlay</code>, <code>trace</code></td><td></td><td></td></tr>
+  </tbody>
+</table>
+
+Judge delivery by observation. AX return codes do not prove an effect: an app can return success from an action that does nothing, so re-read with `get`, `is`, or a snapshot.
+
+## App naming
+
+`--app` takes the display name `list-apps` prints, such as `"System Settings"` or `"TextEdit"`. When no running app has that display name, it also matches a bundle ID or an executable name, such as `ControlCenter` for Control Center. `launch` also accepts a bundle ID such as `com.apple.TextEdit`. Window ids such as `w-4521` stay valid for the life of the window; find them with `list-windows`.
+
+## Surfaces
+
+`supported_surfaces` lists `window`, `focused`, `menu`, `menubar`, `sheet`, `popover`, `alert`, `dock`, and `menu-bar-extras`. Use `--surface menubar` for an app's File, Edit, and View menus. Use `--surface menu-bar-extras` for status items: without `--app` it reads system items such as Wi-Fi, Battery, and Clock; with `--app` it reads that app's own item. Use `--surface dock` for the Dock. These shell surfaces are available headless through `open-system-surface`. A background app with no window, such as a menu-bar app or Control Center, can be read through its process. This applies to `window`, `menubar`, and `menu-bar-extras`, not `focused`; a regular app that has not shown a window returns `WINDOW_NOT_FOUND`. While a menu, sheet, alert, or popover is open, refs from the window tree behind it are the wrong target. See [Surfaces](/desktop/surfaces).
+## Keys and notifications
+
+- The primary modifier is `cmd`: `press cmd+c`. Punctuation keys work as the symbol or by name (`comma`, `period`, `slash`).
+- `cmd+q`, `cmd+shift+q`, `cmd+alt+esc`, `ctrl+cmd+q`, and `cmd+shift+delete` return `POLICY_DENIED` unless you pass `--force`. To quit an app, use `close-app`.
+- `press cmd+s --app "TextEdit"` sends keys to one app without focusing it.
+- When agent-desktop opens Notification Center, it closes it afterward and restores the previous focus. Pass `--expected-app` and `--expected-title` on a single dismiss or action, because the stack shifts. Use `wait --notification --app "App"` for banners that vanish before you can list them.
+
+## Chromium and Electron
+
+agent-desktop turns on web accessibility in a Chromium renderer when it needs it. For a dense running app, take a skeleton and drill with `--root`. For the web contents of an Electron app you can launch fresh, `launch "App" --cdp` opens a DevTools endpoint for agent-browser. See [Chromium and Electron apps](/desktop/guides/chromium-and-electron).
+
+## Troubleshooting
+
+<table>
+  <thead>
+    <tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>PERM_DENIED</code>, or <code>permissions</code> shows <code>denied</code></td><td>The launching app has no Accessibility permission, or no Screen Recording permission for <code>screenshot</code></td><td>Follow the grant steps above</td></tr>
+    <tr><td>Few nodes or no refs</td><td>Custom-rendered UI, or a Chromium renderer still settling</td><td>Check permissions, drop <code>-i</code>, raise <code>--timeout-ms</code>, and run <code>list-surfaces</code> in case the content is in a sheet</td></tr>
+    <tr><td><code>complete: false</code> or a slow snapshot</td><td>A deep tree ran out of budget</td><td>Use <code>find</code>, or a skeleton and <code>--root</code>. See <a href="/desktop/skeleton-and-drill-down">Skeleton and drill-down</a></td></tr>
+    <tr><td><code>APP_UNRESPONSIVE</code> after <code>right-click</code> with <code>retry: unsafe</code></td><td><code>AXShowMenu</code> entered modal menu tracking after the menu opened</td><td>Do not retry. Run <code>snapshot --surface menu</code>; for a combo box or menu button, use <code>select</code></td></tr>
+    <tr><td><code>select</code> cannot confirm the choice</td><td>It needs a closed-to-open menu change, and a menu was already open</td><td>Dismiss the open menu, then run <code>select</code> again</td></tr>
+    <tr><td><code>WINDOW_NOT_FOUND</code></td><td>A window-owned surface has no open window</td><td><code>launch "App"</code> with <code>--activate</code>, then <code>list-windows --app "App"</code></td></tr>
+    <tr><td>A shortcut does nothing</td><td><code>ctrl</code> used where macOS uses <code>cmd</code>, or the keys went to another app</td><td>Use <code>cmd+...</code>, or scope with <code>--app</code></td></tr>
+  </tbody>
+</table>
+
+More cases are in `agent-desktop skills get macos troubleshooting`.

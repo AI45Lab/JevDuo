@@ -1,0 +1,205 @@
+---
+title: Snapshots and refs
+navTitle: Snapshots and refs
+description: What a snapshot contains, how refs are allocated and stored, and how a ref resolves back to a live element or goes stale.
+---
+
+A snapshot is one observation of an application's accessibility tree. Window-owned surfaces read a window; macOS `menu` and `menubar` surfaces belong to the application and need no document window. agent-desktop saves the observation with a ref map and gives every actionable element a ref that you pass to later commands.
+
+```bash
+agent-desktop snapshot --app gnome-calculator -i --compact
+```
+
+```json
+{
+  "version": "2.6",
+  "ok": true,
+  "command": "snapshot",
+  "data": {
+    "app": "gnome-calculator",
+    "complete": true,
+    "ref_count": 40,
+    "snapshot_id": "s26u7pv9qta5g4",
+    "window": {
+      "id": "w-1.11-org-gnome-Calculator-a11y-948fd89a_9bda_453b_9c10_4a9e9eed3feb",
+      "title": "Calculator"
+    },
+    "tree": {
+      "role": "window",
+      "name": "Calculator",
+      "native_id": { "kind": "ax_identifier", "value": "MathWindow" },
+      "children": [
+        {
+          "available_actions": ["Click", "SetFocus"],
+          "description": "Clear Display [Escape]",
+          "name": "C",
+          "native_id": { "kind": "ax_identifier", "value": "calc_clear_button" },
+          "ref_id": "@s26u7pv9qta5g4:e6",
+          "role": "button"
+        }
+      ]
+    }
+  }
+}
+```
+
+The tree above is trimmed to one button. The real tree nests it under several unnamed `group` nodes.
+
+## What a snapshot contains
+
+<table>
+  <thead>
+    <tr><th>Field</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>data.app</code>, <code>data.window</code></td><td>The application and, for window-owned observations, the window that was read (<code>id</code>, <code>title</code>). <code>data.window</code> is omitted for macOS application-owned menu surfaces and process-owned snapshots of a background app with no window.</td></tr>
+    <tr><td><code>data.snapshot_id</code></td><td>The id of the saved snapshot. It is part of every ref.</td></tr>
+    <tr><td><code>data.ref_count</code></td><td>The number of refs the snapshot holds. After a <code>--root</code> drill it counts the whole snapshot, not only the drilled region.</td></tr>
+    <tr><td><code>data.complete</code></td><td>Present on every snapshot. <code>false</code> means the observation ran out of budget. See <a href="/desktop/skeleton-and-drill-down#partial-observations">Partial observations</a>.</td></tr>
+    <tr><td><code>data.truncated</code>, <code>data.nodes_observed</code></td><td>Present only when <code>complete</code> is <code>false</code>.</td></tr>
+    <tr><td><code>data.identity_unproven</code></td><td>Present and <code>true</code> only when the snapshot needed one whole read of the window to prove its refs and that read failed or was cut short. The tree is still the one presented, but on Windows and Linux, and on macOS for an element with no address, its refs fail with <code>identity_not_unique</code>. Retake the snapshot with a larger <code>--timeout-ms</code>.</td></tr>
+    <tr><td><code>data.tree</code></td><td>The root node. Every node nests its <code>children</code>.</td></tr>
+  </tbody>
+</table>
+
+A node always carries `role` and, when they exist, `ref_id`, `name`, `value`, `description`, `native_id`, `states`, `available_actions`, `children_count`, `subtree_truncated`, and `children`. Empty fields are omitted. `bounds` appears only with `--include-bounds`:
+
+```json
+{
+  "available_actions": ["Click", "SetFocus"],
+  "bounds": { "height": 44.0, "width": 64.0, "x": 554.0, "y": 555.0 },
+  "name": "7",
+  "native_id": { "kind": "ax_identifier", "value": "calc_7_button" },
+  "ref_id": "@s2jqig9fk9u6gz:e9",
+  "role": "button"
+}
+```
+
+`children_count` and `subtree_truncated` mark where the tree was cut; [Skeleton and drill-down](/desktop/skeleton-and-drill-down) explains both. Three flags shrink the tree, and the [commands reference](/desktop/commands/observation#snapshot) lists every flag:
+
+- `-i` (`--interactive-only`) drops leaves that have no ref. It keeps nodes that lead to refs and nodes marked with `children_count`. Static text has no ref, so a row's label is dropped: to see which row a repeated button belongs to, drill that row's container with `--root` and leave out `-i`.
+- `--compact` collapses a single-child wrapper that has no name, value, description, id, state, or action.
+- `--max-depth` limits depth. The default is 10 and the maximum is 50.
+
+## Choose the window
+
+For window-owned surfaces, `snapshot` and `find` read one window. Without `--app` they use the focused window, and `WINDOW_NOT_FOUND` means there is none. With `--app` and no `--window-id`, agent-desktop narrows the app's windows in this order and stops at the first step that leaves exactly one:
+
+1. If the app has only one window, use it.
+2. Keep only visible windows.
+3. Keep only the focused window.
+4. Keep only accessible windows.
+
+If several windows are still left, the command fails with `AMBIGUOUS_TARGET`, and `details.candidates` lists up to 10 of them. Run `list-windows --app <name>` and pass `--window-id`.
+
+On macOS, `menu` and `menubar` surfaces are application-owned. They can be observed without a document window. If you pass `--window-id`, it selects the app that owns the surface; the returned snapshot remains application-owned and omits `data.window`.
+
+## Refs
+
+A ref is an element id with its snapshot id inside it:
+
+```text
+@<snapshot_id>:eN        # for example @s26u7pv9qta5g4:e6
+```
+
+Every command accepts only this qualified form. A bare `@e6` fails with `INVALID_ARGS`; `@eN` is the key inside the saved ref map, and agent-desktop never prints it as output. Because each ref names its snapshot, it keeps pointing at its own snapshot when you read several apps or windows in turn.
+
+```json
+{
+  "version": "2.6",
+  "ok": false,
+  "command": "click",
+  "error": {
+    "code": "INVALID_ARGS",
+    "message": "Invalid ref_id '@e1': expected @<snapshot_id>:e<N>",
+    "suggestion": "Use the snapshot-qualified ref that snapshot prints, for example @s8f3k2p9:e1. A bare @eN ref is not accepted.",
+    "disposition": { "delivery": "not_delivered", "retry": "safe" }
+  }
+}
+```
+
+### Which elements get a ref
+
+Refs are allocated depth-first in document order, from `e1` upward, so a parent gets its number before its children. The counter belongs to the snapshot, and a later drill-down continues it instead of reusing numbers.
+
+An element gets a ref when either condition holds:
+
+- Its role is interactive: `button`, `cell`, `checkbox`, `colorwell`, `combobox`, `dockitem`, `incrementor`, `link`, `listbox`, `menubutton`, `menuitem`, `option`, `radiobutton`, `slider`, `switch`, `tab`, `textfield`, or `treeitem`.
+- It advertises a primary action. `scrollarea` (Scroll) and `disclosure` (Expand and Collapse) qualify this way, because `scroll`, `expand`, and `collapse` need a ref to target them. In the example above, the calculator's history pane is a `scrollarea` with a ref.
+
+`SetFocus`, `RightClick`, and `ScrollTo` do not count on their own. Web runtimes advertise them on nearly every node, so counting them would give every inert container a ref and overflow the [ref map size limit](#where-refs-are-stored). Static text and inert containers stay in the tree without a ref. `find` returns them as context matches with `"ref_id": null`.
+
+A container cut off by a skeleton can also receive a ref as a drill target. See [Find the drill target](/desktop/skeleton-and-drill-down#find-the-drill-target).
+
+## What a ref stores
+
+Each ref maps to a `RefEntry`: the evidence needed to find the same element again. The ref map holds evidence, not live objects.
+
+<table>
+  <thead>
+    <tr><th>Group</th><th>Fields</th><th>Used for</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Process</td><td><code>pid</code>, <code>process_instance</code></td><td>Reject a ref whose process exited or whose pid was reused.</td></tr>
+    <tr><td>Identity</td><td><code>retained_object</code>, <code>role</code>, <code>name</code>, <code>value</code>, <code>description</code>, <code>native_id</code>, <code>unique_at_capture</code></td><td>Re-identify the element. <code>retained_object</code> is the element's own accessibility address, recorded on macOS. <code>unique_at_capture</code> records whether the entry was the only element in the window its snapshot captured with this role and these stable fields. A skeleton, depth-limited or drilled capture counts against that whole window, so a shallow presentation proves the same thing a full one does. A control's <code>value</code> is never identity for roles whose value changes while you use them, such as <code>textfield</code>, <code>checkbox</code>, and <code>slider</code>.</td></tr>
+    <tr><td>Geometry</td><td><code>bounds</code>, <code>bounds_hash</code>, <code>bounds_space</code></td><td>Not identity. <code>get --property bounds</code> falls back to them when the live read is unavailable; re-identification never compares them.</td></tr>
+    <tr><td>Capabilities</td><td><code>states</code>, <code>available_actions</code></td><td>What the element offered at snapshot time.</td></tr>
+    <tr><td>Source</td><td><code>source_app</code>, <code>source_window_id</code>, <code>source_window_title</code>, <code>source_window_bounds_hash</code>, <code>source_surface</code></td><td>Tie the ref to its window and surface.</td></tr>
+    <tr><td>Scope</td><td><code>path</code>, <code>root_ref</code>, <code>path_is_absolute</code></td><td>The element's child-index position at capture, and which drill-down created the ref.</td></tr>
+  </tbody>
+</table>
+
+## How a ref resolves
+
+A command never reuses a live handle from the snapshot. Every command that takes a ref, including `click`, `get`, `is`, `snapshot --root`, and `find --root`, re-identifies the element from its stored evidence first.
+
+<Diagram name="ref-resolution" title="How a ref resolves, and when it goes stale" aspectRatio="720 / 650" />
+
+1. The command parses `@s26u7pv9qta5g4:e6` into the snapshot id and the key `@e6`. A bare or malformed ref fails with `INVALID_ARGS`.
+2. `RefStore` loads `snapshots/s26u7pv9qta5g4/refmap.json` from the selected session's namespace. A missing snapshot fails with `SNAPSHOT_NOT_FOUND`.
+3. The ref map looks up `@e6` and returns its `RefEntry`. A missing key fails with `STALE_REF`.
+4. If the entry carries the element's own address, `resolve_element_strict` turns it back into that exact element. If the element is alive and its process, role and recorded id still match, the command acts on it. Otherwise the ref is `STALE_REF` with `details.kind: retained_object_stale`. No search runs, and the ref never lands on a look-alike.
+5. If the entry has no address, `unique_at_capture` decides. A ref that was not unique at capture fails with `AMBIGUOUS_TARGET`, `details.kind: identity_not_unique`, before any live read.
+6. A ref that was unique is counted again over the live window by role, native id, name and description. The count covers the whole window, which is the scope the capture proved the ref unique in. Exactly one match: the command acts on it. None: `STALE_REF`, `details.kind: saved_ref_absent`. Two or more: `AMBIGUOUS_TARGET`, `details.kind: saved_ref_ambiguous`. A field the live read could not answer leaves the count unproven, which returns `TIMEOUT` with `details.kind: resolution_identity_unknown` instead of a match.
+7. After `STALE_REF` or `AMBIGUOUS_TARGET`, take a fresh observation and use the new ref.
+
+On macOS a ref carries the element's own address, so identical twins each keep their own ref. When the address could not be taken, macOS follows the rule below. Windows and Linux refs carry no address, so a ref that was not the only element matching its role and stable fields when it was captured is refused.
+
+The comparison is the identity fields and nothing else: role, native id, name, and description. Control values are volatile and never count. Bounds never count either, so a stored rectangle or a stored path cannot pick between two candidates. A ref that fails these checks is refused rather than guessed at.
+
+<table>
+  <thead>
+    <tr><th>Error</th><th>Meaning</th><th>What to do</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>STALE_REF</code></td><td>The key is not in the snapshot's ref map, no live element matches the stored identity (<code>details.kind: saved_ref_absent</code>), or the element the ref names is gone (<code>retained_object_stale</code>). The UI changed, the window closed, or a re-drill replaced the ref.</td><td>Take a fresh snapshot, or re-drill the region, and use the new ref. Nothing was sent to the app.</td></tr>
+    <tr><td><code>AMBIGUOUS_TARGET</code></td><td>Two live elements match the stored identity (<code>saved_ref_ambiguous</code>), the ref was not proven unique when it was captured (<code>identity_not_unique</code>), or several windows matched one <code>--app</code>.</td><td>For several windows, name the window. A ref that was not proven unique came from identical twins or from a window that could not be read whole within the snapshot timeout; only the second is fixed by a new snapshot, with a larger <code>--timeout-ms</code>. Off macOS, identical twins cannot be picked by ref at all and every snapshot refuses them again: only an explicit coordinate click, <code>agent-desktop --headed mouse-click --xy X,Y</code>, can choose one. It takes the foreground and is unavailable on a Linux Wayland session.</td></tr>
+    <tr><td><code>SNAPSHOT_NOT_FOUND</code></td><td>No saved snapshot has that id: it was pruned, it belongs to another <a href="/desktop/sessions">session</a>, or the state root differs.</td><td>Take a new snapshot under the same <code>--session</code> and state root as the command that uses it.</td></tr>
+  </tbody>
+</table>
+
+The full `STALE_REF` envelope after a re-drill is in [Skeleton and drill-down](/desktop/skeleton-and-drill-down#re-drill-after-a-change), and every code with its retry rule is in [Errors and recovery](/desktop/errors-and-recovery).
+
+## Refresh after the UI changes
+
+Refs describe one observation. Re-read after anything that can change the tree, and act only on refs from the latest read of the region:
+
+- `snapshot` returns a new snapshot id and a new ref map.
+- `find` with matches also saves a new snapshot, and its `data.snapshot_id` qualifies the refs it returns.
+- `snapshot --root` re-reads one region inside an existing snapshot. See [Skeleton and drill-down](/desktop/skeleton-and-drill-down#re-drill-after-a-change).
+
+An older snapshot stays on disk until it is pruned, and its refs keep resolving while their elements still match. Do not rely on that: after the UI changes, an old ref can fail, or match an element that is no longer the one you meant.
+
+## Where refs are stored
+
+`RefStore` keeps one file per snapshot at `snapshots/<snapshot_id>/refmap.json` under the [state root](/desktop/configuration#state-root). Inside a [session](/desktop/sessions), the same layout sits under `sessions/<session_id>/`, and a lookup never searches another session's snapshots.
+
+<table>
+  <thead>
+    <tr><th>Limit</th><th>Value</th><th>What happens</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Size of one ref map</td><td>1 MB (1,048,576 bytes)</td><td>The write fails with <code>INTERNAL</code>. Narrow the observation with <code>--skeleton</code>, <code>--max-depth</code>, <code>--root</code>, or a tighter <code>find</code>.</td></tr>
+    <tr><td>Saved snapshots per namespace</td><td>128</td><td>When a save pushes the count past 128, the oldest are removed until 96 remain. The snapshot just written is never removed.</td></tr>
+  </tbody>
+</table>

@@ -1,0 +1,837 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: [Cargo.toml]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+
+# Deny all permissions at workflow level; each job declares only what it needs.
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check-release:
+    name: Check for new version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      tag_name: ${{ steps.prepare.outputs.tag_name }}
+      version: ${{ steps.prepare.outputs.version }}
+      source_sha: ${{ steps.prepare.outputs.source_sha }}
+      should_release: ${{ steps.prepare.outputs.should_release }}
+      needs_github_release: ${{ steps.prepare.outputs.needs_github_release }}
+    steps:
+      - name: Require main
+        env:
+          RELEASE_REF: ${{ github.ref }}
+        run: |
+          if [ "$RELEASE_REF" != "refs/heads/main" ]; then
+            echo "Release must run from main" >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Validate release metadata and create immutable tag
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash scripts/prepare-release.sh
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: check-release
+    if: needs.check-release.outputs.should_release == 'true' || needs.check-release.outputs.needs_github_release == 'true'
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      GLIBC_FLOOR: '2.35'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            container: ubuntu:22.04@sha256:0a9887931b0e38af2e3487ed39e29436b0535c4f3f52e57745baaf79d1898956
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            container: ubuntu:22.04@sha256:0a9887931b0e38af2e3487ed39e29436b0535c4f3f52e57745baaf79d1898956
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+          - target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+    steps:
+      - name: Install container build tools
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl build-essential git xz-utils
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Verify and select release source
+        shell: bash
+        env:
+          RELEASE_SOURCE_SHA: ${{ needs.check-release.outputs.source_sha }}
+          RELEASE_WORKFLOW_SHA: ${{ github.sha }}
+        run: bash scripts/checkout-release-source.sh
+
+      - name: Install rustup (container)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) TRIPLE=x86_64-unknown-linux-gnu ;;
+            aarch64) TRIPLE=aarch64-unknown-linux-gnu ;;
+          esac
+          BASE="https://static.rust-lang.org/rustup/dist/${TRIPLE}"
+          curl --proto '=https' --tlsv1.2 -fsSLO "${BASE}/rustup-init"
+          echo "$(curl --proto '=https' --tlsv1.2 -fsSL "${BASE}/rustup-init.sha256" | cut -d' ' -f1)  rustup-init" | sha256sum -c -
+          chmod +x rustup-init
+          ./rustup-init -y --default-toolchain none --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" toolchain install
+
+      - name: Install Rust toolchain
+        run: |
+          rustup show
+          rustup target add ${{ matrix.target }}
+
+      - name: Build release binary (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cargo build --locked --release -p agent-desktop --target ${{ matrix.target }}
+          cargo build --locked --release -p agent-desktop-macos --bin agent-desktop-macos-helper --target ${{ matrix.target }}
+
+      - name: Build release binary (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cargo build --locked --release -p agent-desktop --target ${{ matrix.target }}
+          cargo build --locked --release -p agent-desktop-linux --bins --target ${{ matrix.target }}
+
+      - name: Build release binary (Windows)
+        if: runner.os == 'Windows'
+        run: cargo build --locked --release -p agent-desktop --target ${{ matrix.target }}
+
+      - name: Check glibc floor (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          for FILE in agent-desktop agent-desktop-linux-clipboard-owner; do
+            scripts/check-elf-glibc-floor.sh "target/${{ matrix.target }}/release/${FILE}" "${GLIBC_FLOOR}"
+          done
+
+      - name: Check binary size (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          LIMIT=$((15 * 1024 * 1024))
+          for FILE in agent-desktop agent-desktop-linux-clipboard-owner; do
+            SIZE=$(stat -c%s "target/${{ matrix.target }}/release/${FILE}")
+            echo "${FILE} size: ${SIZE} bytes"
+            if [ "$SIZE" -gt "$LIMIT" ]; then
+              echo "FAIL: shipped executable ${FILE} exceeds 15MB limit (${SIZE} bytes)"
+              exit 1
+            fi
+          done
+
+      - name: Check binary size (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          SIZE=$(stat -f%z target/${{ matrix.target }}/release/agent-desktop)
+          HELPER_SIZE=$(stat -f%z target/${{ matrix.target }}/release/agent-desktop-macos-helper)
+          LIMIT=$((15 * 1024 * 1024))
+          echo "Binary size: $(du -sh target/${{ matrix.target }}/release/agent-desktop | cut -f1)"
+          echo "Helper size: $(du -sh target/${{ matrix.target }}/release/agent-desktop-macos-helper | cut -f1)"
+          if [ "$SIZE" -gt "$LIMIT" ] || [ "$HELPER_SIZE" -gt "$LIMIT" ]; then
+            echo "FAIL: shipped executable exceeds 15MB limit (binary=${SIZE}, helper=${HELPER_SIZE} bytes)"
+            exit 1
+          fi
+
+      - name: Check binary size (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $binary = Get-Item "target/${{ matrix.target }}/release/agent-desktop.exe"
+          $limit = 15MB
+          Write-Host "Binary size: $($binary.Length) bytes"
+          if ($binary.Length -gt $limit) {
+            Write-Host "FAIL: shipped executable exceeds 15MB limit (binary=$($binary.Length) bytes)"
+            exit 1
+          }
+
+      - name: Smoke-run the built binary (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          OUTPUT=$(target/${{ matrix.target }}/release/agent-desktop version)
+          echo "$OUTPUT"
+
+      - name: Smoke-run the built binary (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          OUTPUT=$(target/${{ matrix.target }}/release/agent-desktop version)
+          echo "$OUTPUT"
+
+      - name: Smoke-run the built binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "target/${{ matrix.target }}/release/agent-desktop.exe" version
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "FAIL: agent-desktop version exited $LASTEXITCODE on the freshly built binary"
+            exit $LASTEXITCODE
+          }
+
+      - name: Create tarball (macOS)
+        if: runner.os == 'macOS'
+        env:
+          VERSION: ${{ needs.check-release.outputs.version }}
+        run: |
+          TARBALL="agent-desktop-v${VERSION}-${{ matrix.target }}.tar.gz"
+          BINARY="target/${{ matrix.target }}/release/agent-desktop"
+          HELPER="target/${{ matrix.target }}/release/agent-desktop-macos-helper"
+          BINARY_SHA=$(shasum -a 256 "$BINARY" | awk '{print $1}')
+          HELPER_SHA=$(shasum -a 256 "$HELPER" | awk '{print $1}')
+          tar -czf "${TARBALL}" -C "$(dirname "$BINARY")" agent-desktop agent-desktop-macos-helper
+          if [ "$BINARY_SHA" != "$(shasum -a 256 "$BINARY" | awk '{print $1}')" ] || \
+             [ "$HELPER_SHA" != "$(shasum -a 256 "$HELPER" | awk '{print $1}')" ]; then
+            echo "Release executable changed while packaging" >&2
+            exit 1
+          fi
+          LISTING=$(tar -tzf "${TARBALL}" | sort | tr '\n' ' ')
+          EXPECTED="agent-desktop agent-desktop-macos-helper "
+          if [ "$LISTING" != "$EXPECTED" ]; then
+            echo "FAIL: macOS archive listing '$LISTING' != expected '${EXPECTED}'"
+            exit 1
+          fi
+          shasum -a 256 "${TARBALL}" > "${TARBALL}.sha256"
+
+      - name: Create tarball (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          VERSION: ${{ needs.check-release.outputs.version }}
+        run: |
+          TARBALL="agent-desktop-v${VERSION}-${{ matrix.target }}.tar.gz"
+          DIR="target/${{ matrix.target }}/release"
+          BINARY_SHA=$(sha256sum "${DIR}/agent-desktop" | awk '{print $1}')
+          HELPER_SHA=$(sha256sum "${DIR}/agent-desktop-linux-clipboard-owner" | awk '{print $1}')
+          tar -czf "${TARBALL}" -C "${DIR}" agent-desktop agent-desktop-linux-clipboard-owner
+          if [ "$BINARY_SHA" != "$(sha256sum "${DIR}/agent-desktop" | awk '{print $1}')" ] || \
+             [ "$HELPER_SHA" != "$(sha256sum "${DIR}/agent-desktop-linux-clipboard-owner" | awk '{print $1}')" ]; then
+            echo "Release executable changed while packaging" >&2
+            exit 1
+          fi
+          scripts/check-linux-archive-contents.sh cli "${TARBALL}"
+          sha256sum "${TARBALL}" > "${TARBALL}.sha256"
+
+      - name: Create tarball (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.check-release.outputs.version }}
+        run: |
+          $tarball = "agent-desktop-v${env:VERSION}-${{ matrix.target }}.tar.gz"
+          & tar -czf $tarball -C "target/${{ matrix.target }}/release" agent-desktop.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $listing = @(@(& tar -tzf $tarball) | Sort-Object)
+          if (($listing.Count -ne 1) -or ($listing[0] -ne 'agent-desktop.exe')) {
+            Write-Host "FAIL: Windows archive listing must equal exactly one entry, agent-desktop.exe; got:"
+            $listing | ForEach-Object { Write-Host "  $_" }
+            exit 1
+          }
+          Write-Host "OK: archive lists exactly agent-desktop.exe"
+          $hash = (Get-FileHash $tarball -Algorithm SHA256).Hash.ToLower()
+          "$hash  $tarball" | Out-File -Encoding ascii "$tarball.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: binary-${{ matrix.target }}
+          path: |
+            agent-desktop-v*.tar.gz
+            agent-desktop-v*.tar.gz.sha256
+          retention-days: 1
+
+  # FFI cdylib for language-binding consumers (Python/Swift/Go/Ruby/Node/C).
+  # Ships alongside CLI tarballs on the same release tag; npm stays CLI-only.
+  build-ffi:
+    name: Build FFI (${{ matrix.target }})
+    needs: check-release
+    if: needs.check-release.outputs.should_release == 'true' || needs.check-release.outputs.needs_github_release == 'true'
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      GLIBC_FLOOR: '2.35'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            archive: tar.gz
+            lib_name: libagent_desktop_ffi.dylib
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            archive: tar.gz
+            lib_name: libagent_desktop_ffi.dylib
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            container: ubuntu:22.04@sha256:0a9887931b0e38af2e3487ed39e29436b0535c4f3f52e57745baaf79d1898956
+            archive: tar.gz
+            lib_name: libagent_desktop_ffi.so
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            container: ubuntu:22.04@sha256:0a9887931b0e38af2e3487ed39e29436b0535c4f3f52e57745baaf79d1898956
+            archive: tar.gz
+            lib_name: libagent_desktop_ffi.so
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            archive: zip
+            lib_name: agent_desktop_ffi.dll
+          - target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+            archive: zip
+            lib_name: agent_desktop_ffi.dll
+    steps:
+      - name: Install container build tools
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl build-essential git xz-utils
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Verify and select release source
+        shell: bash
+        env:
+          RELEASE_SOURCE_SHA: ${{ needs.check-release.outputs.source_sha }}
+          RELEASE_WORKFLOW_SHA: ${{ github.sha }}
+        run: bash scripts/checkout-release-source.sh
+
+      - name: Install rustup (container)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) TRIPLE=x86_64-unknown-linux-gnu ;;
+            aarch64) TRIPLE=aarch64-unknown-linux-gnu ;;
+          esac
+          BASE="https://static.rust-lang.org/rustup/dist/${TRIPLE}"
+          curl --proto '=https' --tlsv1.2 -fsSLO "${BASE}/rustup-init"
+          echo "$(curl --proto '=https' --tlsv1.2 -fsSL "${BASE}/rustup-init.sha256" | cut -d' ' -f1)  rustup-init" | sha256sum -c -
+          chmod +x rustup-init
+          ./rustup-init -y --default-toolchain none --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" toolchain install
+
+      - name: Install Rust toolchain
+        run: |
+          rustup show
+          rustup target add ${{ matrix.target }}
+
+      # NEVER add --features stub-adapter to the release FFI build — it ships a no-op dylib
+      # where every adapter call returns PLATFORM_NOT_SUPPORTED. The guard step below enforces this.
+      - name: Guard — release dylib must not be a stub build
+        shell: bash
+        run: |
+          # Co-occurrence of the release profile token and the stub flag on the same
+          # line is the discriminator. Legitimate stub uses in this file (release gates,
+          # passthrough test) omit the release-ffi profile, so they do not trigger.
+          PROFILE_TOKEN="release-ffi"
+          STUB_TOKEN="stub-adapter"
+          if grep -nE "${PROFILE_TOKEN}.*${STUB_TOKEN}|${STUB_TOKEN}.*${PROFILE_TOKEN}" \
+              .github/workflows/release.yml; then
+            echo "FAIL: release-ffi build path must not enable"
+            echo "      the stub-adapter feature — that would ship a no-op dylib"
+            exit 1
+          fi
+          echo "OK: no stub flag on the shipping release-ffi build path"
+
+      - name: Build FFI cdylib (release-ffi profile)
+        run: cargo build --locked --profile release-ffi -p agent-desktop-ffi --target ${{ matrix.target }}
+
+      - name: Build macOS helper for FFI consumers
+        if: runner.os == 'macOS'
+        run: cargo build --locked --release -p agent-desktop-macos --bin agent-desktop-macos-helper --target ${{ matrix.target }}
+
+      - name: Build Linux clipboard owner for FFI consumers
+        if: runner.os == 'Linux'
+        shell: bash
+        run: cargo build --locked --release -p agent-desktop-linux --bins --target ${{ matrix.target }}
+
+      - name: Check glibc floor (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          scripts/check-elf-glibc-floor.sh "target/${{ matrix.target }}/release-ffi/${{ matrix.lib_name }}" "${GLIBC_FLOOR}"
+          scripts/check-elf-glibc-floor.sh "target/${{ matrix.target }}/release/agent-desktop-linux-clipboard-owner" "${GLIBC_FLOOR}"
+
+      # build.rs bakes install_name=@rpath/... ; a regression here silently
+      # breaks Swift/SPM consumers, so verify before shipping.
+      - name: Verify macOS install_name
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          ACTUAL=$(otool -D target/${{ matrix.target }}/release-ffi/${{ matrix.lib_name }} | tail -1)
+          EXPECTED="@rpath/libagent_desktop_ffi.dylib"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "FAIL: install_name is '$ACTUAL', expected '$EXPECTED'"
+            exit 1
+          fi
+          echo "OK: install_name = $ACTUAL"
+
+      - name: Stage tarball contents
+        shell: bash
+        env:
+          VERSION: ${{ needs.check-release.outputs.version }}
+        run: |
+          STAGE="agent-desktop-ffi-v${VERSION}-${{ matrix.target }}"
+          mkdir -p "$STAGE/lib" "$STAGE/include"
+          cp "target/${{ matrix.target }}/release-ffi/${{ matrix.lib_name }}" "$STAGE/lib/"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cp "target/${{ matrix.target }}/release/agent-desktop-macos-helper" "$STAGE/lib/"
+            chmod +x "$STAGE/lib/agent-desktop-macos-helper"
+          fi
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            cp "target/${{ matrix.target }}/release/agent-desktop-linux-clipboard-owner" "$STAGE/lib/"
+            chmod +x "$STAGE/lib/agent-desktop-linux-clipboard-owner"
+          fi
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release-ffi/agent_desktop_ffi.dll.lib" "$STAGE/lib/"
+          fi
+          cp crates/ffi/include/agent_desktop.h "$STAGE/include/"
+          cp LICENSE "$STAGE/"
+          cat > "$STAGE/README.md" <<EOF
+          # agent-desktop FFI cdylib — v${VERSION} (${{ matrix.target }})
+
+          - \`lib/${{ matrix.lib_name }}\` — shared library
+          - \`include/agent_desktop.h\` — committed C ABI header
+          - \`LICENSE\` — Apache-2.0
+
+          Docs: https://github.com/vercel-labs/agent-desktop/tree/main/skills/agent-desktop-ffi
+          EOF
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cat >> "$STAGE/README.md" <<'MACEOF'
+
+          macOS `install_name` is `@rpath/libagent_desktop_ffi.dylib` — linking
+          consumers need `-rpath` pointing at the dylib's directory; `dlopen` /
+          ctypes callers resolve by path and need nothing.
+          MACEOF
+            # shellcheck disable=SC2016
+            echo '- `lib/agent-desktop-macos-helper` — required helper, colocated for dylib-image discovery' >> "$STAGE/README.md"
+          elif [ "$RUNNER_OS" = "Linux" ]; then
+            cat scripts/ffi-archive-readme-linux.md >> "$STAGE/README.md"
+            # shellcheck disable=SC2016
+            echo '- `lib/agent-desktop-linux-clipboard-owner` — clipboard owner helper, colocated for library-image discovery' >> "$STAGE/README.md"
+          elif [ "$RUNNER_OS" = "Windows" ]; then
+            cat >> "$STAGE/README.md" <<'WINEOF'
+
+          `dlopen` / Python `ctypes` / Node `ffi-napi` callers load
+          `lib/agent_desktop_ffi.dll` by path and need nothing else. An MSVC
+          linking consumer (C++ or Rust) needs `lib/agent_desktop_ffi.dll.lib`
+          beside it — that import library is what you link against at build time.
+          WINEOF
+          fi
+          if [ "$RUNNER_OS" != "Windows" ]; then
+            (cd "$STAGE" && shasum -a 256 lib/* include/* LICENSE > SHA256SUMS)
+          fi
+          echo "STAGE=$STAGE" >> "$GITHUB_ENV"
+
+      - name: Create archive (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          tar -czf "${STAGE}.tar.gz" "${STAGE}"
+          (cd "$STAGE" && shasum -a 256 -c SHA256SUMS)
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            tar -tzf "${STAGE}.tar.gz" | grep -Fx "${STAGE}/lib/agent-desktop-macos-helper"
+          fi
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            scripts/check-linux-archive-contents.sh ffi "${STAGE}.tar.gz"
+          fi
+          shasum -a 256 "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
+
+      - name: Create archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "${env:STAGE}" -DestinationPath "${env:STAGE}.zip"
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::OpenRead("${env:STAGE}.zip")
+          try {
+            $entries = $zip.Entries.FullName
+          } finally {
+            $zip.Dispose()
+          }
+          $names = @($entries) | ForEach-Object { $_.Replace('\', '/') }
+          $importLib = "${env:STAGE}/lib/agent_desktop_ffi.dll.lib"
+          if ($names -notcontains $importLib) {
+            Write-Output "FAIL: Windows FFI archive is missing the MSVC import library '$importLib'"
+            Write-Output "Archive entries:"
+            $names | ForEach-Object { Write-Output "  $_" }
+            exit 1
+          }
+          Write-Output "OK: archive contains $importLib"
+          $hash = (Get-FileHash "${env:STAGE}.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  ${env:STAGE}.zip" | Out-File -Encoding ascii "${env:STAGE}.zip.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ffi-${{ matrix.target }}
+          path: |
+            agent-desktop-ffi-v*.tar.gz
+            agent-desktop-ffi-v*.tar.gz.sha256
+            agent-desktop-ffi-v*.zip
+            agent-desktop-ffi-v*.zip.sha256
+          retention-days: 1
+
+  # Re-runs FFI integrity gates at release time. Header verification runs on
+  # macOS because cbindgen may omit macOS-gated symbols on Linux.
+  ffi-release-gates:
+    name: FFI Release Gates
+    needs: check-release
+    if: needs.check-release.outputs.should_release == 'true' || needs.check-release.outputs.needs_github_release == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Verify and select release source
+        shell: bash
+        env:
+          RELEASE_SOURCE_SHA: ${{ needs.check-release.outputs.source_sha }}
+          RELEASE_WORKFLOW_SHA: ${{ github.sha }}
+        run: bash scripts/checkout-release-source.sh
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - name: Install pinned cbindgen 0.29.4
+        run: cargo install cbindgen --version 0.29.4 --locked
+
+      - name: Header drift check (cbindgen --verify)
+        run: >
+          cbindgen crates/ffi
+          --config crates/ffi/cbindgen.toml
+          --output crates/ffi/include/agent_desktop.h
+          --verify
+
+      - name: Stub passthrough test
+        run: >
+          scripts/cargo-test-isolated-home.sh test --locked -p agent-desktop-ffi
+          --features stub-adapter --test c_abi_passthrough
+
+  ffi-release-panic-guard:
+    needs: check-release
+    if: needs.check-release.outputs.should_release == 'true' || needs.check-release.outputs.needs_github_release == 'true'
+    name: FFI Panic Guard (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            container: ubuntu:22.04@sha256:0a9887931b0e38af2e3487ed39e29436b0535c4f3f52e57745baaf79d1898956
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            container: ubuntu:22.04@sha256:0a9887931b0e38af2e3487ed39e29436b0535c4f3f52e57745baaf79d1898956
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+          - target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+    steps:
+      - name: Install container build tools
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl build-essential git xz-utils
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Verify and select release source
+        shell: bash
+        env:
+          RELEASE_SOURCE_SHA: ${{ needs.check-release.outputs.source_sha }}
+          RELEASE_WORKFLOW_SHA: ${{ github.sha }}
+        run: bash scripts/checkout-release-source.sh
+
+      - name: Install rustup (container)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) TRIPLE=x86_64-unknown-linux-gnu ;;
+            aarch64) TRIPLE=aarch64-unknown-linux-gnu ;;
+          esac
+          BASE="https://static.rust-lang.org/rustup/dist/${TRIPLE}"
+          curl --proto '=https' --tlsv1.2 -fsSLO "${BASE}/rustup-init"
+          echo "$(curl --proto '=https' --tlsv1.2 -fsSL "${BASE}/rustup-init.sha256" | cut -d' ' -f1)  rustup-init" | sha256sum -c -
+          chmod +x rustup-init
+          ./rustup-init -y --default-toolchain none --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" toolchain install
+
+      - name: Install Rust toolchain
+        run: |
+          rustup show
+          rustup target add ${{ matrix.target }}
+
+      - name: Assert release-ffi profile keeps panic=unwind
+        shell: bash
+        run: |
+          if ! grep -A5 '\[profile\.release-ffi\]' Cargo.toml | grep -q 'panic.*=.*"unwind"'; then
+            echo "FAIL: [profile.release-ffi] must set panic=\"unwind\" — a flip to"
+            echo "      panic=\"abort\" defeats every trap_panic boundary in the dylib."
+            exit 1
+          fi
+          echo "OK: release-ffi profile retains panic=\"unwind\""
+
+      - name: Prove the shipped cdylib catches an exported-boundary panic
+        shell: bash
+        env:
+          GIT_CONFIG_COUNT: 1
+          GIT_CONFIG_KEY_0: safe.directory
+          GIT_CONFIG_VALUE_0: ${{ github.workspace }}
+        run: bash crates/ffi/tests/run_cdylib_panic_probe.sh ${{ matrix.target }}
+
+  # One check over the three channels that must carry the Linux clipboard owner helper:
+  # the CLI archive, the FFI archive and the npm package table.
+  linux-archive-contents:
+    name: Linux archive contents (${{ matrix.target }})
+    needs: [check-release, build, build-ffi]
+    if: needs.check-release.outputs.should_release == 'true' || needs.check-release.outputs.needs_github_release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            npm_key: linux-x64
+          - target: aarch64-unknown-linux-gnu
+            npm_key: linux-arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Verify and select release source
+        shell: bash
+        env:
+          RELEASE_SOURCE_SHA: ${{ needs.check-release.outputs.source_sha }}
+          RELEASE_WORKFLOW_SHA: ${{ github.sha }}
+        run: bash scripts/checkout-release-source.sh
+
+      - name: Download this target's CLI and FFI archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: "{binary,ffi}-${{ matrix.target }}"
+          merge-multiple: true
+          path: archives
+
+      - name: Check the helper is in all three channels
+        run: |
+          scripts/check-linux-archive-contents.sh all \
+            archives/agent-desktop-v*-${{ matrix.target }}.tar.gz \
+            archives/agent-desktop-ffi-v*-${{ matrix.target }}.tar.gz \
+            ${{ matrix.npm_key }}
+
+  publish-github:
+    name: Publish to GitHub Release
+    needs: [check-release, build, build-ffi, ffi-release-gates, ffi-release-panic-guard, linux-archive-contents, publish-npm]
+    if: >-
+      always() &&
+      needs.check-release.result == 'success' &&
+      needs.build.result == 'success' &&
+      needs.build-ffi.result == 'success' &&
+      needs.ffi-release-gates.result == 'success' &&
+      needs.ffi-release-panic-guard.result == 'success' &&
+      needs.linux-archive-contents.result == 'success' &&
+      (needs.publish-npm.result == 'success' || needs.publish-npm.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      id-token: write        # Sigstore OIDC exchange
+      attestations: write    # write provenance bundle back to GitHub
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: "{binary,ffi}-*"
+          merge-multiple: true
+
+      - name: Create checksums file
+        run: |
+          cat ./*.sha256 > checksums.txt
+          cat checksums.txt
+
+      - name: Upload assets to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ needs.check-release.outputs.tag_name }}
+        run: |
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release create "$TAG_NAME" \
+              --verify-tag \
+              --title "$TAG_NAME" \
+              --generate-notes
+          fi
+          gh release upload "$TAG_NAME" \
+            ./*.tar.gz ./*.zip checksums.txt \
+            --clobber
+
+      - name: Assert the release's exact asset set
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ needs.check-release.outputs.tag_name }}
+          EXPECTED_ASSETS: 13
+        run: |
+          ASSETS=$(gh release view "$TAG_NAME" --json assets --jq '.assets | length')
+          if [ "$ASSETS" -ne "$EXPECTED_ASSETS" ]; then
+            echo "FAIL: release carries ${ASSETS} assets, expected exactly ${EXPECTED_ASSETS}"
+            echo "      (6 CLI tarballs + 4 FFI tarballs + 2 FFI zips + checksums.txt)"
+            exit 1
+          fi
+          echo "OK: exactly ${ASSETS} assets found on release"
+
+      # Keyless Sigstore provenance. Verify with:
+      #   gh attestation verify <file> --repo vercel-labs/agent-desktop
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            *.tar.gz
+            *.zip
+            checksums.txt
+
+  publish-npm:
+    name: Publish to npm
+    needs: [check-release, build, build-ffi, ffi-release-gates, ffi-release-panic-guard, linux-archive-contents]
+    if: needs.check-release.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    environment: Release
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Verify and select release source
+        shell: bash
+        env:
+          RELEASE_SOURCE_SHA: ${{ needs.check-release.outputs.source_sha }}
+          RELEASE_WORKFLOW_SHA: ${{ github.sha }}
+        run: bash scripts/checkout-release-source.sh
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Prepare npm package
+        env:
+          VERSION: ${{ needs.check-release.outputs.version }}
+        run: |
+          cd npm
+          node -e "
+            const version = process.env.VERSION;
+            const pkg = require('./package.json');
+            pkg.version = version;
+            require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          echo "npm package version set to ${VERSION}"
+          cp ../README.md README.md
+          cp ../CHANGELOG.md CHANGELOG.md 2>/dev/null || true
+
+      - name: Download built release archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: "{binary,ffi}-*"
+          merge-multiple: true
+          path: ${{ runner.temp }}/npm-release
+
+      - name: Bundle built CLI executables
+        run: |
+          cat "$RUNNER_TEMP/npm-release"/*.sha256 > "$RUNNER_TEMP/npm-release/checksums.txt"
+          node scripts/prepare-npm-binaries.js "$RUNNER_TEMP/npm-release"
+          node scripts/check-npm-package.js --bundled
+
+      - name: Publish to npm
+        run: npm publish --access public
+        working-directory: npm

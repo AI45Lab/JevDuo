@@ -1,0 +1,4 @@
+{
+  "title": "C library",
+  "pages": ["index", "build-and-link", "api", "ownership-and-threading"]
+}
