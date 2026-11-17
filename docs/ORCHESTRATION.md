@@ -135,20 +135,23 @@ RoundState 与原 SessionManager 保存编排状态，只有外层 Runtime 推�
 
 ## 接入 agent-desktop Jev
 
-`gui_jev` 直接导入外部 `jev-desktop` 包，复用 `JevLoop`、`AgentDesktop`、
+`gui_jev` 直接导入仓库内 `jev_tools/jev-desktop/` 提供的 `jev-desktop` 包，复用 `JevLoop`、`AgentDesktop`、
 候选集、动作选择、文本写入前重新观察、值核验和资源清理。
-没有复制或修改 agent-desktop 源码。当前适配目标是本工程的 OSWorld VM，
+Python 包和 `jev_tools/agent-desktop/` 的 Rust CLI 分别以 subtree 收录。
+当前适配目标是本工程的 OSWorld VM，
 不支持 NorthCUA 的 native 后端。
 
-在仓库根目录安装用户提供的包：
+`bash scripts/setup_env.sh` 默认安装仓库内的 Python 包。已有 venv 时，也可在仓库根目录单独安装：
 
 ```bash
-uv pip install --python venv/bin/python --no-deps -e ../agent-desktop/jev
+uv pip install --python venv/bin/python --no-deps -e jev_tools/jev-desktop
+venv/bin/python -c 'from jev_desktop import AgentDesktop, JevLoop'
 ```
 
-也可在重建环境时指定 `JEVDUO_JEV_PACKAGE=/absolute/path/to/agent-desktop/jev`，
-由 `scripts/setup_env.sh` 在原依赖安装完成后安装。所有运行节点需要能读取该 editable
-路径。未启用插件时无需安装此包。
+也可在重建环境时指定 `JEVDUO_JEV_PACKAGE=/absolute/path/to/jev-desktop` 覆盖默认来源；
+相对路径按仓库根目录解析。所有运行节点需要能读取该 editable 路径。
+Rust CLI 和 Linux helper 的构建、VM 安装及路径配置见
+[README 的工具部署说明](../README.md#使用仓库内的-agent-desktop)。
 
 在现有 `harness.orchestration` 中增加：
 

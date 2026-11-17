@@ -19,25 +19,27 @@
 - 检查 `config.yaml` 的 `cluster` 和 `benchmark`：镜像、挂载、prepared runtime、
   VM qcow2、assets、共享 `env.sh` 必须在实际 worker 中可用；GitLab token 文件由 driver
   读取并将值写入私有 spec，因此须在 driver 中可读。
-- 当前开启 `gui_jev`，需要外部 `jev-desktop` Python 包；其 editable 源码路径也必须在
-  所有 worker 的共享挂载中可见。该 Python 包与 `jev_tools/agent-desktop/` 中的 Rust CLI
-  是两个独立依赖；当前 subtree 不包含 `jev/` Python 包目录。VM 镜像内还需安装下文构建的
-  CLI 和 Linux helper，并将配置指向客体中的 CLI 路径。
+- 当前开启 `gui_jev`，所需 Python 包已收录在 `jev_tools/jev-desktop/`，
+  `setup_env.sh` 默认以 editable 方式安装；所有 worker 需要能读取同一仓库路径。
+  它与 `jev_tools/agent-desktop/` 中的 Rust CLI 是两个独立组件。
+  VM 镜像内还需安装下文构建的 CLI 和 Linux helper，并将配置指向客体中的 CLI 路径。
 
 从仓库根目录安装。`setup_env.sh` 会重建 `venv/`，搬动源码后也需要重建：
 
 ```bash
-# 改为共享盘上的实际包路径
-export JEVDUO_JEV_PACKAGE=/absolute/shared/path/to/agent-desktop/jev
 bash scripts/setup_env.sh
-venv/bin/python -c 'import northcua, nexau, yaml, jev_desktop'
+venv/bin/python -c 'import northcua, nexau, yaml; from jev_desktop import AgentDesktop, JevLoop'
 ```
 
 已有 venv 时，也可单独安装插件：
 
 ```bash
-uv pip install --python venv/bin/python --no-deps -e "$JEVDUO_JEV_PACKAGE"
+uv pip install --python venv/bin/python --no-deps -e jev_tools/jev-desktop
 ```
+
+需要替换 Python 包来源时，可设置 `JEVDUO_JEV_PACKAGE=/absolute/shared/path/to/jev-desktop`
+再运行 `setup_env.sh`；相对路径按仓库根目录解析。脚本会在重建 venv 前检查包的安装元数据
+和入口源码，并在安装后验证 `AgentDesktop`、`JevLoop` 等导出，避免残留 editable 记录掩盖源码缺失。
 
 ## 使用仓库内的 agent-desktop
 
@@ -46,6 +48,10 @@ uv pip install --python venv/bin/python --no-deps -e "$JEVDUO_JEV_PACKAGE"
 导入基线为 `b7f968003746d90432de8d92b00692d068407419`。普通 clone 即包含源码，
 无需初始化 submodule。复现实验时使用本仓库固定的版本；其中的 `Cargo.lock`、
 `rust-toolchain.toml` 和 `LICENSE` 一并保留。
+
+配套的 Python 运行库独立放在 `jev_tools/jev-desktop/`，同样以 subtree 收录。
+其中 17 个 Python 模块恢复自本批测评的源码快照，保留原有实现；包元数据、许可证和安装说明
+随包提供。它负责 Jev 决策循环和 CLI 传输，使用说明见 [Python 包 README](jev_tools/jev-desktop/README.md)。
 
 ### 构建 Linux CLI 和 helper
 
@@ -142,8 +148,7 @@ benchmark:
 `desktop.binary` 是 **VM 内路径**，不是共享盘上的 `target/release/agent-desktop`。
 测评会 reset VM，因此应将安装完成的环境保存为独立的 prepared qcow2，并把 `benchmark.vm`
 指向它；只向某次运行中的 VM 上传文件不会更新基础镜像。`scripts/setup_env.sh` 只准备
-agent 的 Python 环境，不会构建 Rust 工具或自动将文件安装进 VM。
-`jev-desktop` Python 包仍按前面的 `JEVDUO_JEV_PACKAGE` 步骤单独安装。
+agent 的 Python 环境，并默认安装 `jev_tools/jev-desktop/`；不会构建 Rust 工具或自动将文件安装进 VM。
 
 ### 更新此工具的 subtree
 
@@ -266,6 +271,7 @@ Desktop 唯一执行模式为 Slow 编排，`orchestration.enabled` 总开关已
 | `src/worker_limits.py` | 覆盖 setup、actor 和评分的整题硬截止 |
 | `docs/ORCHESTRATION.md` | Slow、Jev、general 插件协议及行为说明 |
 | `jev_tools/agent-desktop/` | `ubuntu2204` 分支的 Rust CLI/helper 源码，以 git subtree 管理；在 VM 内运行 |
+| `jev_tools/jev-desktop/` | Jev Python 决策循环和 CLI 传输包，以 git subtree 管理；安装在 agent venv 中 |
 | `tests/` | 本地逻辑与模拟传输回归，不启动真实 VM 或模型调用 |
 | `runs/<run_id>/` | 全部产物（gitignore） |
 
