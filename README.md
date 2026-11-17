@@ -9,6 +9,8 @@
 
 当前 `config.yaml` 开启 Slow 编排，由 Slow 选择 `gui_jev` 或 `general` 子代理并核验结果。
 编排与插件配置详见 [ORCHESTRATION.md](docs/ORCHESTRATION.md)。
+`gui_jev` 使用的原生桌面工具源码随仓库保存在 `jev_tools/agent-desktop/`，
+构建和部署方法见[使用仓库内的 agent-desktop](#使用仓库内的-agent-desktop)。
 
 ## 环境准备
 
@@ -18,8 +20,9 @@
   VM qcow2、assets、共享 `env.sh` 必须在实际 worker 中可用；GitLab token 文件由 driver
   读取并将值写入私有 spec，因此须在 driver 中可读。
 - 当前开启 `gui_jev`，需要外部 `jev-desktop` Python 包；其 editable 源码路径也必须在
-  所有 worker 的共享挂载中可见。VM 镜像内还需有配置所指的 `agent-desktop` 可执行文件，
-  这与开发机上的 Python 包是两个独立依赖。
+  所有 worker 的共享挂载中可见。该 Python 包与 `jev_tools/agent-desktop/` 中的 Rust CLI
+  是两个独立依赖；当前 subtree 不包含 `jev/` Python 包目录。VM 镜像内还需安装下文构建的
+  CLI 和 Linux helper，并将配置指向客体中的 CLI 路径。
 
 从仓库根目录安装。`setup_env.sh` 会重建 `venv/`，搬动源码后也需要重建：
 
@@ -35,6 +38,125 @@ venv/bin/python -c 'import northcua, nexau, yaml, jev_desktop'
 ```bash
 uv pip install --python venv/bin/python --no-deps -e "$JEVDUO_JEV_PACKAGE"
 ```
+
+## 使用仓库内的 agent-desktop
+
+`jev_tools/agent-desktop/` 通过 **git subtree** 引入自
+[`k4ngzy/agent-desktop` 的 `ubuntu2204` 分支](https://github.com/k4ngzy/agent-desktop/tree/ubuntu2204)，
+导入基线为 `b7f968003746d90432de8d92b00692d068407419`。普通 clone 即包含源码，
+无需初始化 submodule。复现实验时使用本仓库固定的版本；其中的 `Cargo.lock`、
+`rust-toolchain.toml` 和 `LICENSE` 一并保留。
+
+### 构建 Linux CLI 和 helper
+
+下面以 OSWorld 的 Ubuntu 22.04、x86_64 客体为例。在仓库根目录执行，
+通过 Docker 在 Ubuntu 22.04 中构建，避免开发机较新的 glibc 成为客体运行依赖。
+构建机需要 Docker 及拉取镜像、Rust 工具链和 Cargo 依赖的网络权限：
+
+```bash
+docker run --rm --platform linux/amd64 \
+  -v "$PWD/jev_tools/agent-desktop:/src" -w /src ubuntu:22.04 \
+  bash -euo pipefail -c '
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends \
+      ca-certificates curl build-essential binutils git xz-utils
+    curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | \
+      sh -s -- -y --profile minimal --default-toolchain 1.89.0
+    . /root/.cargo/env
+    cargo build --locked --release -p agent-desktop
+    cargo build --locked --release -p agent-desktop-linux --bins
+    for executable in agent-desktop agent-desktop-linux-clipboard-owner; do
+      bash scripts/check-elf-glibc-floor.sh "target/release/$executable" 2.35
+    done
+    target/release/agent-desktop version
+  '
+```
+
+两份产物位于宿主机的 `jev_tools/agent-desktop/target/release/`：
+`agent-desktop` 和 `agent-desktop-linux-clipboard-owner`。Linux CLI 从自身所在目录查找
+helper，部署时将同一次构建的两份文件放在一起。glibc 检查读取 ELF 符号版本，
+用于确认构建产物要求的 glibc 版本不高于 2.35；这不等同于 GUI 功能已通过验证。
+
+### 安装到 OSWorld VM
+
+CLI 运行在 **VM 客体**中；只在开发机或 rjob 外层容器安装不能替代客体部署。
+先启动准备环境用的 VM，从实际 provider/连接信息取得其 HTTP 服务地址和端口。
+下面的上传命令在能够访问该服务的构建机或 worker 上、从本仓库根目录执行：
+
+```bash
+# 替换为实际 VM 服务地址；不是集群的 SSH 登录地址
+JEVDUO_VM_SERVER='http://VM_IP:SERVER_PORT'
+for executable in agent-desktop agent-desktop-linux-clipboard-owner; do
+  curl --fail --show-error --noproxy '*' \
+    -F "file_path=/tmp/$executable" \
+    -F "file_data=@jev_tools/agent-desktop/target/release/$executable" \
+    "$JEVDUO_VM_SERVER/setup/upload"
+done
+```
+
+随后在 **VM 内的终端**安装两份文件及运行依赖：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends at-spi2-core dbus-x11 python3-gi
+sudo install -d -m 0755 /opt/jev/agent-desktop/bin
+sudo install -m 0755 \
+  /tmp/agent-desktop /tmp/agent-desktop-linux-clipboard-owner \
+  /opt/jev/agent-desktop/bin/
+```
+
+在 VM **桌面用户的现有图形会话终端**中检查 CLI 和可访问的应用：
+
+```bash
+JEVDUO_DESKTOP_BIN=/opt/jev/agent-desktop/bin/agent-desktop
+"$JEVDUO_DESKTOP_BIN" version
+"$JEVDUO_DESKTOP_BIN" status
+"$JEVDUO_DESKTOP_BIN" list-apps
+"$JEVDUO_DESKTOP_BIN" list-windows
+# 将窗口 ID 换成 list-windows 实际返回的值
+"$JEVDUO_DESKTOP_BIN" snapshot --window-id '<window-id>' --max-depth 3 -i
+```
+
+观察与动作需要同一桌面会话的 `DISPLAY`、session D-Bus 和运行目录；通过 SSH 或 HTTP
+执行时也要继承该会话环境，不能凭空指定另一个 D-Bus 会话。OSWorld 的 headed 操作使用
+X11；Chromium 启动参数需包含 `--force-renderer-accessibility`，当前 `gui_jev.launch_args`
+已经为 Chrome 配置该参数。应用本身仍须暴露 AT-SPI 接口。
+
+### 接入 JevDuo 测评
+
+将以下字段合入现有 `config.yaml`，其余模型、编排预算和基准配置保留：
+
+```yaml
+harness:
+  orchestration:
+    gui_jev:
+      enabled: true
+      desktop:
+        binary: /opt/jev/agent-desktop/bin/agent-desktop
+        headed: true
+benchmark:
+  vm: /absolute/shared/path/to/unified-with-agent-desktop.qcow2
+```
+
+`desktop.binary` 是 **VM 内路径**，不是共享盘上的 `target/release/agent-desktop`。
+测评会 reset VM，因此应将安装完成的环境保存为独立的 prepared qcow2，并把 `benchmark.vm`
+指向它；只向某次运行中的 VM 上传文件不会更新基础镜像。`scripts/setup_env.sh` 只准备
+agent 的 Python 环境，不会构建 Rust 工具或自动将文件安装进 VM。
+`jev-desktop` Python 包仍按前面的 `JEVDUO_JEV_PACKAGE` 步骤单独安装。
+
+### 更新此工具的 subtree
+
+在工作区干净时，从仓库根目录执行：
+
+```bash
+git subtree pull --prefix=jev_tools/agent-desktop \
+  https://github.com/k4ngzy/agent-desktop.git ubuntu2204 --squash
+```
+
+更新后重新构建 CLI/helper、准备对应 VM 镜像，并记录本次使用的仓库版本。
+更多命令与平台限制见工具自身的[安装文档](jev_tools/agent-desktop/docs/install.md)和
+[Linux 平台说明](jev_tools/agent-desktop/apps/docs/content/docs/platforms/linux.mdx)。
 
 ## 凭据配置
 
@@ -143,6 +265,7 @@ Desktop 唯一执行模式为 Slow 编排，`orchestration.enabled` 总开关已
 | `src/evaluator_dependencies.py` / `src/setup_transport.py` | 评分依赖预检与一次投递的慢 setup 传输 |
 | `src/worker_limits.py` | 覆盖 setup、actor 和评分的整题硬截止 |
 | `docs/ORCHESTRATION.md` | Slow、Jev、general 插件协议及行为说明 |
+| `jev_tools/agent-desktop/` | `ubuntu2204` 分支的 Rust CLI/helper 源码，以 git subtree 管理；在 VM 内运行 |
 | `tests/` | 本地逻辑与模拟传输回归，不启动真实 VM 或模型调用 |
 | `runs/<run_id>/` | 全部产物（gitignore） |
 
