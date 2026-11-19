@@ -1,4 +1,6 @@
-<h1 align="center">JevDuo</h1>
+<p align="center">
+  <img src="docs/assets/jevduo-wordmark.svg" alt="JevDuo" width="360">
+</p>
 
 <p align="center"><strong>JEV 驱动的开源计算机操作 Harness</strong></p>
 
@@ -7,6 +9,13 @@
   <a href="https://xxxyxun.github.io/jevduo/#film">演示影片</a> ·
   <a href="https://xxxyxun.github.io/jevduo/downloads/JevDuo-v15-4K.mp4">下载 4K 影片</a>
 </p>
+
+JevDuo 将慢模型的任务规划与 JEV 的局部决策结合，统一编排 GUI 与 CLI 执行。
+在明确的子目标内，JEV 根据新观察连续选择动作，让慢模型专注规划、核验与必要的恢复，而不是逐步下发操作指令。
+
+- **连续 GUI 执行**：在当前候选中选择下一动作，无需逐次生成长篇操作说明。
+- **GUI 与 CLI 协同**：桌面操作、代码与命令共享任务环境和预算。
+- **核验与恢复闭环**：结合执行回执和新观察核验结果，保留完整轨迹，遇阻后调整执行。
 
 [![JevDuo 演示影片](https://xxxyxun.github.io/jevduo/assets/film-poster.jpg)](https://xxxyxun.github.io/jevduo/#film)
 
