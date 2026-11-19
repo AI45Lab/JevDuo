@@ -1,4 +1,24 @@
-# JevDuo · OSWorld 2.1 集群测评
+<h1 align="center">JevDuo</h1>
+
+<p align="center"><strong>JEV 驱动的开源计算机操作 Harness</strong></p>
+
+<p align="center">
+  <a href="https://xxxyxun.github.io/jevduo/">项目主页</a> ·
+  <a href="https://xxxyxun.github.io/jevduo/#film">演示影片</a> ·
+  <a href="https://xxxyxun.github.io/jevduo/downloads/JevDuo-v15-4K.mp4">下载 4K 影片</a>
+</p>
+
+https://github.com/user-attachments/assets/10b12e6d-1612-415f-8016-2fc035398837
+
+<details>
+<summary>关于演示</summary>
+
+影片结合 Harness 机制动画与历史 NorthCUA / BrickLink Studio 录屏，JEV 决策环节为机制示意。
+交互 3D 展示复用装配重建与已记录的仿真结果，不是实时 JEV 评测。
+
+</details>
+
+## OSWorld 2.1 集群测评
 
 在 OSWorld 2.1 上用上游 CUA harness 跑 agent 测评，通过内部集群的 `rjob` 提交任务。
 本分支是**测评工程分支**，与 `main`（JevDuo harness 本体）相互独立，不 merge、不 rebase。
