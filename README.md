@@ -8,7 +8,7 @@
   <a href="https://xxxyxun.github.io/jevduo/downloads/JevDuo-v15-4K.mp4">下载 4K 影片</a>
 </p>
 
-https://github.com/user-attachments/assets/10b12e6d-1612-415f-8016-2fc035398837
+[![JevDuo 演示影片](https://xxxyxun.github.io/jevduo/assets/film-poster.jpg)](https://xxxyxun.github.io/jevduo/#film)
 
 <details>
 <summary>关于演示</summary>
