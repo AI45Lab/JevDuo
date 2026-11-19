@@ -10,9 +10,6 @@
   <a href="https://xxxyxun.github.io/jevduo/downloads/JevDuo-v15-4K.mp4">下载 4K 影片</a>
 </p>
 
-JevDuo 将慢模型的任务规划与 JEV 的局部决策结合，统一编排 GUI 与 CLI 执行。
-在明确的子目标内，JEV 根据新观察连续选择动作，让慢模型专注规划、核验与必要的恢复，而不是逐步下发操作指令。
-
 https://github.com/user-attachments/assets/10b12e6d-1612-415f-8016-2fc035398837
 
 ## OSWorld 2.1 集群测评
