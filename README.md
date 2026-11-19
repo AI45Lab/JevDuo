@@ -15,14 +15,6 @@ JevDuo 将慢模型的任务规划与 JEV 的局部决策结合，统一编排 G
 
 https://github.com/user-attachments/assets/10b12e6d-1612-415f-8016-2fc035398837
 
-<details>
-<summary>关于演示</summary>
-
-影片结合 Harness 机制动画与历史 NorthCUA / BrickLink Studio 录屏，JEV 决策环节为机制示意。
-交互 3D 展示复用装配重建与已记录的仿真结果，不是实时 JEV 评测。
-
-</details>
-
 ## OSWorld 2.1 集群测评
 
 在 OSWorld 2.1 上用上游 CUA harness 跑 agent 测评，通过内部集群的 `rjob` 提交任务。
