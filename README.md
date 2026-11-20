@@ -7,10 +7,10 @@
 <p align="center">
   <a href="https://xxxyxun.github.io/jevduo/">项目主页</a> ·
   <a href="https://xxxyxun.github.io/jevduo/#film">演示影片</a> ·
-  <a href="https://xxxyxun.github.io/jevduo/downloads/JevDuo-v15-4K.mp4">下载 4K 影片</a>
+  <a href="https://xxxyxun.github.io/jevduo/downloads/JevDuo-v16-4K.mp4">下载 4K 影片</a>
 </p>
 
-https://github.com/user-attachments/assets/10b12e6d-1612-415f-8016-2fc035398837
+https://github.com/user-attachments/assets/f48203cb-eb2b-496e-8020-83c1ffbf7838
 
 ## OSWorld 2.1 集群测评
 
