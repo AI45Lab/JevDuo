@@ -22,9 +22,24 @@ https://github.com/user-attachments/assets/f48203cb-eb2b-496e-8020-83c1ffbf7838
 切题 → 渲染 job spec → 并发提交 rjob → 起 VM → 跑 agent → 官方评分 → 落盘汇总。
 
 当前 `config.yaml` 开启 Slow 编排，由 Slow 选择 `gui_jev` 或 `general` 子代理并核验结果。
+`gui_jev` 的有限选择当前由 `k3.1-pro` 的 Chat Completions 接口完成，保留 Jev 的原始
+候选输入和回答格式；它独立复用 `models.apis.k3.1-pro`，不再要求 TypeSafe 凭据。
 编排与插件配置详见 [ORCHESTRATION.md](docs/ORCHESTRATION.md)。
 `gui_jev` 使用的原生桌面工具源码随仓库保存在 `jev_tools/agent-desktop/`，
 构建和部署方法见[使用仓库内的 agent-desktop](#使用仓库内的-agent-desktop)。
+
+## 获取测评代码
+
+这套测评工程和两份 `jev_tools/` 依赖位于 **`dev` 分支**。
+当前 GitHub 仓库的默认分支是 `master`，复现时请明确选择 `dev`：
+
+```bash
+git clone --branch dev https://github.com/k4ngzy/JevDuo.git
+cd JevDuo
+git branch --show-current
+```
+
+最后一条命令应输出 `dev`。两份工具已通过 subtree 收录，clone 后即可获得源码。
 
 ## 环境准备
 
@@ -64,8 +79,11 @@ uv pip install --python venv/bin/python --no-deps -e jev_tools/jev-desktop
 `rust-toolchain.toml` 和 `LICENSE` 一并保留。
 
 配套的 Python 运行库独立放在 `jev_tools/jev-desktop/`，同样以 subtree 收录。
-其中 17 个 Python 模块恢复自本批测评的源码快照，保留原有实现；包元数据、许可证和安装说明
-随包提供。它负责 Jev 决策循环和 CLI 传输，使用说明见 [Python 包 README](jev_tools/jev-desktop/README.md)。
+Python 运行库已于 2026-11-19 更新为 CLI 轨迹适配后的版本，包含有条件的剪贴板整字段替换、
+扩充的有限候选、显式文件参数绑定、动作后证据和完成核验。源码和测试均随仓库提供，
+不依赖原来的外部 checkout；包元数据和许可证保留。
+使用说明见 [Python 包 README](jev_tools/jev-desktop/README.md)，
+接入边界见 [本次适配说明](docs/JEV_CLI_ADAPTATION.md)。
 
 ### 构建 Linux CLI 和 helper
 

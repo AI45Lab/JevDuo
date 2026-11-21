@@ -72,7 +72,17 @@ class ChatTextModel:
             "stream": False,
             "messages": [
                 {"role": "system", "content": INSTRUCTIONS},
-                {"role": "user", "content": json.dumps(asdict(request), ensure_ascii=False)},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            key: value
+                            for key, value in asdict(request).items()
+                            if key != "reference_context" or value is not None
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
             ],
         }
         try:

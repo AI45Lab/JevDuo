@@ -111,7 +111,8 @@ def run_task(vm: Vm, spec: dict, task: dict, job_root: Path) -> dict:
 
 def run_job(spec: dict) -> dict:
     require_orchestration(spec["harness"])
-    for name in ("TYPESAFE_API_KEY", "TYPESAFE_MODEL", "TYPESAFE_BASE_URL"):
+    for name in ("TYPESAFE_API_KEY", "TYPESAFE_MODEL", "TYPESAFE_BASE_URL",
+                 "TYPESAFE_ALLOW_HTTP", "JEVDUO_JEV_CHAT_API_KEY"):
         if name in spec.get("subagent_env", {}):
             os.environ[name] = str(spec["subagent_env"][name])
     job_root = Path(spec["output_root"])
@@ -119,6 +120,7 @@ def run_job(spec: dict) -> dict:
     benchmark = spec["benchmark"]
     vm = Vm(task_root=benchmark["task_root"], vm_path=benchmark["vm"],
             run_root=job_root, asset_root=benchmark.get("asset_root") or None,
+            require_a11y_tree=bool(spec["harness"].get("observation", {}).get("a11y_enabled", False)),
             startup_wait_seconds=float(benchmark.get("startup_wait_seconds", 30)))
     evaluation_runtime.configure(spec, job_root)
     episodes: list[dict] = []

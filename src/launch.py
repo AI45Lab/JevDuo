@@ -37,7 +37,8 @@ def agent_env(api_key: str, *, direct_api: bool) -> dict[str, str]:
 
 def run_agent(*, query: str, session_id: str, app_config: Path, log_dir: Path,
               result_path: Path, stdout_path: Path, max_steps: int, timeout_seconds: float,
-              api_key: str, direct_api: bool, inactivity_seconds: float = 0) -> dict:
+              api_key: str, direct_api: bool, inactivity_seconds: float = 0,
+              extra_env: dict[str, str] | None = None) -> dict:
     """跑一题；超时终止整个进程组。返回 task_run 写的 JSON + returncode/timed_out。"""
     command = [
         str(AGENT_PYTHON), str(TASK_RUNNER),
@@ -48,9 +49,12 @@ def run_agent(*, query: str, session_id: str, app_config: Path, log_dir: Path,
     stdout_path.parent.mkdir(parents=True, exist_ok=True)
     timed_out = False
     stalled = False
+    environment = agent_env(api_key, direct_api=direct_api)
+    environment.pop("JEVDUO_USER_SIMULATOR_SPEC", None)
+    environment.update(extra_env or {})
     with stdout_path.open("w", encoding="utf-8") as log:
         process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,
-                                   env=agent_env(api_key, direct_api=direct_api),
+                                   env=environment,
                                    start_new_session=True)
         deadline = time.monotonic() + timeout_seconds
         started = time.time()

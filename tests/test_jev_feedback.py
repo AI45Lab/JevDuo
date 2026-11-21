@@ -12,6 +12,35 @@ from northcua.agents.desktop.subagents.jev_progress import repeated_blocker, unr
 
 
 class FeedbackTests(unittest.TestCase):
+    def test_latest_action_evidence_prefers_post_observation(self):
+        value = feedback([{
+            "turn": {"operation": "TYPE_TEXT", "ok": True, "changed": True,
+                     "verification_scope": "element_value", "application_commit": "not_verified"},
+            "screen": {"window_id": "w1", "visible_context": ["old"]},
+            "after_screen": {"window_id": "w1", "visible_context": ["new"]},
+        }, {"stop": "exception"}])
+        self.assertEqual(value["screen"]["visible_context"], ["new"])
+        self.assertEqual(value["turns"][0]["application_commit"], "not_verified")
+
+    def test_resource_uncertainty_blocks_rebound_indices_and_other_windows(self):
+        from jev_desktop import RunOptions
+        from jev_desktop.actions import extend_space
+        from jev_desktop.policy import action_space
+
+        value = feedback([{
+            "turn": {"operation": "OPEN_RESOURCE:0", "target": 'window "Document"',
+                     "ok": False, "delivery": "delivery_uncertain"},
+            "screen": {"window_id": "old-window"},
+        }, {"stop": "action_failed"}])
+        blocked = unreconciled_actions([{"subagent_result": {"summary": bounded_json(value)}}])
+        self.assertEqual(len(blocked), 16)
+        space = extend_space(
+            action_space([]), {"app": "Editor", "window_id": "new-window", "headed_text": True},
+            RunOptions(resources=("/tmp/other",), blocked_actions=blocked, reconcile_observed_popups=True),
+        )
+        self.assertNotIn("OPEN_RESOURCE:0", space["by_target"]["WINDOW"]["operations"])
+        self.assertIn("FOCUS_WINDOW", space["by_target"]["WINDOW"]["operations"])
+
     def test_execution_diagnostics_survive_large_screen_and_history_truncation(self):
         diagnostic = {
             "command": "snapshot",

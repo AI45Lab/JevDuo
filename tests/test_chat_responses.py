@@ -343,6 +343,25 @@ class EmptyResponseRecoveryTest(unittest.IsolatedAsyncioTestCase):
     def receipts(self):
         return list(read_records(self.fixture.store.root / "provider_responses.jsonl"))
 
+    async def test_child_usage_is_attributed_to_general_or_jev_text_with_original_cache_fields(self):
+        runtime = self.fixture.make_runtime([])
+        await runtime.session_runtime.hydrate()
+        ports = runtime.step_runtime.step_executor
+        response = completion("text reply")
+        response["usage"]["prompt_tokens_details"] = {"cached_tokens": 4}
+        ports.model = self.model([response, response])
+        context = SimpleNamespace(cursor=SimpleNamespace(
+            session_id="s", session_step=1, round_num=1, round_step=1), query="bounded task")
+        messages = [Message(role=Role.USER, content=[TextBlock(text="test")])]
+        for path in ("subagents/general/attempt-general", "subagents/gui_jev/attempt-text"):
+            await ports._infer_step(messages, lambda: None, context, path)
+        records = list(read_records(self.fixture.store.root / "model_usage.jsonl"))
+        responses = [r for r in records if r["event"] == "response"]
+        self.assertEqual([(r["agent_id"], r["purpose"]) for r in responses],
+                         [("general", "tools"), ("gui_jev", "text")])
+        self.assertEqual([r["tokens"]["cache_input_tokens"] for r in responses], [4, 4])
+        self.assertEqual([r["attempt_id"] for r in responses], ["attempt-general", "attempt-text"])
+
     async def test_reasoning_only_then_success_preserves_all_bodies_and_counts(self):
         result = await self.run_with([completion(reasoning="Peter ..."), self.success])
         self.assertEqual(result.status.value, "success")
@@ -359,6 +378,14 @@ class EmptyResponseRecoveryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trace["response"]["provider_response"], receipts[-1]["response"])
         self.assertEqual((self.fixture.store.root / "provider_responses.jsonl").stat().st_mode & 0o777, 0o600)
         self.assertEqual(self.fixture.device.calls, [])
+        usage = list(read_records(self.fixture.store.root / "model_usage.jsonl"))
+        requests = [row for row in usage if row["event"] == "request"]
+        responses = [row for row in usage if row["event"] == "response"]
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(len({row["call_id"] for row in requests}), 2)
+        self.assertTrue(all(row["agent_id"] == "slow" for row in usage))
+        self.assertEqual(sum(row["tokens"]["input_tokens"] for row in responses), 20)
+        self.assertTrue(all(row["tokens"]["cache_input_tokens"] is None for row in responses))
 
     async def test_pure_empty_and_whitespace_stop_at_three_despite_nexau_retries(self):
         result = await self.run_with([completion(), completion("  \n"), completion(reasoning="loop")])

@@ -389,6 +389,66 @@ class OrchestrationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.terminal_decision.reason.value, "configuration_error")
         self.assertEqual(self.device.calls, [])
 
+    async def test_contract_mismatch_is_corrected_before_any_dispatch(self):
+        agent = FakeSubagent(behavior="no_extra_inference")
+        self.factory.subagents.register(agent)
+        runtime = self.make_runtime([])
+        ports = runtime.step_runtime.step_executor
+        contracts = iter([
+            contract(required_capabilities=["text_input"]).model_dump(),
+            contract().model_dump(),
+            None,
+        ])
+        sent = []
+
+        async def infer(messages, charge, context, agent_path="orchestrator"):
+            charge()
+            current_contract = next(contracts)
+            sent.append((list(messages), len(self.device.calls)))
+            identity = ports.observation_ref()["observation_id"]
+            return json.dumps({"action": "CONTINUE" if current_contract else "SUCCESS",
+                               "summary": "scripted", "observation_id": identity,
+                               "verification": "current evidence", "evidence_refs": [identity],
+                               "contract": current_contract})
+
+        ports.infer = infer
+        result = await runtime.run(AgentRoundRuntimeSpec(
+            query="open the dialog", budget=AgentStepBudget(max_round_steps=4),
+            fallback_round_steps=4, begin_new_round=False))
+        self.assertEqual(result.status.value, "success")
+        self.assertEqual([count for _, count in sent], [0, 0, 1])
+        self.assertEqual(agent.calls, 1)
+        self.assertEqual(self.rounds.state.orchestration.usage.model_calls, 3)
+        retry = [r for r in read_records(self.store.query_dir() / "orchestration.jsonl")
+                 if r["event"] == "decision_validation_retry"]
+        self.assertEqual(len(retry), 1)
+        self.assertIn("subagent_capability_mismatch", retry[0]["detail"])
+        self.assertIn("subagent_capability_mismatch", sent[1][0][-1].content[0].text)
+
+    async def test_persistently_invalid_contract_stops_after_three_sends(self):
+        agent = FakeSubagent()
+        self.factory.subagents.register(agent)
+        runtime = self.make_runtime([])
+        ports = runtime.step_runtime.step_executor
+        sends = []
+
+        async def infer(messages, charge, context, agent_path="orchestrator"):
+            charge()
+            sends.append(1)
+            return json.dumps({"action": "CONTINUE", "summary": "scripted",
+                               "observation_id": ports.observation_ref()["observation_id"],
+                               "contract": contract(required_capabilities=["unavailable"]).model_dump()})
+
+        ports.infer = infer
+        result = await runtime.run(AgentRoundRuntimeSpec(
+            query="open the dialog", budget=AgentStepBudget(max_round_steps=4),
+            fallback_round_steps=4, begin_new_round=False))
+        self.assertEqual(result.status.value, "error")
+        self.assertEqual(len(sends), 3)
+        self.assertEqual(agent.calls, 0)
+        self.assertEqual(self.device.calls, [])
+        self.assertEqual(self.rounds.state.orchestration.usage.model_calls, 3)
+
     async def test_complete_cycle_uses_fresh_verification_and_single_persistence(self):
         agent = FakeSubagent()
         self.factory.subagents.register(agent)

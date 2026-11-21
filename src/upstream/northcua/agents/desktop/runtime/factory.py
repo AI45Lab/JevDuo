@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
 from typing import TYPE_CHECKING
 
 from northcua.agentkit.runtime import (
@@ -84,6 +85,11 @@ class DesktopRuntimeFactory:
                     raise
                 raise ValueError("gui_jev requires the optional jev-desktop package; see docs/ORCHESTRATION.md") from exc
             self.subagents.register(JevSubagent(service.app_config.orchestration.gui_jev, service.app_config.desktop))
+        user_spec = os.environ.get("JEVDUO_USER_SIMULATOR_SPEC")
+        if user_spec and not any(s["agent_id"] == "user" for s in self.subagents.descriptors()):
+            from ..subagents.benchmark_user import BenchmarkUser
+
+            self.subagents.register(BenchmarkUser.from_spec(user_spec))
         ports = DesktopOrchestrationPorts(
             service,
             self.artifact_store,

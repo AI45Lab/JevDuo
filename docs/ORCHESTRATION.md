@@ -135,6 +135,9 @@ RoundState 与原 SessionManager 保存编排状态，只有外层 Runtime 推�
 
 ## 接入 agent-desktop Jev
 
+Jev 默认保存独立逐步轨迹：候选输入、模型回答、完整动作/回执、AX 观察及归档截图。
+目录、配置、中断语义和查看方法见 [Jev 逐步轨迹](JEV_TRAJECTORIES.md)。
+
 `gui_jev` 直接导入仓库内 `jev_tools/jev-desktop/` 提供的 `jev-desktop` 包，复用 `JevLoop`、`AgentDesktop`、
 候选集、动作选择、文本写入前重新观察、值核验和资源清理。
 Python 包和 `jev_tools/agent-desktop/` 的 Rust CLI 分别以 subtree 收录。
@@ -158,6 +161,10 @@ Rust CLI 和 Linux helper 的构建、VM 安装及路径配置见
 ```yaml
 gui_jev:
   enabled: true
+  decision:
+    backend: chat_completions
+    model: k3.1-pro  # 本工程 models.apis 中的名称
+    max_tokens: 4096
   launch_args:
     google-chrome.desktop: [--force-renderer-accessibility]
   desktop:
@@ -177,7 +184,9 @@ gui_jev:
     stalled_turns: 3
 ```
 
-直接使用 NorthCUA app YAML 时，该段在 `orchestration.gui_jev` 下。
+直接使用 NorthCUA app YAML 时，该段在 `orchestration.gui_jev` 下；没有本工程的
+`models.apis` 解析步骤，因此 Chat 模式还必须显式提供 `decision.base_url`、实际 API
+模型名，以及只引用环境变量名的 `decision.api_key_env`。不要把 key 写进 app YAML。
 `desktop` 使用原 `DesktopConfig.from_env(remote=True, overrides=...)`；
 显式配置覆盖 `AGENT_DESKTOP_BIN`、`AGENT_DESKTOP_SNAPSHOT_TIMEOUT_MS`、
 `AGENT_DESKTOP_SESSION`、`AGENT_DESKTOP_AGENT_ID`、`JEV_VERIFY_MS`。
@@ -210,15 +219,36 @@ JevLoop，不额外要求前置焦点确认；语义动作按其能力执行，�
 `headed: true` 显式允许原包的物理文本替换：对于可读、可编辑但缺少 SetValue 的字段，
 先确认窗口和焦点、证明全选范围，再键入并核验完整值。支持 SetValue 的字段继续使用
 语义写入。只读、密码、隐藏字段和含控制字符的目标文本会拒绝；无法证明完整选区时
-也会停止（包括部分已有 emoji 内容）。没有剪贴板或粘贴回退，不自动重放未知投递结果。
+也会停止。当前 JevDuo 默认启用有条件的剪贴板整字段替换：仅原生明确返回
+not_delivered/safe 的特定拒绝后，重新证明目标、焦点及完整原选区，再粘贴一次并 AX
+精确读回。读回只证明字段值，保存/提交仍需核验。不自动重放未知投递结果；
+完整条件见 [CLI 适配说明](JEV_CLI_ADAPTATION.md)。
 
-目标/动作选择继续使用 `TYPESAFE_MODEL`（默认 `jev-latest`）、`TYPESAFE_BASE_URL` 和
-`TYPESAFE_API_KEY`。这些环境变量需提供给实际运行 agent 的进程；集群 driver 的环境
-不会自动成为远端 worker 的环境。不要把 key 写进 app YAML。文本生成只调用当前
-NorthCUA 的 Slow 模型及其凭据，不读取 `TEXT_MODEL_*`。显式 text 优先，耗尽后才生成。
+本工程当前使用 `decision.backend: chat_completions`。`decision.model: k3.1-pro`
+由 driver 独立解析为 `models.apis.k3.1-pro` 的地址、实际模型名、凭据和请求设置；
+即使 `--model` 切换主 Slow，这个选择器仍使用 k3.1-pro。driver 将其 key 写入权限为
+600 的私有 spec，worker 通过专用 `JEVDUO_JEV_CHAT_API_KEY` 环境变量传给 agent；
+公开 spec 副本打码，生成的 app YAML 只含环境变量名。网关地址保持配置原值。
 
-为支持异步预算和取消，Jev HTTP 调用由薄适配器发送，沿用 TypeSafeModel 的配置解析、
-请求体、回答结构以及 429/503/529 的有限退避规则；每次 HTTP 尝试单独计入 model_calls。
+原始 Jev 请求中的 state、questions、候选和历史原样作为 Chat user message；新增 system
+message 只规定回答协议。模型必须返回原 `answers` 对象，choice 包含 type、choice、
+confidence、probabilities，noul 回答包含 type 和 noul。所有标签须来自本次候选，
+概率必须有效且归一化。不补造 one-hot 概率；confidence/probabilities 是 Chat 模型自报
+估计，不能解释为原 Jev 服务的概率或已校准置信度。
+
+Chat 使用非流式 `/chat/completions` 和 JSON object 输出。截断、工具调用、空内容、
+Markdown 包裹、重复 JSON key、缺失问题或非法选项都会拒绝，当前决策不执行动作。
+`decision.max_tokens` 默认 4096，包含供应商计算的思考 token；其他超时、重试、
+reasoning_effort 和 direct_api 设置沿用对应模型条目，decision 中可覆盖。当前条目
+max_retries=0；每次实际 HTTP 尝试都计入共享模型预算，取消与截止时间仍生效。
+
+需要切回原服务时设置 `decision: {backend: typesafe}`。此时使用 `TYPESAFE_MODEL`
+（默认 `jev-latest`）、`TYPESAFE_BASE_URL`、`TYPESAFE_API_KEY`，保留原有配置与协议。
+省略 decision 的旧配置也继续走 TypeSafe。字段文本生成始终调用当前 NorthCUA 的 Slow
+模型及其凭据，不读取 `TEXT_MODEL_*`；显式 text 优先，耗尽后才生成。
+
+为支持异步预算和取消，两种 HTTP 后端均由薄适配器发送。TypeSafe 保留原有
+429/503/529 的有限退避规则；Chat 仅在配置重试额度内对这些状态退避。
 原 JevLoop 仍校验模型只能从提供的选项中选择，不新增置信度执行阈值。
 慢模型返回 JSON 中的 text 字段，避免通用响应规范化改变文本首尾空白。
 
@@ -304,6 +334,30 @@ harness:
 GUI 模式在模型工具面和执行端均拒绝 `run_command`；hybrid 也受合同工具白名单约束。
 主 Slow 继续进行语义规划和验收；支持的语义 GUI 操作优先交给 `gui_jev`，其他操作可作为
 有界子目标交给 general，不会在 Jev 失败时隐式重放其动作。
+
+### Slow 的路由优先级
+
+实际 system prompt 位于
+[`prompt/orchestration.py`](../src/upstream/northcua/agents/desktop/prompt/orchestration.py)，
+由 `DesktopOrchestrationPorts.project()` 拼接当前响应 schema 和预算策略后发送。
+两个插件的 `SubagentSpec.description` 通过 `available_subagents` 同时进入 Slow 的输入；
+本次一起扩写了 Jev 和 general 的能力、工具合同及限制，避免提示与执行器能力脱节。
+
+默认优先将支持的 GUI 工作交给 Jev：应用发现、菜单和设置、文档/表单字段、列表与
+AX 暴露的对象选择、支持的快捷键、标准打开/保存及确认流程。多行/中文输入、应用复杂、
+任务步骤较多，或父观察只有截图，都不构成直接跳到 general 的理由。AX 能力尚未知时，
+通常先给 Jev 一个可以发现界面并安全推进的有界目标；已知是无法表达的纯画布动作或
+命令任务，则可直接走合适的 general 子目标，不要求无意义的试错。
+
+混合任务按能力交接：general 处理明确需要截图坐标或命令的部分，完成后优先回到 Jev
+做后续支持的编辑、对话框和保存。比如 Jev 打开 Impress、选择幻灯片和进入格式对话框；
+general 仅处理无 AX 身份的画布手势；其余标准控件及保存再交回 Jev。合同需要说明
+具体缺口与交还条件。提高 Jev 承担的工作比例，不靠增加无效调用或反复重派相同失败。
+
+Jev 收到的是期望状态、准确内容和可核验条件，保持足够范围完成一组相关动作；默认保留
+导航与快捷键选项，不把它降为只能执行单击的工具。general 使用当前注册模式允许的
+工具，hybrid 的命令能力也按合同需要开放。路由偏好不放宽未知写入防重放、严格窗口
+身份、父观察核验或共享预算约束，也不增加新的阶段控制器。
 
 模型每轮必须返回一个原生 tool call；多调用响应不会执行其中任何动作，会为每个 call ID
 回放未执行说明。纯文本不会被当作代码解析。执行后回放真实的 stdout、stderr、退出码、

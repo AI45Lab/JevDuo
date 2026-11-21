@@ -21,6 +21,89 @@ archived_path, collect, render = exporter.archived_path, exporter.collect, expor
 
 
 class JevDuoExportTest(unittest.TestCase):
+    def durable_jev(self, *, finish=True):
+        from northcua.agents.desktop.subagents.jev_trajectory import JevTrajectory
+
+        contract = {**self.contract, "agent_id": "gui_jev"}
+        self.cycle2["orchestration"]["decision"]["contract"] = contract
+        self.rows(self.ep / "traj.jsonl", [self.cycle1, self.cycle2])
+        for event in self.events:
+            pending = (event.get("state") or {}).get("pending") or {}
+            if pending.get("attempt_id") == "a2":
+                pending["contract"] = contract
+        self.rows(self.trace, self.events)
+        trace = JevTrajectory(self.agent / "query_0001/subagents/gui_jev/a2", {
+            "attempt_id": "a2", "cycle_id": "c2", "agent_id": "gui_jev",
+        })
+        trace.record("attempt_started", {"request": {"contract": contract}})
+        trace.record("decision_requested", {"decision_id": "d1", "request": {
+            "questions": {"target": {"type": "choice", "criteria": {"1": "Body"}}},
+        }})
+        trace.record("model_response", {
+            "decision_id": "d1", "http_status": 200,
+            "response_body": '{"choices": [{"message": {"content": "choice 1"}}]}',
+        })
+        trace.record("decision_returned", {"decision_id": "d1", "result": {
+            "answers": {"target": {"choice": "1", "confidence": 0.8, "probabilities": {"1": 1}}},
+        }})
+        trace.record("action_started", {"action_id": "act1", "operation": "TYPE_TEXT",
+                                        "decision_ids": ["d1"], "arguments": {"text": "中文\nline"}})
+        for phase in ("before_action", "after_action") if finish else ("before_action",):
+            image = self.image.with_name(f"jev-{phase}.png")
+            image.write_bytes(self.image.read_bytes())
+            trace.record("screenshot", {
+                "action_id": "act1", "phase": phase, "policy_input": False,
+                "observation": {"screenshot_path": str(image), "observation_id": phase},
+            })
+        if finish:
+            trace.record("action_finished", {"action_id": "act1", "operation": "TYPE_TEXT",
+                                             "result": {"ok": True, "delivery": "delivered_verified"}})
+            trace.record("loop_event", {"action_id": "act1", "data": {"turn": {
+                "step": 1, "operation": "TYPE_TEXT", "target": 'textfield "Body"',
+            }}})
+        return trace
+
+    def test_durable_jev_choices_and_action_images_are_joined_by_ids(self):
+        self.durable_jev()
+        data = collect(self.root, self.root / "viewer.html")
+        entry = next(e for e in data["tasks"][0]["entries"] if e.get("cycle_id") == "c2")
+        evidence = entry["jev"]
+        criteria = evidence["decisions"][0]["request"]["questions"]["target"]["criteria"]
+        self.assertEqual(criteria, {"1": "Body"})
+        action = evidence["turns"][0]
+        self.assertEqual(action["arguments"]["text"], "中文\nline")
+        self.assertEqual(action["decisions"][0]["decision_id"], "d1")
+        self.assertEqual(action["execution_record"], "receipt_recorded")
+        shots = [f for f in entry["frames"] if f["label"].startswith("Jev ")]
+        self.assertEqual(len(shots), 2)
+        self.assertEqual(shots[0]["context"]["action_id"], "act1")
+
+    def test_durable_jev_survives_missing_outer_journal_and_incomplete_action(self):
+        self.durable_jev(finish=False)
+        self.trace.unlink()
+        data = collect(self.root, self.root / "viewer.html")
+        entry = next(e for e in data["tasks"][0]["entries"] if e.get("cycle_id") == "c2")
+        action = entry["jev"]["turns"][0]
+        self.assertEqual(action["execution_record"], "start_without_receipt")
+        self.assertNotIn("result", action)
+        self.assertTrue(any("未推断" in note for note in entry["jev"]["notes"]))
+
+    def test_durable_jev_torn_tail_keeps_prefix_but_conflicting_identity_does_not_join(self):
+        trace = self.durable_jev()
+        with trace.path.open("ab") as stream:
+            stream.write(b'{"torn":')
+        data = collect(self.root, self.root / "viewer.html")
+        entry = next(e for e in data["tasks"][0]["entries"] if e.get("cycle_id") == "c2")
+        self.assertEqual(len(entry["jev"]["turns"]), 1)
+        self.assertTrue(any("前缀" in note for note in entry["jev"]["notes"]))
+        rows = trace.path.read_text().splitlines()[:-1]
+        conflict = json.loads(rows[-1])
+        conflict["cycle_id"] = "other-cycle"
+        conflict["sequence"] += 1
+        trace.path.write_text("\n".join(rows) + "\n" + json.dumps(conflict) + "\n")
+        data = collect(self.root, self.root / "viewer.html")
+        self.assertTrue(any("身份/版本冲突" in warning for warning in data["tasks"][0]["warnings"]))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+from copy import deepcopy
 from pathlib import Path
 
 import yaml
@@ -98,11 +99,32 @@ def _is_base64(value: str) -> bool:
     return True
 
 
+def _jev_decision(config: dict, harness: dict) -> tuple[dict, dict]:
+    """Resolve an independent selector alias without putting its key in app YAML."""
+    harness = deepcopy(harness)
+    gui = harness.get("orchestration", {}).get("gui_jev", {})
+    decision = gui.get("decision", {})
+    if not gui.get("enabled") or decision.get("backend", "typesafe") != "chat_completions":
+        return harness, {}
+    _, api = select_model(config, decision.get("model"))
+    gui["decision"] = {
+        "timeout_seconds": float(api.get("timeout_seconds", 60)),
+        "max_retries": int(api.get("max_retries", 0)),
+        "reasoning_effort": api.get("reasoning_effort"),
+        "direct_api": bool(api.get("direct_api", False)),
+        **decision,
+        "model": api["model"],
+        "base_url": api["base_url"],
+        "api_key_env": "JEVDUO_JEV_CHAT_API_KEY",
+    }
+    return harness, {"JEVDUO_JEV_CHAT_API_KEY": _key(api)}
+
+
 def render_spec(config: dict, *, run_id: str, job_id: int, tasks: list[str],
                 api_name: str, api: dict, run_root: Path) -> dict:
     benchmark = config["benchmark"]
-    harness = config["harness"]
-    require_orchestration(harness)
+    require_orchestration(config["harness"])
+    harness, decision_env = _jev_decision(config, config["harness"])
     gitlab = ""
     token_file = benchmark.get("gitlab_token_file")
     if token_file and Path(token_file).is_file():
@@ -140,9 +162,10 @@ def render_spec(config: dict, *, run_id: str, job_id: int, tasks: list[str],
                 "llm_calls": bool(config["log"].get("llm_calls", True))},
         "secrets": {"gitlab_private_token": gitlab},
         "subagent_env": {name: os.environ[name] for name in (
-            "TYPESAFE_API_KEY", "TYPESAFE_MODEL", "TYPESAFE_BASE_URL",
+            "TYPESAFE_API_KEY", "TYPESAFE_MODEL", "TYPESAFE_BASE_URL", "TYPESAFE_ALLOW_HTTP",
         ) if name in os.environ},
     }
+    result["subagent_env"].update(decision_env)
     evaluator = config.get("evaluation_model")
     if evaluator:
         result["evaluation_model"] = {
@@ -174,8 +197,9 @@ def masked(spec: dict) -> dict:
         secrets["gitlab_private_token"] = "***"
     if (copy.get("evaluation_model") or {}).get("api_key"):
         copy["evaluation_model"]["api_key"] = "***"
-    if (copy.get("subagent_env") or {}).get("TYPESAFE_API_KEY"):
-        copy["subagent_env"]["TYPESAFE_API_KEY"] = "***"
+    for name in ("TYPESAFE_API_KEY", "JEVDUO_JEV_CHAT_API_KEY"):
+        if (copy.get("subagent_env") or {}).get(name):
+            copy["subagent_env"][name] = "***"
     return copy
 
 

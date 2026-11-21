@@ -10,6 +10,8 @@ from pathlib import Path
 
 from northcua.core.json_types import JsonObject
 
+from .token_usage import ModelUsageLedger
+
 _WRITE_LOCK = threading.Lock()
 
 
@@ -56,14 +58,29 @@ def _append_receipt(path: Path, record: JsonObject) -> None:
 class ChatResponseCapture:
     """Record each complete SDK body before permitting normalization or retry."""
 
-    def __init__(self, path: Path, metadata: JsonObject, attempt: int) -> None:
+    def __init__(self, path: Path, metadata: JsonObject, attempt: int, *, usage_metadata=None, usage_path=None) -> None:
         self.path, self.metadata, self.attempt = path, metadata, attempt
         self.last_response: JsonObject = {}
         self.responses = 0
+        self.usage = ModelUsageLedger(usage_path or path.with_name("model_usage.jsonl"), {
+            **metadata, **(usage_metadata or {}), "attempt": attempt,
+        })
+        self.call_id = None
+
+    def record_request(self, request) -> None:
+        try:
+            self.call_id = self.usage.start(
+                request.get("model"), response_ref=str(self.path),
+                input_scope="SDK Chat invocation; full input retained in llm_trace/provider_failures",
+            )
+        except Exception as error:
+            raise _ChatResponseAbort(RuntimeError("Model usage persistence failed before dispatch")) from error
 
     def record_failure(self, error: BaseException, trace_state: object | None) -> None:
         """Retain projected input and any real response, without inventing usage."""
         request = getattr(trace_state, "request_payload", None)
+        if self.call_id is not None:
+            self.usage.failure(self.call_id, error)
         _append_receipt(self.path.with_name("provider_failures.jsonl"), {
             **self.metadata, "at": time.time(), "attempt": self.attempt,
             "error_type": type(error).__name__,
@@ -86,10 +103,14 @@ class ChatResponseCapture:
                     "at": time.time(),
                     "attempt": self.attempt,
                     "response_index": self.responses,
+                    "call_id": self.call_id,
                     "finish_reason": reason,
                     "response": response,
                 },
             )
+            if self.call_id is not None:
+                self.usage.response(self.call_id, response, response_index=self.responses,
+                                    response_ref=str(self.path), finish_reason=reason)
         except Exception as exc:
             # Never let NexAU repeat an inference because saving its receipt failed.
             raise _ChatResponseAbort(RuntimeError(f"Provider response capture failed: {exc}")) from exc
