@@ -55,6 +55,8 @@ harness:
     retry_times: 3
     retry_interval_seconds: 3
   orchestration:
+    fast_router:
+      enabled: false
     min_subagent_steps: 30
     general:
       enabled: true

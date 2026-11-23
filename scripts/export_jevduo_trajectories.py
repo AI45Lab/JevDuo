@@ -450,8 +450,6 @@ def load_jev_trajectories(episode: Path, attempts: list[dict], warnings: list):
 
 
 def jev_evidence(summary, agent, attempts=()):
-    if agent != "gui_jev":
-        return None
     durable = [a["jev_trajectory"] for a in attempts if "jev_trajectory" in a]
     if durable:
         return {"turns": [turn for t in durable for turn in t["turns"]],
@@ -460,6 +458,8 @@ def jev_evidence(summary, agent, attempts=()):
                           "完整原始 HTTP 回复、AX 和 CLI 明细保存在 source 指向的 JSONL。",
                           *[note for t in durable for note in t["notes"]]],
                 "source": [t["source"] for t in durable]}
+    if agent != "gui_jev":
+        return None
     value = summary if isinstance(summary, dict) else {}
     notes = ["操作来自子代理返回摘要，不与脱敏的外层 CLI 事件按序强行配对；未记录逐动作 PNG 截图。"]
     if value.get("turns_truncated"):
@@ -591,6 +591,10 @@ def collect(root: Path, output: Path, embed=False, task_ids=(), model_observatio
                     used.add(i)
             decision = orchestration.get("decision") or {}
             summary = decoded(result.get("summary"))
+            agent_id = (decision.get("contract") or {}).get("agent_id")
+            for attempt in orchestration.get("attempts", []):
+                if attempt["result"].get("attempt_id") == result.get("attempt_id"):
+                    agent_id = attempt["contract"].get("agent_id")
             entries.append(
                 {
                     "number": record.get("session_step", record.get("step", position)),
@@ -607,7 +611,9 @@ def collect(root: Path, output: Path, embed=False, task_ids=(), model_observatio
                     "result": result,
                     "summary": summary,
                     "usage": orchestration.get("usage"),
-                    "jev": jev_evidence(summary, (decision.get("contract") or {}).get("agent_id"), matches),
+                    "jev": jev_evidence(summary, agent_id, matches),
+                    "routing": orchestration.get("routing", []),
+                    "attempt_results": orchestration.get("attempts", []),
                     "exit_reason": orchestration.get("exit_reason"),
                     "attempts": matches,
                     "frames": add_frames(episode, record, images, matches),

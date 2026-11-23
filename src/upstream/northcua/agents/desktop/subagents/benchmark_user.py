@@ -46,6 +46,7 @@ class BenchmarkUser:
             "or the bounded general fallback after receiving the answer."
         ),
         capabilities=("user_clarification",), required_tools=("ask_user",), input_model=Question,
+        bind_input=lambda intent: {"question": intent.user_question},
     )
 
     def __init__(self, simulator, model_client, model, log_dir):

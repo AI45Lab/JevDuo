@@ -95,6 +95,7 @@ class GeneralSubagent:
             ),
             capabilities=capabilities,
             required_tools=("execute_pyautogui_code",),
+            optional_tools=("wait_for_state", "run_command") if config.mode == "hybrid" else ("wait_for_state",),
         )
 
     async def run(self, request: SubagentRequest, runtime: SubagentRuntime) -> SubagentResult:
@@ -110,7 +111,9 @@ class GeneralSubagent:
             "You are the general desktop subagent. Complete only this bounded subgoal, respecting the "
             "original "
             "task, success criteria and constraints. Work in the current task VM, using the requested native "
-            "application when its final state matters. Use the supplied screenshots as visual evidence. "
+            "application when its final state matters. When intent is provided, honor its application and "
+            "preserve its supplied text exactly. The attempt limits are in contract.budget. "
+            "Use the supplied screenshots as visual evidence. "
             "Coordinates are absolute pixels of the ORIGINAL screenshot (see screen_size), regardless of any "
             "normalized-coordinate convention used by the parent. Return exactly ONE primary native tool "
             "call per turn: an action, take_screenshot, or finish_task. Only an empty take_screenshot "

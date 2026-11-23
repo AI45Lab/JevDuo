@@ -65,6 +65,7 @@
           <div class="block"><h3>Slow 对当前状态的判断</h3><div id="decision-summary" class="prose"></div><h3 class="result-label">验证依据</h3><div id="verification" class="prose"></div><h3 class="result-label">决策理由</h3><div id="decision-reason" class="prose"></div></div>
           <div class="block"><h3 id="contract-title">派发的子目标</h3><div id="goal" class="prose"></div><div id="contract-lists"></div></div>
           <details><summary>完整 Slow 决策与推理</summary><pre id="decision-json"></pre><pre id="reasoning"></pre></details>
+          <details id="routing-details"><summary>Fast Router 决策与能力分数</summary><pre id="routing-json"></pre></details>
         </div>
         <div id="panel-tools" role="tabpanel" hidden>
           <div id="jev-evidence" class="block" hidden><h3>Jev 动作与选择证据</h3><div id="jev-notes" class="warning"></div><select id="jev-turn" aria-label="选择 Jev 保留动作"></select><div class="row"><button id="prev-jev">← 上个动作</button><button id="next-jev">下个动作 →</button></div><pre id="jev-turn-detail"></pre><details id="jev-decisions"><summary>每次候选输入与模型回答</summary><select id="jev-decision" aria-label="选择 Jev 模型决策"></select><pre id="jev-decision-detail"></pre></details></div>
@@ -147,14 +148,15 @@ function showEntry(index,playing=false){
   $('entry-warning').textContent=s.warnings.concat(s.attempts.flatMap(a=>a.warnings)).join('\n');
   $('entry-source').textContent=s.source+(s.cycle_id?' · cycle_id='+s.cycle_id:'');
   $('decision-summary').textContent=s.text||d.summary||'未记录 Slow 判断';$('verification').textContent=d.verification||'未记录';$('decision-reason').textContent=d.reason||'未记录';
-  $('contract-title').textContent=c.agent_id?`${c.agent_id} · ${c.subgoal_id||'未记录子目标 ID'}`:'本周期没有派发子目标';
+  $('contract-title').textContent=c.goal?`${c.agent_id||'目标'} · ${c.subgoal_id||'未记录子目标 ID'}`:'本周期没有派发子目标';
   $('goal').textContent=c.goal||'';$('contract-lists').replaceChildren();
   for(const [key,label] of [['success_criteria','成功条件'],['constraints','约束']])if(c[key]?.length){const list=el('ul');for(const v of c[key])list.append(el('li',pretty(v)));$('contract-lists').append(el('h3',label,'result-label'),list);}
   $('decision-json').textContent=pretty(d);$('reasoning').textContent=s.reasoning||'未记录单独推理文本';
+  $('routing-details').hidden=!s.routing?.length;$('routing-json').textContent=pretty(s.routing);
   $('outcome').textContent=s.result?.outcome?`${s.result.outcome} · ${s.result.exit_reason||''}`:'未记录子代理返回';
   $('result-summary').textContent=pretty(s.summary);
   $('next-verification').textContent=s.next_verification||'没有同阶段的下一周期验证记录；请结合终止判断和官方评测查看。';
-  $('result-json').textContent=pretty({subagent_result:s.result,usage:s.usage,exit_reason:s.exit_reason,terminal_decision:s.terminal});
+  $('result-json').textContent=pretty({subagent_result:s.result,attempt_results:s.attempt_results,usage:s.usage,exit_reason:s.exit_reason,terminal_decision:s.terminal});
   actions=s.attempts.flatMap(a=>a.actions.map(x=>({...x,attempt:a.id,agent:a.contract?.agent_id})));actionIndex=0;
   $('attempt-summary').textContent=s.attempts.length?s.attempts.map(a=>`${a.contract?.agent_id||'未知代理'} · attempt=${a.id||'缺失 ID'} · ${a.actions.length} 条工具记录`).join('\n'):'此记录没有关联的工具 trace。终止周期可能没有派发；缺失情况请看提示。';
   $('tab-tools').textContent=`工具执行 (${actions.length})`;
