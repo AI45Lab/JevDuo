@@ -11,6 +11,8 @@ execution:
   max_agent_iterations_per_round: 30
   enable_langfuse_tracer: false
 orchestration:
+  fast_router:
+    enabled: false
   max_cycles: 20
   max_seconds: 600
   max_model_calls: 100

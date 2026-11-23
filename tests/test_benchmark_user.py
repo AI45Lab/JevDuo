@@ -10,8 +10,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
+from northcua.agentkit.orchestration.contracts import SubgoalIntent
 from northcua.agentkit.orchestration.runtime import read_records
 from northcua.agents.desktop.subagents.benchmark_user import BenchmarkUser
+from northcua.core.config_base import FastRouterConfig
 from openai import APIStatusError, OpenAI
 
 from tests import test_orchestration as fixtures
@@ -99,6 +101,37 @@ class UserServiceTest(unittest.IsolatedAsyncioTestCase):
         raw_log = (self.agent.log_dir / "user_simulator_responses.jsonl").read_text()
         self.assertNotIn("private-test-key", raw_log)
         self.assertEqual(len(list(read_records(self.agent.log_dir / "conversation.jsonl"))), 2)
+
+    async def test_fast_router_dispatches_explicit_clarification_without_a_routing_model_call(self):
+        config = self.fixture.config.orchestration
+        config.fast_router = FastRouterConfig(enabled=True, verification_reserve_seconds=0)
+        config.max_model_calls = 2
+        self.fixture.factory.subagents.register(self.agent)
+        question = "Which certificate should I use?"
+        intent = SubgoalIntent(
+            subgoal_id="clarify-certificate", goal="Identify the correct certificate",
+            success_criteria=["The user identifies the certificate"],
+            budget={"max_model_calls": 0, "max_tool_calls": 1, "max_seconds": 10},
+            user_question=question,
+        )
+        with patch("northcua.agents.desktop.runtime.fast_router.DecisionClient.from_env") as router:
+            result = await self.fixture.run_script([
+                {"action": "CONTINUE", "contract": intent.model_dump()}, {"action": "SUCCESS"},
+            ])
+
+        self.assertEqual(result.status.value, "success")
+        router.assert_not_called()
+        self.assertEqual(self.fixture.device.calls, [])
+        self.assertEqual(self.fixture.rounds.state.orchestration.usage.model_calls, 2)
+        self.assertEqual(self.fixture.rounds.state.orchestration.usage.tool_calls, 1)
+        self.assertEqual(len(self.bodies), 1)
+        self.assertEqual(self.bodies[0]["messages"][-1]["content"], question)
+        cycle = result.steps[0].orchestration
+        self.assertEqual(cycle.routing[0].reason, "user_clarification")
+        self.assertEqual(cycle.attempts[0].contract.allowed_tools, ["ask_user"])
+        self.assertTrue(self.fixture.model.contexts[0]["can_ask_user"])
+        answer = self.fixture.model.contexts[1]["previous_result"]["summary"]["answer"]
+        self.assertIn("updated certificate", answer)
 
     async def test_user_api_failure_is_logged_without_fabricated_reply_or_retry(self):
         self.failure = True

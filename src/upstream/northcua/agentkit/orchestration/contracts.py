@@ -40,6 +40,17 @@ class SubgoalContract(ContractModel):
     agent_input: JsonObject = Field(default_factory=dict)
 
 
+class SubgoalIntent(ContractModel):
+    subgoal_id: str = Field(min_length=1)
+    goal: str = Field(min_length=1)
+    success_criteria: list[str] = Field(min_length=1)
+    constraints: list[str] = Field(default_factory=list)
+    budget: SubgoalBudget
+    application: str | None = None
+    text: list[str] | None = None
+    user_question: str | None = Field(default=None, min_length=1, max_length=16000, pattern=r"\S")
+
+
 class Note(ContractModel):
     key: str = Field(min_length=1)
     text: str = Field(min_length=1)
@@ -78,6 +89,32 @@ class SlowDecision(ContractModel):
         return self
 
 
+class PlanningDecision(SlowDecision):
+    contract: SubgoalIntent | None = None
+
+
+class RouteDecision(ContractModel):
+    observation_id: str
+    action: Literal["dispatch", "return_to_slow"]
+    agent_id: str | None = None
+    reason: str
+    signals: JsonObject = Field(default_factory=dict)
+
+
+class SubgoalAttempt(ContractModel):
+    contract: SubgoalContract
+    result: SubagentResult
+
+
+class RoutingState(ContractModel):
+    cycle_id: str
+    decision: PlanningDecision
+    started_at: float
+    usage_start: Usage
+    attempts: list[SubgoalAttempt] = Field(default_factory=list)
+    decisions: list[RouteDecision] = Field(default_factory=list)
+
+
 class SubagentRequest(ContractModel):
     session_id: str
     round_num: int
@@ -87,17 +124,21 @@ class SubagentRequest(ContractModel):
     observation: JsonObject
     notes: list[dict[str, str]] = Field(default_factory=list)
     history: list[JsonObject] = Field(default_factory=list)
+    prior_attempts: list[SubgoalAttempt] = Field(default_factory=list)
+    intent: SubgoalIntent | None = None
 
 
 class CycleRecord(ContractModel):
     cycle_id: str
     synthetic: bool = False
     observation_id: str = ""
-    decision: SlowDecision | None = None
-    final_verification: SlowDecision | None = None
+    decision: SlowDecision | PlanningDecision | None = None
+    final_verification: SlowDecision | PlanningDecision | None = None
     subagent_result: SubagentResult | None = None
     usage: Usage = Field(default_factory=Usage)
     exit_reason: str = ""
+    attempts: list[SubgoalAttempt] = Field(default_factory=list)
+    routing: list[RouteDecision] = Field(default_factory=list)
 
 
 class OrchestrationState(ContractModel):
@@ -111,6 +152,7 @@ class OrchestrationState(ContractModel):
     interrupted_cycles: dict[int, list[CycleRecord]] = Field(default_factory=dict)
     attempted_subgoals: list[str] = Field(default_factory=list)
     terminal: bool = False
+    routing: RoutingState | None = None
 
 
 class SlowContext(ContractModel):
@@ -150,6 +192,8 @@ class SubagentSpec:
     required_tools: tuple[str, ...] = ()
     input_model: type[BaseModel] = ContractModel
     protocol_version: int = 1
+    optional_tools: tuple[str, ...] = ()
+    bind_input: Callable[[SubgoalIntent], JsonObject] = lambda _intent: {}
 
     def descriptor(self) -> JsonObject:
         return {
@@ -186,6 +230,9 @@ class SubagentRegistry:
 
     def descriptors(self) -> list[JsonObject]:
         return [agent.spec.descriptor() for agent in self._agents.values()]
+
+    def specs(self) -> list[SubagentSpec]:
+        return [agent.spec for agent in self._agents.values()]
 
     def resolve(self, contract: SubgoalContract) -> Subagent:
         if contract.agent_id not in self._agents:

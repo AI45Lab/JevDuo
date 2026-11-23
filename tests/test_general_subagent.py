@@ -18,7 +18,7 @@ from nexau.archs.main_sub.execution.hooks import AfterModelHookInput, BeforeMode
 from nexau.archs.main_sub.execution.model_response import ModelResponse, ModelToolCall
 from nexau.core.messages import ImageBlock, Message, Role, ToolResultBlock, ToolUseBlock
 from northcua.agentinfra.providers.provider_payloads import build_provider_request_payload
-from northcua.agentkit.orchestration.contracts import OrchestrationState, SubagentRequest, SubagentResult
+from northcua.agentkit.orchestration.contracts import OrchestrationState, SubagentRequest, SubagentResult, SubgoalIntent
 from northcua.agentkit.orchestration.runtime import Journal, RunBudget, ScopedRuntime
 from northcua.agents.desktop.runtime.contracts import DesktopRuntimeOptions
 from northcua.agents.desktop.subagents.general import GeneralSubagent, active_screenshots, observation_message
@@ -102,6 +102,19 @@ class GeneralSubagentTest(unittest.IsolatedAsyncioTestCase):
         )
         self.addAsyncCleanup(runtime.close)
         return runtime
+
+    async def test_prompt_contains_exact_planner_text_and_application(self):
+        self.request.intent = SubgoalIntent(
+            subgoal_id="planned", goal="Transcribe a value", success_criteria=["The text is visible"],
+            budget=self.request.contract.budget, application="LibreOffice Writer", text=["  中文\ntext  "],
+        )
+        runtime = self.runtime([tool("finish_task", {"status": "success", "answer": "transcribed"})])
+
+        await self.agent.run(self.request, runtime)
+
+        payload = json.loads(self.prompts[0][1].content[0].text)
+        self.assertEqual(payload["intent"], self.request.intent.model_dump())
+        self.assertEqual(payload["contract"]["agent_input"], {})
 
     async def test_gui_and_shell_replay_real_results_with_correlated_ids_and_images(self):
         runtime = self.runtime(

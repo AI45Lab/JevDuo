@@ -36,9 +36,13 @@ from northcua.agentkit.orchestration.contracts import (
     SubagentRegistry,
     SubagentRequest,
     SubagentResult,
+    SubagentSpec,
     Usage,
+    PlanningDecision,
+    SubgoalAttempt,
 )
 from northcua.agentkit.orchestration.conversation import Conversation, event_message
+from northcua.agentkit.orchestration.routing import execution_history
 from northcua.agentkit.orchestration.runtime import (
     BudgetExceeded,
     Journal,
@@ -162,6 +166,7 @@ class DesktopOrchestrationPorts:
         )
         self.observation = None
         self.cycle_id = ""
+        self.router_client = None
         self._slow_conversations: dict[Path, Conversation] = {}
 
     def _slow_conversation(self) -> Conversation:
@@ -228,8 +233,9 @@ class DesktopOrchestrationPorts:
         # A previous attempt may have changed the environment before interruption.
         # Observe again before the Slow model considers any further dispatch.
         self.observation = await self.capture(context)
-        if self.state.pending is not None:
-            pending = self.state.pending
+        pending = self.state.pending
+        routing = self.state.routing
+        if pending is not None:
             previous = self.state.previous_result
             if not (
                 previous is not None and previous.attempt_id == pending.attempt_id
@@ -244,9 +250,29 @@ class DesktopOrchestrationPorts:
                     trace_ref=str(self.journal.path),
                     usage=self.state.pending_usage.model_copy(),
                 )
+            if routing is not None and all(a.result.attempt_id != pending.attempt_id for a in routing.attempts):
+                routing.attempts.append(SubgoalAttempt(contract=pending.contract, result=self.state.previous_result))
             self.state.pending = None
             self.state.pending_usage = Usage()
             self.journal.write("dispatch_interrupted", self.state)
+        if routing is not None:
+            committed = any(
+                step.orchestration and step.orchestration.cycle_id == routing.cycle_id
+                for step in self.coordinator.state.step_logs
+            )
+            if not committed:
+                interrupted = CycleRecord(
+                    cycle_id=routing.cycle_id, synthetic=True, decision=routing.decision,
+                    observation_id=routing.decision.observation_id,
+                    subagent_result=routing.attempts[-1].result if routing.attempts else None,
+                    attempts=routing.attempts, routing=routing.decisions,
+                    usage=self.state.usage.model_copy(), exit_reason="interrupted",
+                )
+                previous = self.state.interrupted_cycles.setdefault(context.cursor.session_step, [])
+                previous[:] = [cycle for cycle in previous if cycle.cycle_id != routing.cycle_id]
+                previous.append(interrupted)
+            self.state.routing = None
+            self.journal.write("routing_recovered", self.state)
         return self.observation
 
     async def capture(self, context):
@@ -307,6 +333,10 @@ class DesktopOrchestrationPorts:
 
     def project(self, context, final_cycle=None):
         assert self.observation is not None
+        if self.budget.config.fast_router.enabled:
+            from .planning import planning_messages
+
+            return planning_messages(self, context, final_cycle=final_cycle)
         system = SLOW_ROUTER_PROMPT + "\nSchema: " + json.dumps(SlowDecision.model_json_schema())
         system += (
             " Context is an append-only task conversation. Historical observations, budgets and notes "
@@ -372,6 +402,13 @@ class DesktopOrchestrationPorts:
             user_message.content.append(ImageBlock(url=image))
         conversation.append(user_message, event_id=f"observation:{payload['observation']['observation_id']}")
         return conversation.snapshot()
+
+    def clarification_spec(self) -> SubagentSpec | None:
+        allowed = self.budget.config.fast_router.allowed_tools
+        return next((
+            spec for spec in self.registry.specs()
+            if spec.agent_id == "user" and (allowed is None or set(spec.required_tools).issubset(allowed))
+        ), None)
 
     async def _infer_step(self, messages, charge, context, agent_path, tool_definitions=None):
         inference_id = uuid4().hex
@@ -490,16 +527,23 @@ class DesktopOrchestrationPorts:
 
     async def run_model_step(self, context):
         messages = list(context.prompt)
-        conversation = self._slow_conversation()
+        planning = self.budget.config.fast_router.enabled
+        conversation = None if planning else self._slow_conversation()
+        decision_type = PlanningDecision if planning else SlowDecision
         current = self.observation_ref()
         for attempt in range(3):
             response = await self.infer(messages, lambda: self.budget.charge("model_calls"), context)
-            conversation.append(Message(role=Role.ASSISTANT, content=[TextBlock(text=response)]))
+            reply = Message(role=Role.ASSISTANT, content=[TextBlock(text=response)])
+            if conversation is not None:
+                conversation.append(reply)
             try:
-                decision = SlowDecision.model_validate_json(response)
+                decision = decision_type.model_validate_json(response)
                 if decision.observation_id != current["observation_id"]:
                     raise ValueError("Slow decision references a stale observation")
-                if decision.action == "CONTINUE" and decision.contract.agent_id in {
+                if (isinstance(decision, PlanningDecision) and decision.contract is not None
+                        and decision.contract.user_question is not None and self.clarification_spec() is None):
+                    raise ValueError("user_clarification_unavailable")
+                if not planning and decision.action == "CONTINUE" and decision.contract.agent_id in {
                     spec["agent_id"] for spec in self.registry.descriptors()
                 }:
                     # A model-authored capability/tool/input mismatch is a rejected
@@ -526,25 +570,23 @@ class DesktopOrchestrationPorts:
                 )
                 self.journal.write("decision_validation_retry", self.state,
                                    cycle_id=self.cycle_id, attempt=attempt + 1, detail=detail)
-                conversation.append(
-                    Message(
-                        role=Role.USER,
-                        content=[
-                            TextBlock(
-                                text=(
-                                    "Your decision was rejected before execution. Correct only the decision JSON "
-                                    "using the supplied schema; do not invent progress or dispatch any tool. "
-                                    f"Validation: {detail}. Current observation_id: {current['observation_id']}. "
-                                    "For SUCCESS include that exact ID in evidence_refs."
-                                )
-                            ),
-                        ],
-                    )
+                correction = Message(
+                    role=Role.USER,
+                    content=[TextBlock(text=(
+                        "Your decision was rejected before execution. Correct only the decision JSON "
+                        "using the supplied schema; do not invent progress or dispatch any tool. "
+                        f"Validation: {detail}. Current observation_id: {current['observation_id']}. "
+                        "For SUCCESS include that exact ID in evidence_refs."
+                    ))],
                 )
-                messages = conversation.snapshot()
+                if conversation is None:
+                    messages.extend([reply, correction])
+                else:
+                    conversation.append(correction)
+                    messages = conversation.snapshot()
         raise AssertionError("unreachable decision recovery state")
 
-    async def dispatch_tools(self, context, model_result) -> DispatchResult:
+    async def dispatch_tools(self, context, model_result, *, routed=False) -> DispatchResult:
         decision = model_result
         if decision.action == "SUCCESS":
             return DispatchResult(
@@ -568,6 +610,14 @@ class DesktopOrchestrationPorts:
                     final_answer=decision.summary,
                 )
             )
+        if isinstance(decision, PlanningDecision):
+            from .fast_router import run_subgoal
+
+            if context.metadata.get("step_budget", {}).get("remaining_round_steps", 2) <= 1 and (
+                self.budget.config.subagent_steps_per_cycle is None
+            ):
+                raise BudgetExceeded("verification_cycle_required")
+            return await run_subgoal(self, context, decision)
         contract = decision.contract
         try:
             agent = self.registry.resolve(contract)
@@ -589,10 +639,13 @@ class DesktopOrchestrationPorts:
         if contract.subgoal_id in self.state.attempted_subgoals:
             raise ValueError("subgoal_already_attempted; observe and use a new contract")
         minimum = self.budget.config.min_subagent_steps
-        contract.budget = contract.budget.model_copy(update={
-            "max_model_calls": fixed_steps or max(contract.budget.max_model_calls, minimum),
-            "max_tool_calls": fixed_steps or max(contract.budget.max_tool_calls, minimum),
-        })
+        if not routed:
+            contract.budget = contract.budget.model_copy(update={
+                "max_model_calls": fixed_steps or max(contract.budget.max_model_calls, minimum),
+                "max_tool_calls": fixed_steps or max(contract.budget.max_tool_calls, minimum),
+            })
+        routing = self.state.routing if routed else None
+        prior_attempts = list(routing.attempts) if routing is not None else []
         request = SubagentRequest(
             session_id=context.cursor.session_id,
             round_num=context.cursor.round_num,
@@ -601,9 +654,9 @@ class DesktopOrchestrationPorts:
             contract=contract,
             observation=self.observation_ref(),
             notes=self.memory.active_entries(context.cursor.round_num),
-            history=[
-                cycle.model_dump(mode="json") for cycle in self.cycle_history(context.cursor.round_num)
-            ],
+            history=execution_history(self.cycle_history(context.cursor.round_num), prior_attempts),
+            prior_attempts=prior_attempts,
+            intent=routing.decision.contract.model_copy(deep=True) if routing is not None else None,
         )
 
         async def observe():
@@ -731,7 +784,7 @@ class DesktopOrchestrationPorts:
 
         scoped = ScopedRuntime(
             request, self.budget, observe, execute, infer, cleanup,
-            reserve_model_calls=1, infer_tools=infer_tools,
+            reserve_model_calls=2 if routed else 1, infer_tools=infer_tools,
             trajectory=trajectory,
             model_usage=ModelUsageLedger(self.store.root / "model_usage.jsonl", {
                 "session_id": request.session_id, "round_num": request.round_num,
@@ -771,6 +824,10 @@ class DesktopOrchestrationPorts:
                 exit_reason=type(exc).__name__,
                 summary=str(exc),
             )
+            if routed and isinstance(exc, BudgetExceeded) and str(exc) in {
+                "subgoal_model_calls_limit", "subgoal_tool_calls_limit",
+            }:
+                result.outcome, result.exit_reason = "yielded", str(exc)
         finally:
             abandoned_operations = await scoped.close()
             if cancelled is not None:
@@ -781,11 +838,12 @@ class DesktopOrchestrationPorts:
                     partial.last_observation = scoped.last_observation
                     partial.trace_ref = str(self.journal.path)
                     self.state.previous_result = partial
-                    self.state.interrupted_cycles.setdefault(context.cursor.session_step, []).append(CycleRecord(
-                        cycle_id=self.cycle_id, synthetic=True, observation_id=decision.observation_id,
-                        decision=decision, subagent_result=partial, usage=self.state.usage.model_copy(),
-                        exit_reason="cancelled",
-                    ))
+                    if routing is None:
+                        self.state.interrupted_cycles.setdefault(context.cursor.session_step, []).append(CycleRecord(
+                            cycle_id=self.cycle_id, synthetic=True, observation_id=decision.observation_id,
+                            decision=decision, subagent_result=partial, usage=self.state.usage.model_copy(),
+                            exit_reason="cancelled",
+                        ))
                 with suppress(Exception):
                     self.journal.write("dispatch_cancelled", self.state, cycle_id=self.cycle_id)
         if abandoned_operations:
@@ -795,11 +853,20 @@ class DesktopOrchestrationPorts:
         result.trace_ref = str(self.journal.path)
         self.state.previous_result, self.state.pending = result, None
         self.state.pending_usage = Usage()
+        if routing is not None:
+            routing.attempts.append(SubgoalAttempt(contract=contract, result=result))
         self.journal.write("dispatch_finished", self.state, cycle_id=self.cycle_id)
-        if fixed_steps is not None and last_cycle:
+        if routing is not None:
+            return DispatchResult(AgentTerminalDecision.continue_(), result)
+        return await self.finish_dispatch(context, decision, result)
+
+    async def finish_dispatch(self, context, decision, result):
+        last_cycle = context.metadata.get("step_budget", {}).get("remaining_round_steps", 2) <= 1
+        if self.budget.config.subagent_steps_per_cycle is not None and last_cycle:
             # Verify within this transaction: twenty cycles can actually dispatch
             # twenty subgoals, without a hidden twenty-first action cycle.
             self.observation = await self.capture(context)
+            attempts = self.state.routing.attempts if isinstance(decision, PlanningDecision) else []
             messages = self.project(
                 context,
                 final_cycle=CycleRecord(
@@ -808,6 +875,7 @@ class DesktopOrchestrationPorts:
                     decision=decision,
                     subagent_result=result,
                     usage=self.state.usage.model_copy(),
+                    attempts=attempts,
                 ),
             )
             verification = await self.run_model_step(replace(context, prompt=messages))
@@ -826,6 +894,10 @@ class DesktopOrchestrationPorts:
 
     def build_result(self, context, decision, dispatched):
         terminal = dispatched.terminal
+        routing = self.state.routing
+        current_routing = routing is not None and routing.cycle_id == self.cycle_id
+        if decision is None and current_routing:
+            decision = routing.decision
         record = CycleRecord(
             cycle_id=self.cycle_id,
             observation_id=decision.observation_id if decision else self.observation_ref().get("observation_id", ""),
@@ -834,6 +906,8 @@ class DesktopOrchestrationPorts:
             subagent_result=dispatched.result,
             usage=self.state.usage.model_copy(),
             exit_reason=terminal.reason.value,
+            attempts=routing.attempts if current_routing else [],
+            routing=routing.decisions if current_routing else [],
         )
         snapshot = self.observation.snapshot if self.observation else self.coordinator.state.latest_snapshot
         return StepLogRecord(

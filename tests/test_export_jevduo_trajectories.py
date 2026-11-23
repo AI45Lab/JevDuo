@@ -231,6 +231,22 @@ class JevDuoExportTest(unittest.TestCase):
         self.rows(self.ep / "traj.jsonl", [self.cycle1, self.cycle2])
         self.assertEqual(self.load()["tasks"][0]["entries"][0]["next_verification"], "verification c2")
 
+    def test_fast_router_keeps_multiple_attempts_under_one_planned_goal(self):
+        cycle = self.cycle1["orchestration"]
+        cycle["decision"]["contract"] = {"subgoal_id": "goal", "goal": "Inspect file"}
+        cycle["attempts"] = [
+            {"contract": {**self.contract, "agent_id": agent}, "result": {"attempt_id": aid}}
+            for agent, aid in (("gui_jev", "a1"), ("general", "a2"))
+        ]
+        cycle["subagent_result"]["attempt_id"] = "a2"
+        cycle["routing"] = [{"agent_id": "gui_jev"}, {"agent_id": "general"}]
+        self.rows(self.ep / "traj.jsonl", [self.cycle1])
+        self.rows(self.trace, [self.dispatch("c1", "a1"), self.dispatch("c1", "a2")])
+        entry = self.load()["tasks"][0]["entries"][0]
+        self.assertEqual([a["id"] for a in entry["attempts"]], ["a1", "a2"])
+        self.assertEqual(entry["routing"], cycle["routing"])
+        self.assertEqual(entry["attempt_results"], cycle["attempts"])
+
     def test_conflicting_attempt_cycle_ids_do_not_override_cycle_identity(self):
         self.rows(self.trace, [self.dispatch("unknown-cycle", "a1"), self.start("a1", "x", {})])
         t = self.load()["tasks"][0]

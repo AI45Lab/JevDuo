@@ -20,7 +20,13 @@ from northcua.agentinfra.providers.token_usage import ModelUsageLedger
 pytest.importorskip("jev_desktop", reason="optional gui_jev integration requires agent-desktop/jev")
 
 from northcua.agentkit.orchestration.contracts import OrchestrationState, SubagentRequest
-from northcua.agentkit.orchestration.runtime import Journal, RunBudget, ScopedRuntime, read_records
+from northcua.agentkit.orchestration.runtime import (
+    BudgetExceeded,
+    Journal,
+    RunBudget,
+    ScopedRuntime,
+    read_records,
+)
 from northcua.agents.desktop.subagents import jev
 from northcua.agents.desktop.subagents.jev_trajectory import JevTrajectory, TrajectoryWriteError
 from northcua.core.config import DesktopPolicyConfig
@@ -233,6 +239,25 @@ class ScriptedHTTP:
 
 
 class JevTest(unittest.IsolatedAsyncioTestCase):
+    async def test_continuation_keeps_progress_and_does_not_reuse_consumed_text(self):
+        from northcua.agentkit.orchestration.contracts import SubagentResult, SubgoalAttempt
+
+        self.request.contract.agent_input["text"] = ["already inserted", "remaining value"]
+        self.request.prior_attempts = [SubgoalAttempt(
+            contract=self.request.contract.model_copy(deep=True),
+            result=SubagentResult(
+                subgoal_id="prior", attempt_id="prior", outcome="yielded", exit_reason="local_limit",
+                summary=json.dumps({
+                    "turns": [{"text_source": "supplied", "ok": True}], "turns_truncated": False,
+                }),
+            ),
+        )]
+        result = await self.agent.run(self.request, self.scoped)
+        self.assertEqual(result.outcome, "achieved")
+        self.assertEqual(self.http.value, "remaining value")
+        self.writer.assert_not_awaited()
+        self.assertIn("prior_progress", json.dumps(self.http.decisions[0]))
+
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -309,6 +334,36 @@ class JevTest(unittest.IsolatedAsyncioTestCase):
             GuiJevConfig(enabled=True, **config),
             DesktopPolicyConfig(backend="osworld", osworld={"vm_ip": "current-vm", "server_port": 5000}),
         )
+
+    async def test_router_probe_observes_controls_without_running_an_action(self):
+        evidence = await self.agent.routing_observation(self.agent.environment.execute)
+        self.assertEqual([c[0] for c in self.http.commands], ["snapshot"])
+        self.assertEqual(evidence["status"], "observed")
+        self.assertEqual(evidence["controls"][0]["name"], "Body")
+        self.assertEqual(evidence["controls"][0]["actions"], ["SetValue"])
+        self.assertEqual(self.http.decisions, [])
+
+    async def test_router_probe_does_not_offer_unaddressable_or_hidden_controls(self):
+        self.http.snapshot_tree = {"role": "window", "children": [
+            {"role": "button", "name": "Save", "ref_id": "a", "available_actions": ["Click"],
+             "ref_actionable": False},
+            {"role": "button", "name": "Delete", "ref_id": "b", "available_actions": ["Click"],
+             "states": ["hidden"]},
+        ]}
+        evidence = await self.agent.routing_observation(self.agent.environment.execute)
+        self.assertEqual(evidence["controls"], [])
+        self.assertEqual(evidence["actionable_count"], 0)
+
+    async def test_router_probe_keeps_form_controls_after_long_navigation(self):
+        self.http.snapshot_tree = {"role": "window", "children": [
+            {"role": "link", "name": f"Navigation {i}", "ref_id": str(i), "available_actions": ["Click"]}
+            for i in range(100)
+        ] + [{"role": "textfield", "name": "Message body", "ref_id": "body",
+              "available_actions": ["SetValue"]}]}
+        evidence = await self.agent.routing_observation(self.agent.environment.execute)
+        self.assertTrue(evidence["truncated"])
+        self.assertEqual(len(evidence["controls"]), 80)
+        self.assertEqual(evidence["controls"][-1]["name"], "Message body")
 
     def chat_agent(self, **config):
         decision = {"backend": "chat_completions", "base_url": "https://chat.example/v1", "model": "k3.1-pro"}
@@ -651,6 +706,15 @@ class JevTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("visible_context", summary["screen"])
         self.assertNotIn("private-old-value", result.summary)
 
+    async def test_repeated_unchanged_actions_are_blocked_not_a_budget_yield(self):
+        self.agent = self.make_agent(desktop={"headed": True})
+        self.http.clipboard = self.http.value
+        self.http.choices = iter(["WINDOW", "PRESS_KEY:return"] * 3)
+        result = await self.agent.run(self.request, self.scoped)
+        self.assertEqual(result.outcome, "blocked")
+        self.assertEqual(result.exit_reason, "stopped after 3 turns that changed nothing")
+        self.assertTrue(all(not turn["changed"] for turn in json.loads(result.summary)["turns"]))
+
     async def test_final_observation_failure_retains_completed_child_progress(self):
         with patch.object(self.scoped, "observe", side_effect=RuntimeError("capture failed")):
             with self.assertRaises(RuntimeError) as caught:
@@ -975,6 +1039,42 @@ class JevTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.exit_reason, "screen_changed_during_text_generation")
         self.assertFalse(any(c[0] == "set-value" for c in self.http.commands))
 
+    async def test_renewed_unaddressable_refs_do_not_cancel_text_for_an_unchanged_field(self):
+        self.http.snapshot_tree = {
+            "role": "window", "children": [
+                {"ref_id": "@s1:e1", "role": "textfield", "name": "Body", "available_actions": ["SetValue"],
+                 "value": "", "bounds": {"x": 1, "y": 2, "width": 10, "height": 20}},
+                {"ref_id": "@old:e2", "role": "button", "name": "Close", "ref_actionable": False,
+                 "ref_failure": "ambiguous_identity", "available_actions": ["Click"]},
+            ],
+        }
+
+        async def generate(prompt):
+            self.http.snapshot_tree["children"][1]["ref_id"] = "@new:e2"
+            return json.dumps({"text": "generated"})
+
+        self.writer.side_effect = generate
+        result = await self.agent.run(self.request, self.scoped)
+        self.assertEqual(result.outcome, "achieved")
+        self.assertEqual([c[0] for c in self.http.commands].count("set-value"), 1)
+
+    async def test_changed_unaddressable_content_still_invalidates_generated_text(self):
+        self.http.snapshot_tree = {
+            "role": "window", "children": [
+                {"ref_id": "@s1:e1", "role": "textfield", "name": "Body", "available_actions": ["SetValue"]},
+                {"ref_id": "@old:e2", "role": "statictext", "name": "Account Alex", "ref_actionable": False},
+            ],
+        }
+
+        async def generate(prompt):
+            self.http.snapshot_tree["children"][1]["name"] = "Account Blake"
+            return json.dumps({"text": "generated"})
+
+        self.writer.side_effect = generate
+        result = await self.agent.run(self.request, self.scoped)
+        self.assertEqual(result.exit_reason, "screen_changed_during_text_generation")
+        self.assertFalse(any(c[0] == "set-value" for c in self.http.commands))
+
     async def test_incomplete_writer_response_stops_before_write(self):
         self.writer.return_value = '{"text":"truncated'
         with self.assertRaises(RuntimeError):
@@ -1098,8 +1198,14 @@ class JevTest(unittest.IsolatedAsyncioTestCase):
     async def test_budget_exhaustion_after_cursor_enable_still_disables_overlay(self):
         self.agent = self.make_agent(options={"cursor": True, "text": ["supplied"]})
         self.request.contract.budget.max_tool_calls = 4
-        with self.assertRaisesRegex(RuntimeError, "subgoal_tool_calls_limit"):
+        with self.assertRaisesRegex(BudgetExceeded, "subgoal_tool_calls_limit") as raised:
             await self.agent.run(self.request, self.scoped)
+        self.assertEqual(raised.exception.subagent_result.exit_reason, "BudgetExceeded")
+        self.assertFalse(json.loads(raised.exception.subagent_result.summary)["unresolved_delivery"])
+        summary = json.loads(raised.exception.subagent_result.summary)
+        self.assertEqual(summary["stop"], "budget_exhausted")
+        self.assertIsNone(summary["blocked_reason"])
+        self.assertIsNone(summary["error"])
         self.assertEqual(self.http.commands[-1], ["cursor-overlay", "disable"])
         self.assertEqual(self.scoped.usage.tool_calls, 4)
         self.assertEqual(self.budget.state.usage.cleanup_tool_calls, 1)
@@ -1318,10 +1424,19 @@ class JevTest(unittest.IsolatedAsyncioTestCase):
     async def test_external_model_budget_and_retry_attempts_are_counted(self):
         self.http.statuses = [503]
         self.request.contract.budget.max_model_calls = 1
-        with self.assertRaisesRegex(RuntimeError, "subgoal_model_calls_limit"):
+        with self.assertRaisesRegex(BudgetExceeded, "subgoal_model_calls_limit"):
             await self.agent.run(self.request, self.scoped)
         self.assertEqual(len(self.http.decisions), 1)
         self.assertEqual(self.scoped.usage.model_calls, 1)
+
+    async def test_text_generation_budget_survives_nested_jev_error_wrappers(self):
+        self.request.contract.budget.max_model_calls = 2
+        with self.assertRaisesRegex(BudgetExceeded, "subgoal_model_calls_limit") as raised:
+            await self.agent.run(self.request, self.scoped)
+        self.writer.assert_not_awaited()
+        self.assertEqual(self.scoped.usage.model_calls, 2)
+        self.assertFalse(any(c[0] == "set-value" for c in self.http.commands))
+        self.assertFalse(json.loads(raised.exception.subagent_result.summary)["unresolved_delivery"])
 
     async def run_pipeline(self, *, max_model_calls=100, decisions=None, selector=None):
         harness = fixtures.OrchestrationTest()
