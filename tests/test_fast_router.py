@@ -28,6 +28,7 @@ from northcua.core.budget import AgentStepBudget
 from northcua.core.config_base import FastRouterConfig
 from pydantic import ValidationError
 
+from scripts import summarize_model_usage
 from tests import test_orchestration as fixtures
 
 
@@ -268,7 +269,7 @@ class ScriptedRouter:
         self.responses = iter(responses)
         self.requests = []
 
-    async def ask(self, request, call_model):
+    async def ask(self, request, call_model, *, model_usage=None):
         self.requests.append(request)
 
         async def reply():
@@ -356,7 +357,7 @@ class FastRoutingTest(unittest.IsolatedAsyncioTestCase):
         ]
         self.runtime = self.f.make_runtime(actions)
         self.ports = self.runtime.step_runtime.step_executor
-        self.router = self.ports.router_client = ScriptedRouter(responses)
+        self.router = self.ports.router_client = ScriptedRouter(responses) if responses is not None else None
         return await self.runtime.run(
             AgentRoundRuntimeSpec(
                 query="open the dialog",
@@ -385,6 +386,73 @@ class FastRoutingTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('"agent_id"', json.dumps(payload))
         self.assertEqual(cycle.routing[-1].reason, "subgoal_completion_claim")
         self.assertEqual(self.f.model.contexts[-1]["history"][0]["execution_status"], "achieved")
+
+    async def test_direct_general_dispatch_preserves_full_planner_intent(self):
+        general = RoutedAgent("general", ["achieved"])
+        self.register(general)
+        planned = intent(application="LibreOffice Writer", text=["  Exact value\n中文  "])
+
+        result = await self.run_plan([signals((0.95,))], planned=planned)
+
+        self.assertEqual(result.status.value, "success")
+        (request,) = general.requests
+        self.assertEqual(request.intent, planned)
+        self.assertEqual(request.contract.agent_input, {})
+
+    async def test_usage_report_counts_router_http_responses_and_transport_retries(self):
+        self.register(RoutedAgent("general", ["achieved"]))
+        statuses = iter([503, "timeout", 200])
+        real_client = httpx.AsyncClient
+        client = DecisionClient(
+            SimpleNamespace(
+                endpoint="https://router.test/v1/systemone",
+                api_key="private-fixture-key",
+                model="router-model",
+            )
+        )
+
+        def transport(request):
+            status = next(statuses)
+            if status == "timeout":
+                raise httpx.ReadTimeout("scripted timeout", request=request)
+            return httpx.Response(
+                status, json=signals((0.95,)) if status == 200 else {"error": "unavailable"}
+            )
+
+        with (
+            patch.object(DecisionClient, "from_env", return_value=client),
+            patch.object(
+                httpx,
+                "AsyncClient",
+                side_effect=lambda **kw: real_client(
+                    transport=httpx.MockTransport(transport),
+                    **kw,
+                ),
+            ),
+            patch("northcua.agentkit.orchestration.decisions.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            result = await self.run_plan(None)
+
+        self.assertEqual(result.status.value, "success")
+        calls, warnings = summarize_model_usage.collect(self.f.root)
+        self.assertEqual(warnings, [])
+        self.assertEqual([call["attempt"] for call in calls], [1, 2, 3])
+        self.assertEqual(
+            {(call["agent_id"], call["purpose"]) for call in calls}, {("fast_router", "routing")}
+        )
+        self.assertEqual([call["http_status"] for call in calls], [503, None, 200])
+        self.assertEqual([call["error_types"] for call in calls], [["HTTPStatusError"], ["ReadTimeout"], []])
+        self.assertEqual(len({call["call_id"] for call in calls}), 3)
+        self.assertEqual(
+            summarize_model_usage.aggregate(calls)["tokens"]["input_tokens"],
+            {
+                "reported_sum": 30,
+                "known_calls": 1,
+                "missing_calls": 2,
+                "complete": False,
+            },
+        )
+        self.assertNotIn("private-fixture-key", (self.f.store.root / "model_usage.jsonl").read_text())
 
     async def test_attempts_share_fixed_allowance_without_reapplying_floor(self):
         config = self.f.config.orchestration

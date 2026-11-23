@@ -6,6 +6,8 @@ import asyncio
 
 import httpx
 
+from northcua.agentinfra.providers.token_usage import ModelUsageLedger
+
 
 class DecisionClient:
     def __init__(self, config, *, timeout=30):
@@ -22,32 +24,47 @@ class DecisionClient:
             config.model = resolve_model(model, config.endpoint)
         return cls(config, timeout=timeout)
 
-    async def ask(self, request, call_model, *, post_model=None):
+    async def ask(self, request, call_model, *, post_model=None, model_usage: ModelUsageLedger | None = None):
         payload = {**request, "model": self.config.model}
 
         async def post():
-            if post_model is None:
-                async with httpx.AsyncClient(follow_redirects=False) as client:
-                    response = await client.post(
+            call_id = (
+                model_usage.start(self.config.model, backend="typesafe", attempt=attempt + 1)
+                if model_usage
+                else None
+            )
+            try:
+                if post_model is None:
+                    async with httpx.AsyncClient(follow_redirects=False) as client:
+                        response = await client.post(
+                            self.config.endpoint,
+                            headers={"Authorization": f"Bearer {self.config.api_key}"},
+                            json=payload,
+                            timeout=self.timeout,
+                        )
+                else:
+                    response = await post_model(
                         self.config.endpoint,
-                        headers={"Authorization": f"Bearer {self.config.api_key}"},
-                        json=payload,
+                        payload,
+                        api_key=self.config.api_key,
                         timeout=self.timeout,
+                        backend="typesafe",
+                        attempt=attempt + 1,
                     )
-            else:
-                response = await post_model(
-                    self.config.endpoint,
-                    payload,
-                    api_key=self.config.api_key,
-                    timeout=self.timeout,
-                    backend="typesafe",
-                    attempt=attempt + 1,
-                )
-            response.raise_for_status()
-            result = response.json()
-            if not isinstance(result, dict) or not isinstance(result.get("answers"), dict):
-                raise ValueError("invalid Jev response")
-            return result
+                try:
+                    result = response.json()
+                except ValueError:
+                    result = None
+                if model_usage is not None:
+                    model_usage.response(call_id, result, http_status=response.status_code)
+                response.raise_for_status()
+                if not isinstance(result, dict) or not isinstance(result.get("answers"), dict):
+                    raise ValueError("invalid Jev response")
+                return result
+            except BaseException as error:
+                if model_usage is not None:
+                    model_usage.failure(call_id, error)
+                raise
 
         for attempt in range(3):
             try:

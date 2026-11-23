@@ -25,8 +25,10 @@ fast_router:
 
 ## 执行与恢复
 
-- Slow 的目标合同只描述结果。框架校验插件输入，并按插件声明和可选的
-  `allowed_tools` 白名单绑定工具权限。
+- Slow 的目标意图随每次派发交给执行者，包括应用要求和精确文本。框架校验插件输入，
+  并按插件声明和可选的 `allowed_tools` 白名单绑定工具权限。
+- 已注册官方用户澄清服务且允许 `ask_user` 时，Slow 可以通过 `user_question` 提出一个
+  明确问题。框架直接派发这次澄清，并将回答交回 Slow。
 - Router 使用只读原生界面概况、最近的执行证据和剩余预算。截图留给 Slow 验收。
   优先执行者须达到能力阈值，并且与最高分的差距在 `preference_margin` 内。
   候选分数都低于阈值时，可尝试配置的 `fallback_agent`，默认为 `general`。
@@ -36,6 +38,7 @@ fast_router:
 - 局部额度耗尽时，执行者交回当前进展。发生阻塞时可以改派。完成声明、未确认投递、
   预算耗尽或路由服务故障会把控制权交回 Slow。恢复时先获取新观察，再核对中断前的尝试。
 
-`orchestration.jsonl` 记录 Router 决策、读取及模型用量。每个周期的 `attempts`
+`orchestration.jsonl` 记录 Router 决策和读取。`model_usage.jsonl` 以 `fast_router` 记录
+每次模型请求、响应和失败，包含重试。每个周期的 `attempts`
 包含各次执行合同和结果，`routing` 包含选择与分数，`subagent_result` 保留最后一次
 结果。可以用根 README 中的轨迹导出命令查看这些记录。

@@ -36,6 +36,7 @@ from northcua.agentkit.orchestration.contracts import (
     SubagentRegistry,
     SubagentRequest,
     SubagentResult,
+    SubagentSpec,
     Usage,
     PlanningDecision,
     SubgoalAttempt,
@@ -402,6 +403,13 @@ class DesktopOrchestrationPorts:
         conversation.append(user_message, event_id=f"observation:{payload['observation']['observation_id']}")
         return conversation.snapshot()
 
+    def clarification_spec(self) -> SubagentSpec | None:
+        allowed = self.budget.config.fast_router.allowed_tools
+        return next((
+            spec for spec in self.registry.specs()
+            if spec.agent_id == "user" and (allowed is None or set(spec.required_tools).issubset(allowed))
+        ), None)
+
     async def _infer_step(self, messages, charge, context, agent_path, tool_definitions=None):
         inference_id = uuid4().hex
         path_parts = agent_path.split("/")
@@ -532,6 +540,9 @@ class DesktopOrchestrationPorts:
                 decision = decision_type.model_validate_json(response)
                 if decision.observation_id != current["observation_id"]:
                     raise ValueError("Slow decision references a stale observation")
+                if (isinstance(decision, PlanningDecision) and decision.contract is not None
+                        and decision.contract.user_question is not None and self.clarification_spec() is None):
+                    raise ValueError("user_clarification_unavailable")
                 if not planning and decision.action == "CONTINUE" and decision.contract.agent_id in {
                     spec["agent_id"] for spec in self.registry.descriptors()
                 }:
@@ -645,6 +656,7 @@ class DesktopOrchestrationPorts:
             notes=self.memory.active_entries(context.cursor.round_num),
             history=execution_history(self.cycle_history(context.cursor.round_num), prior_attempts),
             prior_attempts=prior_attempts,
+            intent=routing.decision.contract.model_copy(deep=True) if routing is not None else None,
         )
 
         async def observe():

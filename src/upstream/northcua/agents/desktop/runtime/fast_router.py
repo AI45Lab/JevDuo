@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 
+from northcua.agentinfra.providers.token_usage import ModelUsageLedger
 from northcua.agentkit.orchestration.contracts import (
     RouteDecision,
     RoutingState,
@@ -84,6 +85,44 @@ async def run_subgoal(ports, context, decision):
             )
         )
 
+    async def dispatch(contract):
+        execution = SlowDecision.model_validate({**decision.model_dump(), "contract": contract.model_dump()})
+        return await ports.dispatch_tools(context, execution, routed=True)
+
+    async def finish(result):
+        ports.journal.write("goal_finished", ports.state)
+        return await ports.finish_dispatch(context, decision, result)
+
+    if intent.user_question is not None:
+        spec = ports.clarification_spec()
+        if spec is None:
+            raise ValueError("user_clarification_unavailable")
+        budget = remaining()
+        if budget.max_seconds <= 0.001 or budget.max_tool_calls < 1:
+            stop("goal_budget_exhausted")
+            return await finish(None)
+        contract = bind_contract(
+            intent,
+            spec,
+            config,
+            1,
+            SubgoalBudget(
+                max_model_calls=0,
+                max_tool_calls=1,
+                max_seconds=budget.max_seconds,
+            ),
+        )
+        record(
+            RouteDecision(
+                observation_id=ports.observation_ref()["observation_id"],
+                action="dispatch",
+                agent_id=spec.agent_id,
+                reason="user_clarification",
+            )
+        )
+        dispatched = await dispatch(contract)
+        return dispatched if dispatched.result is None else await finish(dispatched.result)
+
     while len(routing.attempts) < config.max_attempts:
         budget = remaining()
         if budget.max_seconds <= 0.001 or budget.max_model_calls < 2 or budget.max_tool_calls < 1:
@@ -98,6 +137,8 @@ async def run_subgoal(ports, context, decision):
         executors = {}
         candidates = []
         for spec in ports.registry.specs():
+            if spec.agent_id == "user":
+                continue
             try:
                 contract = bind_contract(intent, spec, config, len(routing.attempts) + 1, budget)
                 agent = ports.registry.resolve(contract)
@@ -165,6 +206,20 @@ async def run_subgoal(ports, context, decision):
                 ),
             },
         )
+        usage_ledger = ModelUsageLedger(
+            ports.store.root / "model_usage.jsonl",
+            {
+                "session_id": context.cursor.session_id,
+                "session_step": context.cursor.session_step,
+                "round_num": context.cursor.round_num,
+                "cycle_id": ports.cycle_id,
+                "subgoal_id": intent.subgoal_id,
+                "observation_id": observation["observation_id"],
+                "agent_id": "fast_router",
+                "purpose": "routing",
+                "response_ref": str(ports.journal.path),
+            },
+        )
 
         async def call_model(model, call, *, observation=observation, request=request):
             if remaining().max_model_calls == 0:
@@ -206,7 +261,7 @@ async def run_subgoal(ports, context, decision):
                     model=config.model, timeout=config.timeout_seconds
                 )
             async with asyncio.timeout(budget.max_seconds):
-                response = await ports.router_client.ask(request, call_model)
+                response = await ports.router_client.ask(request, call_model, model_usage=usage_ledger)
             route = choose(response, candidates, routing.attempts, observation["observation_id"], config)
         except BudgetExceeded:
             stop("goal_budget_exhausted")
@@ -227,8 +282,7 @@ async def run_subgoal(ports, context, decision):
             max_tool_calls=min(config.attempt_tool_calls, budget.max_tool_calls),
             max_seconds=budget.max_seconds,
         )
-        execution = SlowDecision.model_validate({**decision.model_dump(), "contract": contract.model_dump()})
-        dispatched = await ports.dispatch_tools(context, execution, routed=True)
+        dispatched = await dispatch(contract)
         if dispatched.result is None:
             return dispatched
         result = dispatched.result
@@ -243,5 +297,4 @@ async def run_subgoal(ports, context, decision):
             break
     else:
         stop("goal_attempt_limit")
-    ports.journal.write("goal_finished", ports.state)
-    return await ports.finish_dispatch(context, decision, result)
+    return await finish(result)

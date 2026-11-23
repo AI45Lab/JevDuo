@@ -33,6 +33,7 @@ def planning_messages(ports, context, *, final_cycle=None):
         "history": history,
         "notes": ports.memory.active_entries(context.cursor.round_num),
         "previous_result": result_evidence(ports.state.previous_result),
+        "can_ask_user": ports.clarification_spec() is not None,
         "usage": ports.state.usage.model_dump(),
         "seconds_left": ports.budget.seconds_left(),
         "budget": {
@@ -55,6 +56,9 @@ def planning_messages(ports, context, *, final_cycle=None):
         "avoid combining document research, reasoning and many unrelated UI changes into one goal. "
         "Carry verified facts and exact values forward in notes or the goal so execution can use them directly. "
         "Use application only when the task requires a particular application; provide exact text when known. "
+        "If can_ask_user is true and essential information only the user can supply is missing, set user_question "
+        "to one exact question in a separate goal. The resulting answer is evidence for the next goal. "
+        "Do not repeat a question already answered or request a question when can_ask_user is false. "
         "An execution completion claim alone does not establish success. SUCCESS requires current observation "
         "evidence and all user requirements to be met. A failed method does not establish that the task is impossible. "
         "Use new subgoal_id values for new goals. Do not repeat a blocked goal without new evidence or a meaningful "

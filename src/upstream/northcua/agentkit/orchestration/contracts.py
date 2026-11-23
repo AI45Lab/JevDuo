@@ -48,6 +48,7 @@ class SubgoalIntent(ContractModel):
     budget: SubgoalBudget
     application: str | None = None
     text: list[str] | None = None
+    user_question: str | None = Field(default=None, min_length=1, max_length=16000, pattern=r"\S")
 
 
 class Note(ContractModel):
@@ -124,6 +125,7 @@ class SubagentRequest(ContractModel):
     notes: list[dict[str, str]] = Field(default_factory=list)
     history: list[JsonObject] = Field(default_factory=list)
     prior_attempts: list[SubgoalAttempt] = Field(default_factory=list)
+    intent: SubgoalIntent | None = None
 
 
 class CycleRecord(ContractModel):
