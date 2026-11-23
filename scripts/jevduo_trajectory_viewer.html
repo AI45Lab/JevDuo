@@ -67,7 +67,7 @@
           <details><summary>完整 Slow 决策与推理</summary><pre id="decision-json"></pre><pre id="reasoning"></pre></details>
         </div>
         <div id="panel-tools" role="tabpanel" hidden>
-          <div id="jev-evidence" class="block" hidden><h3>Jev 保留动作（返回摘要）</h3><div id="jev-notes" class="warning"></div><select id="jev-turn" aria-label="选择 Jev 保留动作"></select><div class="row"><button id="prev-jev">← 上个动作</button><button id="next-jev">下个动作 →</button></div><pre id="jev-turn-detail"></pre></div>
+          <div id="jev-evidence" class="block" hidden><h3>Jev 动作与选择证据</h3><div id="jev-notes" class="warning"></div><select id="jev-turn" aria-label="选择 Jev 保留动作"></select><div class="row"><button id="prev-jev">← 上个动作</button><button id="next-jev">下个动作 →</button></div><pre id="jev-turn-detail"></pre><details id="jev-decisions"><summary>每次候选输入与模型回答</summary><select id="jev-decision" aria-label="选择 Jev 模型决策"></select><pre id="jev-decision-detail"></pre></details></div>
           <div id="attempt-summary" class="prose"></div>
           <div class="tools-bar"><select id="action" aria-label="选择工具调用"></select><button id="prev-action">← 上个调用</button><button id="next-action">下个调用 →</button><span id="action-status" class="pill"></span></div>
           <div id="action-warning" class="warning"></div>
@@ -160,6 +160,7 @@ function showEntry(index,playing=false){
   $('tab-tools').textContent=`工具执行 (${actions.length})`;
   const jev=s.jev;jevIndex=0;$('jev-evidence').hidden=!jev;$('jev-notes').textContent=jev?.notes.join('\n')||'';
   const jevSelect=$('jev-turn');jevSelect.replaceChildren();(jev?.turns||[]).forEach((turn,i)=>{const o=el('option',`${i+1}/${jev.turns.length} · 原始步号 ${turn.step??'?'} · ${turn.operation||'未知'} · ${turn.target||''}`);o.value=i;jevSelect.append(o);});jevSelect.disabled=!jev?.turns.length;showJev(0);
+  const jevDecisions=jev?.decisions||[];$('jev-decisions').hidden=!jevDecisions.length;const decisionSelect=$('jev-decision');decisionSelect.replaceChildren();jevDecisions.forEach((decision,i)=>{const names=Object.keys(decision.request?.questions||{}).join(', ');const o=el('option',`${i+1}/${jevDecisions.length} · ${names} · ${decision.decision_id}`);o.value=i;decisionSelect.append(o);});$('jev-decision-detail').textContent=jevDecisions.length?pretty(jevDecisions[0]):'';
   const opts=$('action');opts.replaceChildren();actions.forEach((a,i)=>{const o=el('option',`${i+1}. ${a.name} · ${a.status}`);o.value=i;opts.append(o);});opts.disabled=!actions.length;showAction(0);
   const frames=$('frame');frames.replaceChildren();s.frames.forEach((f,i)=>{const o=el('option',f.label);o.value=i;frames.append(o);});
   if(!s.frames.length){const o=el('option','此记录无截图');o.value=0;frames.append(o);}frames.disabled=!s.frames.length;
@@ -200,6 +201,7 @@ $('action').onchange=()=>{stop();showAction(Number($('action').value));};$('prev
 $('frame').onchange=()=>{stop();showFrame();};$('play').onclick=play;$('interval').onchange=()=>{const active=timer!==null;stop();if(active)play();};
 $('prev-frame').onclick=()=>{stop();$('frame').value=Math.max(0,Number($('frame').value)-1);showFrame();};$('next-frame').onclick=()=>{stop();$('frame').value=Math.min(entry().frames.length-1,Number($('frame').value)+1);showFrame();};
 $('jev-turn').onchange=()=>{stop();showJev(Number($('jev-turn').value));};$('prev-jev').onclick=()=>{stop();showJev(jevIndex-1);};$('next-jev').onclick=()=>{stop();showJev(jevIndex+1);};
+$('jev-decision').onchange=()=>{$('jev-decision-detail').textContent=pretty(entry()?.jev?.decisions?.[Number($('jev-decision').value)]||{});};
 for(const id of ['entry-number','slider','action','frame'])$(id).addEventListener('focus',stop);
 for(const name of ['decision','tools','result'])$('tab-'+name).onclick=()=>{stop();showTab(name);};
 document.addEventListener('keydown',e=>{if(e.altKey||e.ctrlKey||e.metaKey||e.target.isContentEditable||['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName))return;const action={ArrowLeft:()=>showEntry(entryIndex-1),ArrowRight:()=>showEntry(entryIndex+1),Home:()=>showEntry(0),End:()=>showEntry(task().entries.length-1)}[e.key];if(action){e.preventDefault();action();}});

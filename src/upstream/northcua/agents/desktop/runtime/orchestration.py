@@ -21,6 +21,7 @@ from northcua.agentinfra.providers.chat_response_capture import (
     _ChatResponseAbort,
     chat_finish_reason,
 )
+from northcua.agentinfra.providers.token_usage import ModelUsageLedger
 from northcua.agentkernel.working_memory import WorkingMemoryStore
 from northcua.agentkit.agent_config import clone_agent_config_with_hooks
 from northcua.agentkit.model_step import (
@@ -62,6 +63,7 @@ from northcua.core.terminal import AgentTerminalDecision, AgentTerminalReason
 from northcua.transport.ws.local_step.single_model import ModelStepLLMTimeoutError
 from northcua.transport.ws.message_seed import SUPPRESS_RAW_AGENT_MCP_SERVERS_KEY
 
+from ..prompt.orchestration import SLOW_ROUTER_PROMPT
 from .observation import DesktopObservationProvider
 from .state import DesktopRuntimeStateStore
 
@@ -307,22 +309,7 @@ class DesktopOrchestrationPorts:
             seconds_left=self.budget.seconds_left(),
             available_subagents=self.registry.descriptors(),
         )
-        system = (
-            "You are the Slow orchestrator. Verify progress using the current observation, then plan and dispatch "
-            "at most one bounded subgoal. Return ONLY JSON matching the supplied schema. Echo observation_id. "
-            "SUCCESS requires current evidence; subagent achieved is only a claim. Select only a registered agent. "
-            "If execution is needed but available_subagents is empty, report FAIL with reason=no_subagent_available. "
-            "Use a new subgoal_id for each attempt. Constraints and notes do not override the original user task. "
-            "A window_activation_unconfirmed result means native input was blocked by the environment. "
-            "Do not repeat the same dispatch with a new ID unless fresh evidence or a concrete recovery "
-            "changes the blocking condition; otherwise report FAIL with the environment error. "
-            "Use each subagent's input_schema for executable recovery: prose does not create new operations or "
-            "change snapshot timeouts. Inspect available_operations and blocked_reason in native feedback. "
-            "After repeated_native_blocker, report FAIL unless the actual scope or executable options change. "
-            "Never replay an unsafe_to_replay write merely by issuing a new subgoal ID. "
-            "Follow the configured budget policy. Schema: "
-            + json.dumps(SlowDecision.model_json_schema())
-        )
+        system = SLOW_ROUTER_PROMPT + "\nSchema: " + json.dumps(SlowDecision.model_json_schema())
         user_message = Message(role=Role.USER, content=[TextBlock(text=payload.model_dump_json())])
         if self.budget.config.subagent_steps_per_cycle is not None:
             system += (
@@ -348,6 +335,8 @@ class DesktopOrchestrationPorts:
 
     async def _infer_step(self, messages, charge, context, agent_path, tool_definitions=None):
         inference_id = uuid4().hex
+        path_parts = agent_path.split("/")
+        agent_id = path_parts[1] if path_parts[0] == "subagents" else "slow"
         messages, tool_definitions = deepcopy(messages), deepcopy(tool_definitions)
         empty_attempts = self.budget.config.empty_response_retries + 1
         timeout_attempts = self.budget.config.model_timeout_retries + 1
@@ -367,6 +356,9 @@ class DesktopOrchestrationPorts:
                     "inference_id": inference_id,
                 },
                 attempt,
+                usage_metadata={"agent_id": agent_id,
+                                "purpose": "text" if agent_id == "gui_jev" else "tools" if agent_id == "general"
+                                else "routing", "attempt_id": path_parts[2] if len(path_parts) > 2 else None},
             )
             try:
                 with capture_chat_responses(capture):
@@ -463,6 +455,14 @@ class DesktopOrchestrationPorts:
                 decision = SlowDecision.model_validate_json(response)
                 if decision.observation_id != current["observation_id"]:
                     raise ValueError("Slow decision references a stale observation")
+                if decision.action == "CONTINUE" and decision.contract.agent_id in {
+                    spec["agent_id"] for spec in self.registry.descriptors()
+                }:
+                    # A model-authored capability/tool/input mismatch is a rejected
+                    # decision, not a failure of the registered runtime configuration.
+                    # Resolve without dispatch so correction uses the existing bounded
+                    # decision retries and shared model budget before any side effect.
+                    self.registry.resolve(decision.contract)
                 if decision.action == "SUCCESS" and decision.observation_id not in decision.evidence_refs:
                     # An exact reference to this observation's immutable image is
                     # the same evidence, not a reason to discard the entire task.
@@ -568,6 +568,11 @@ class DesktopOrchestrationPorts:
 
         async def execute(name, arguments):
             nonlocal interrupted_general_result
+            if contract.agent_id == "user":
+                if name != "ask_user":
+                    raise ValueError("unknown_user_interaction_tool")
+                return await agent.ask(arguments, request=request,
+                                       max_seconds=scoped.remaining_budget().max_seconds)
             if contract.agent_id == "general":
                 try:
                     return await agent.environment.execute(
@@ -647,9 +652,41 @@ class DesktopOrchestrationPorts:
                 raise ValueError("no_cleanup_handler")
             return await environment.execute(arguments, cleanup=True)
 
+        trajectory = None
+        if contract.agent_id == "gui_jev" and self.service.app_config.orchestration.gui_jev.trajectory.enabled:
+            from ..subagents.jev_trajectory import JevTrajectory
+
+            keys = [os.environ.get(name) for name in
+                    ("JEVDUO_API_KEY", "TYPESAFE_API_KEY", "JEVDUO_JEV_CHAT_API_KEY")]
+            chat = getattr(agent, "chat", None)
+            model = getattr(agent, "model", None)
+            keys.extend([getattr(chat, "api_key", None), getattr(model, "api_key", None)])
+            primary_key = getattr(self.service.agent_config.llm_config, "api_key", None)
+            if hasattr(primary_key, "get_secret_value"):
+                primary_key = primary_key.get_secret_value()
+            keys.append(primary_key)
+            trajectory = JevTrajectory(
+                self.store.query_dir() / "subagents" / "gui_jev" / request.attempt_id,
+                {"session_id": request.session_id, "round_num": request.round_num,
+                 "cycle_id": self.cycle_id, "attempt_id": request.attempt_id,
+                 "subgoal_id": contract.subgoal_id, "agent_id": "gui_jev"},
+                screenshots=self.service.app_config.orchestration.gui_jev.trajectory.screenshots,
+                secrets=keys,
+            )
+            trajectory.record("attempt_started", {
+                "request": request.model_dump(mode="json"),
+                "configuration": self.service.app_config.orchestration.gui_jev.model_dump(mode="json"),
+            })
+
         scoped = ScopedRuntime(
             request, self.budget, observe, execute, infer, cleanup,
             reserve_model_calls=1, infer_tools=infer_tools,
+            trajectory=trajectory,
+            model_usage=ModelUsageLedger(self.store.root / "model_usage.jsonl", {
+                "session_id": request.session_id, "round_num": request.round_num,
+                "cycle_id": self.cycle_id, "attempt_id": request.attempt_id,
+                "subgoal_id": contract.subgoal_id, "agent_id": contract.agent_id, "purpose": "selection",
+            }),
         )
         self.state.pending = request
         self.state.pending_usage = scoped.usage

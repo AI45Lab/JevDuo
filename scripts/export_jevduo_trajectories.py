@@ -331,9 +331,135 @@ def load_model_observations(episode: Path, cycles: list[dict], attempts: list[di
         warnings.append(f"有 {len(missing_ids)} 个模型尝试 ID 未唯一关联周期/trace；未按文件名或时间猜测。")
 
 
-def jev_evidence(summary, agent):
+def load_jev_trajectories(episode: Path, attempts: list[dict], warnings: list):
+    """Join explicit IDs, retain readable prefixes, and keep legacy summaries separate."""
+    for path in sorted((episode / "agent").glob("**/query_*/subagents/gui_jev/*/trajectory.jsonl")):
+        metadata, start, decisions, actions, shots = None, {}, {}, {}, []
+        expected_sequence = 1
+        diagnostics = []
+        conflict = False
+        try:
+            for line, record in records(path):
+                identity = (record.get("attempt_id"), record.get("cycle_id"))
+                if metadata is None:
+                    metadata = identity
+                if identity != metadata or not identity[0] or record.get("schema_version") != 1:
+                    conflict = True
+                    break
+                if type(record.get("sequence")) is not int or record["sequence"] != expected_sequence:
+                    diagnostics.append(f"{path.relative_to(episode)}:{line}: 序号不连续，仅保留此前记录。")
+                    break
+                expected_sequence += 1
+                source = f"{path.relative_to(episode)}:{line}"
+                event = record.get("event")
+                if event in {"attempt_started", "agent_started"}:
+                    start = record.get("request") or start
+                elif event in {"decision_requested", "decision_returned", "decision_failed"}:
+                    did = record.get("decision_id")
+                    if not did:
+                        diagnostics.append(f"{source}: 决策缺少 ID，未猜测关联。")
+                        continue
+                    item = decisions.setdefault(did, {"decision_id": did})
+                    if event == "decision_requested":
+                        item.update(request=record.get("request"), source=source)
+                    elif event == "decision_returned":
+                        item.update(result=record.get("result"), result_source=source)
+                    else:
+                        item.update(error_type=record.get("error_type"), error_source=source)
+                elif event == "model_response" and record.get("decision_id"):
+                    item = decisions.setdefault(record["decision_id"], {"decision_id": record["decision_id"]})
+                    item.setdefault("http_attempts", []).append({
+                        "http_status": record.get("http_status"), "source": source,
+                        "response_body": record.get("response_body"),
+                    })
+                elif event in {"action_started", "action_finished"}:
+                    aid = record.get("action_id")
+                    if not aid:
+                        diagnostics.append(f"{source}: 动作缺少 ID，未猜测关联。")
+                        continue
+                    item = actions.setdefault(aid, {"action_id": aid})
+                    item["operation"] = record.get("operation")
+                    if event == "action_started":
+                        item.update(arguments=record.get("arguments"),
+                                    decision_ids=record.get("decision_ids", []),
+                                    source=source)
+                    else:
+                        item.update(result=record.get("result"), receipt=record.get("receipt"),
+                                    error_type=record.get("error_type"), result_source=source,
+                                    dispatch_invoked=record.get("dispatch_invoked"))
+                elif event == "loop_event" and "turn" in (record.get("data") or {}):
+                    aid = record.get("action_id")
+                    if aid in actions:
+                        actions[aid]["turn"] = record["data"]["turn"]
+                elif event == "screenshot":
+                    shots.append({"action_id": record.get("action_id"), "phase": record.get("phase"),
+                                  "observation": record.get("observation", {}), "source": source})
+                elif event == "subgoal_observation" and record.get("image_available"):
+                    shots.append({"action_id": None, "phase": "after_subgoal",
+                                  "observation": record.get("observation", {}), "source": source})
+                elif event == "screenshot_unavailable":
+                    diagnostics.append(f"{record.get('action_id')} {record.get('phase')}: "
+                                       f"截图不可用 ({record.get('reason')})")
+        except ValueError as error:
+            diagnostics.append(f"只保留可读取的轨迹前缀：{error}")
+        if conflict or metadata is None:
+            warnings.append(f"{path.relative_to(episode)}: 轨迹身份/版本冲突，未关联。")
+            continue
+        aid, cid = metadata
+        matches = [a for a in attempts if a["id"] == aid
+                   and (not a["cycle_id"] or not cid or a["cycle_id"] == cid)]
+        if len(matches) > 1 or any(a["id"] == aid and cid and a["cycle_id"] and a["cycle_id"] != cid
+                                   for a in attempts):
+            warnings.append(f"attempt={aid}: Jev 轨迹关联不唯一或 cycle_id 冲突，未关联。")
+            continue
+        if not matches:
+            matches = [{"id": aid, "cycle_id": cid, "phase": phase_of(path, episode),
+                        "contract": start.get("contract"), "observation": start.get("observation"),
+                        "actions": [], "observations": [], "source": str(path.relative_to(episode)),
+                        "warnings": ["仅有 Jev 独立轨迹；未推断父代理验证或任务完成。"]}]
+            attempts.extend(matches)
+        attempt = matches[0]
+        if (attempt.get("contract") or {}).get("agent_id") not in {None, "gui_jev"}:
+            warnings.append(f"attempt={aid}: agent_id 与 Jev 轨迹冲突，未关联。")
+            continue
+        if "jev_trajectory" in attempt:
+            warnings.append(f"attempt={aid}: 存在多个 Jev 独立轨迹，未覆盖已有记录。")
+            continue
+        for decision in decisions.values():
+            if "result" in decision:
+                for wire_attempt in decision.get("http_attempts", []):
+                    wire_attempt.pop("response_body", None)
+                    wire_attempt["raw_response_in_source_log"] = True
+        for action in actions.values():
+            action["execution_record"] = (
+                "start_without_receipt" if "result_source" not in action else
+                "not_dispatched" if action.get("dispatch_invoked") is False else
+                "exception_without_receipt" if action.get("result") is None
+                and action.get("receipt") is None else
+                "receipt_recorded"
+            )
+            if "result_source" not in action:
+                diagnostics.append(f"{action['action_id']}: 缺少动作结束回执，未推断交付或完成。")
+            action["step"] = action.get("turn", {}).get("step")
+            action["target"] = action.get("turn", {}).get("target")
+            action["decisions"] = [decisions[d] for d in action.get("decision_ids", []) if d in decisions]
+            action["screenshots"] = [s for s in shots if s["action_id"] == action["action_id"]]
+        attempt["jev_trajectory"] = {"turns": list(actions.values()), "decisions": list(decisions.values()),
+                                     "screenshots": shots, "source": str(path.relative_to(episode)),
+                                     "notes": diagnostics}
+
+
+def jev_evidence(summary, agent, attempts=()):
     if agent != "gui_jev":
         return None
+    durable = [a["jev_trajectory"] for a in attempts if "jev_trajectory" in a]
+    if durable:
+        return {"turns": [turn for t in durable for turn in t["turns"]],
+                "decisions": [d for t in durable for d in t["decisions"]],
+                "notes": ["独立逐步日志；候选与回答通过 decision_id 关联动作，截图仅归档，不作 Jev 输入。",
+                          "完整原始 HTTP 回复、AX 和 CLI 明细保存在 source 指向的 JSONL。",
+                          *[note for t in durable for note in t["notes"]]],
+                "source": [t["source"] for t in durable]}
     value = summary if isinstance(summary, dict) else {}
     notes = ["操作来自子代理返回摘要，不与脱敏的外层 CLI 事件按序强行配对；未记录逐动作 PNG 截图。"]
     if value.get("turns_truncated"):
@@ -379,6 +505,11 @@ def add_frames(episode: Path, record: dict, images: Images, attempts: list) -> l
     for attempt in attempts:
         observation = attempt.get("observation") or {}
         add("子代理输入观察", observation.get("screenshot_path"))
+        for shot in (attempt.get("jev_trajectory") or {}).get("screenshots", []):
+            add(f"Jev {shot['phase']} / {shot['action_id']}", shot["observation"].get("screenshot_path"),
+                {"attempt_id": attempt["id"], "action_id": shot["action_id"],
+                 "observation_id": shot["observation"].get("observation_id"), "phase": shot["phase"],
+                 "source": shot["source"], "note": "归档截图，不是 Jev 模型输入；不证明操作成功。"})
         for item in attempt.get("observations", []):
             add(
                 f"General 中间观察 {item['model_round']} / 模型决策前",
@@ -421,6 +552,7 @@ def collect(root: Path, output: Path, embed=False, task_ids=(), model_observatio
             warnings.append("缺少 episode.json；停止原因、得分或耗时可能不完整。")
         cycles = load_cycles(episode, warnings)
         attempts = load_attempts(episode, cycles, warnings)
+        load_jev_trajectories(episode, attempts, warnings)
         if model_observations:
             load_model_observations(episode, cycles, attempts, warnings)
         else:
@@ -475,7 +607,7 @@ def collect(root: Path, output: Path, embed=False, task_ids=(), model_observatio
                     "result": result,
                     "summary": summary,
                     "usage": orchestration.get("usage"),
-                    "jev": jev_evidence(summary, (decision.get("contract") or {}).get("agent_id")),
+                    "jev": jev_evidence(summary, (decision.get("contract") or {}).get("agent_id"), matches),
                     "exit_reason": orchestration.get("exit_reason"),
                     "attempts": matches,
                     "frames": add_frames(episode, record, images, matches),
@@ -503,6 +635,7 @@ def collect(root: Path, output: Path, embed=False, task_ids=(), model_observatio
                     "phase": attempt["phase"],
                     "cycle_id": attempt["cycle_id"],
                     "decision": {"contract": attempt["contract"]},
+                    "jev": jev_evidence({}, (attempt.get("contract") or {}).get("agent_id"), [attempt]),
                     "attempts": [attempt],
                     "frames": add_frames(episode, record, images, [attempt]),
                     "source": attempt["source"],

@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 from .http import HttpStatusError, post_json
 
 
-def model_endpoint(value, *, setting="TYPESAFE_BASE_URL"):
+def model_endpoint(value, *, setting="TYPESAFE_BASE_URL", allow_http=False):
     try:
         parsed = urlsplit(value)
         host = parsed.hostname
@@ -25,13 +25,13 @@ def model_endpoint(value, *, setting="TYPESAFE_BASE_URL"):
             or parsed.password is not None
             or parsed.fragment
             or parsed.scheme not in ("https", "http")
-            or (parsed.scheme == "http" and not loopback)
+            or (parsed.scheme == "http" and not loopback and not allow_http)
             or (port is not None and not 0 < port <= 65535)
         ):
             raise ValueError()
     except (ValueError, TypeError):
         raise ValueError(
-            f"{setting} must use HTTPS, or HTTP on a loopback address, without credentials"
+            f"{setting} must use HTTPS, or explicitly enabled HTTP, without credentials"
         ) from None
     return value
 
@@ -71,10 +71,11 @@ class TypeSafeModel:
         endpoint="https://api.typesafe.ai/v1/systemone",
         model="jev-latest",
         sleep=time.sleep,
+        allow_http=False,
     ):
         if not api_key:
             raise ValueError("TYPESAFE_API_KEY unset")
-        self.endpoint = model_endpoint(endpoint)
+        self.endpoint = model_endpoint(endpoint, allow_http=allow_http)
         self.api_key = api_key
         self.model = resolve_model(model, self.endpoint)
         self.sleep = sleep
@@ -85,6 +86,7 @@ class TypeSafeModel:
             os.environ.get("TYPESAFE_API_KEY"),
             endpoint=os.environ.get("TYPESAFE_BASE_URL", "https://api.typesafe.ai/v1/systemone"),
             model=os.environ.get("TYPESAFE_MODEL", "jev-latest"),
+            allow_http=os.environ.get("TYPESAFE_ALLOW_HTTP") == "1",
         )
 
     def ask(self, request):

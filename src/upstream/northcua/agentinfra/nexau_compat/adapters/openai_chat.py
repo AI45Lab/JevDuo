@@ -91,10 +91,15 @@ class _ChatCompletions:
 
     def create(self, *args: Any, **kwargs: Any) -> Any:
         scope = None if kwargs.get("stream") else _capture.get()
+        if scope is not None and (not scope.active or
+                                 (scope.callers is not None and _caller.get() not in scope.callers)):
+            scope = None
+        if scope is not None:
+            request_callback = getattr(scope.callback, "record_request", None)
+            if callable(request_callback):
+                request_callback(kwargs)
         result = self._completions.create(*args, **kwargs)
-        if scope is None or not scope.active:
-            return result
-        if scope.callers is not None and _caller.get() not in scope.callers:
+        if scope is None:
             return result
 
         def record(response: Any) -> Any:

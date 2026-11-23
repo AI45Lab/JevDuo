@@ -104,12 +104,37 @@ class ExecutionConfig(BaseModel):
         return self
 
 
+class GuiJevDecisionConfig(BaseModel):
+    """Wire backend for the unchanged Jev decision request/answer contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    backend: Literal["typesafe", "chat_completions"] = "typesafe"
+    model: str | None = Field(default=None, min_length=1)
+    base_url: str | None = Field(default=None, min_length=1)
+    api_key_env: str = Field(default="JEVDUO_JEV_CHAT_API_KEY", pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    max_tokens: int = Field(default=4096, ge=1)
+    timeout_seconds: float = Field(default=60, gt=0, allow_inf_nan=False)
+    max_retries: int = Field(default=0, ge=0, le=5)
+    reasoning_effort: str | None = None
+    direct_api: bool = True
+
+
+class GuiJevTrajectoryConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    screenshots: bool = True
+
+
 class GuiJevConfig(BaseModel):
     """Optional jev-desktop adapter; dictionaries use the package's own dataclasses."""
 
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
+    decision: GuiJevDecisionConfig = Field(default_factory=GuiJevDecisionConfig)
+    trajectory: GuiJevTrajectoryConfig = Field(default_factory=GuiJevTrajectoryConfig)
     desktop: JsonObject = Field(default_factory=dict)
     options: JsonObject = Field(default_factory=dict)
     limits: JsonObject = Field(default_factory=dict)

@@ -15,14 +15,16 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+from northcua.agentinfra.providers.token_usage import ModelUsageLedger
 
 pytest.importorskip("jev_desktop", reason="optional gui_jev integration requires agent-desktop/jev")
 
 from northcua.agentkit.orchestration.contracts import OrchestrationState, SubagentRequest
 from northcua.agentkit.orchestration.runtime import Journal, RunBudget, ScopedRuntime, read_records
 from northcua.agents.desktop.subagents import jev
+from northcua.agents.desktop.subagents.jev_trajectory import JevTrajectory, TrajectoryWriteError
 from northcua.core.config import DesktopPolicyConfig
-from northcua.core.config_base import GuiJevConfig, OrchestrationConfig
+from northcua.core.config_base import GuiJevConfig, GuiJevDecisionConfig, OrchestrationConfig
 
 from tests import test_orchestration as fixtures
 
@@ -74,17 +76,26 @@ class ScriptedHTTP:
         self.launch_ready = self.launch_release = None
         self.model_pause_after = 3
         self.value, self.clipboard = "private-old-value", "original clipboard"
+        self.focused = False
         self.set_failure, self.bad_snapshot = None, False
         self.model_ready = self.model_release = self.write_ready = self.write_release = None
+        self.paste_ready = self.paste_release = None
         self.statuses = []
         self.cleanup_failure = False
         self.no_window = False
         self.snapshot_tree = None
+        self.chat_requests = []
+        self.chat_finish_reason = "stop"
+        self.chat_usage = None
 
     async def __call__(self, request):
         body = json.loads(request.content)
         self.urls.append(str(request.url))
-        if request.url.host == "jev.example":
+        if request.url.host in {"jev.example", "chat.example"}:
+            chat = request.url.host == "chat.example"
+            if chat:
+                self.chat_requests.append(copy.deepcopy(body))
+                body = {**json.loads(body["messages"][1]["content"]), "model": body["model"]}
             self.decisions.append(body)
             if self.statuses:
                 return httpx.Response(self.statuses.pop(0), json={})
@@ -92,9 +103,18 @@ class ScriptedHTTP:
             if self.model_ready is not None and len(self.decisions) >= self.model_pause_after:
                 self.model_ready.set()
                 await self.model_release.wait()
-            choice = next(self.application_choices if question == "application" else self.choices)
-            answer = {"type": "choice", "choice": choice, "confidence": 0, "probabilities": {choice: 1}}
-            return httpx.Response(200, json={"answers": {question: answer}})
+            if body["questions"][question]["type"] == "noul":
+                answer = {"type": "noul", "noul": 0.0}
+            else:
+                choice = next(self.application_choices if question == "application" else self.choices)
+                answer = {"type": "choice", "choice": choice, "confidence": 0, "probabilities": {choice: 1}}
+            result = {"answers": {question: answer}}
+            if chat:
+                result = {"choices": [{"finish_reason": self.chat_finish_reason,
+                                       "message": {"role": "assistant", "content": json.dumps(result)}}]}
+                if self.chat_usage is not None:
+                    result["usage"] = self.chat_usage
+            return httpx.Response(200, json=result)
         assert request.url.host == "current-vm"
         assert body["shell"] is False
         argv = body["command"]
@@ -136,6 +156,7 @@ class ScriptedHTTP:
                                 "name": "Body",
                                 "available_actions": self.capabilities,
                                 "value": self.value,
+                                "states": ["focused"] if self.focused else [],
                                 "bounds": {"x": 1, "y": 2, "width": 10, "height": 20},
                             }
                         ],
@@ -161,14 +182,24 @@ class ScriptedHTTP:
         elif command == "cursor-overlay" and args[1] == "disable" and self.cleanup_failure:
             result = failure()
         elif command == "clipboard-get":
-            result = success({"text": self.clipboard})
+            result = success({"type": "text", "text": self.clipboard})
+        elif command == "clipboard-clear":
+            self.clipboard = ""
         elif command == "clipboard-set":
             if self.cleanup_failure and args[1] == "original clipboard":
                 result = failure()
             else:
-                self.clipboard = args[1]
+                self.clipboard = args[2] if args[1] == "--" else args[1]
+        elif command == "focus":
+            self.focused = True
         elif command == "press":
-            self.value = self.clipboard
+            if args[1] == "ctrl+c":
+                self.clipboard = self.value
+            elif args[1] == "ctrl+v":
+                self.value = self.clipboard
+                if self.paste_ready is not None:
+                    self.paste_ready.set()
+                    await self.paste_release.wait()
         elif command == "get":
             result = success({"value": self.value})
         elif command == "session":
@@ -219,6 +250,7 @@ class JevTest(unittest.IsolatedAsyncioTestCase):
                 "JEV_VERIFY_MS": "17",
                 "AGENT_DESKTOP_SNAPSHOT_TIMEOUT_MS": "4321",
                 "TEXT_MODEL": "must-not-be-used",
+                "JEVDUO_JEV_CHAT_API_KEY": "fixture-chat-key",
             },
         )
         self.env.start()
@@ -277,6 +309,299 @@ class JevTest(unittest.IsolatedAsyncioTestCase):
             GuiJevConfig(enabled=True, **config),
             DesktopPolicyConfig(backend="osworld", osworld={"vm_ip": "current-vm", "server_port": 5000}),
         )
+
+    def chat_agent(self, **config):
+        decision = {"backend": "chat_completions", "base_url": "https://chat.example/v1", "model": "k3.1-pro"}
+        decision.update(config.pop("decision", {}))
+        return self.make_agent(decision=decision, **config)
+
+    def enable_trajectory(self, *, screenshots=True):
+        from PIL import Image
+
+        trace = JevTrajectory(self.root / "jev-trace", {"attempt_id": self.request.attempt_id},
+                              screenshots=screenshots, secrets=("fixture-key", "fixture-chat-key"))
+        count = 0
+
+        async def observe():
+            nonlocal count
+            count += 1
+            image = self.root / f"trace-observation-{count}.png"
+            Image.new("RGB", (8, 8), (count % 255, 0, 0)).save(image)
+            return {"observation_id": f"trace-observation-{count}", "screenshot_path": str(image)}
+
+        self.scoped.trajectory = trace
+        self.scoped._observe = observe
+        return trace
+
+    def trajectory_records(self, trace):
+        return [json.loads(line) for line in trace.path.read_text().splitlines()]
+
+    async def test_trajectory_persists_choices_native_results_and_archive_only_images(self):
+        trace = self.enable_trajectory()
+        self.agent = self.chat_agent()
+        result = await self.agent.run(self.request, self.scoped)
+        records = self.trajectory_records(trace)
+        requests = [r for r in records if r["event"] == "decision_requested"]
+        self.assertEqual([list(r["request"]["questions"]) for r in requests],
+                         [["target"], ["operation"], ["target"]])
+        replies = [r for r in records if r["event"] == "decision_returned"]
+        self.assertEqual([r["decision_id"] for r in requests], [r["decision_id"] for r in replies])
+        self.assertEqual(len([r for r in records if r["event"] == "model_response"]), 3)
+        action = next(r for r in records if r["event"] == "action_started")
+        self.assertEqual(action["decision_ids"], [r["decision_id"] for r in requests[:2]])
+        self.assertEqual(action["arguments"]["text"], "  中文\nsecond line  ")
+        images = [r for r in records if r["event"] == "screenshot"]
+        self.assertEqual([r["phase"] for r in images], ["before_action", "after_action"])
+        self.assertTrue(all(Path(r["observation"]["screenshot_path"]).is_file() for r in images))
+        self.assertTrue(all(r["policy_input"] is False for r in images))
+        self.assertTrue(all(r["action_id"] == action["action_id"] for r in images))
+        native = [r for r in records if r["event"] == "native_started"]
+        finished = [r for r in records if r["event"] == "native_finished"]
+        self.assertEqual({r["native_call_id"] for r in native}, {r["native_call_id"] for r in finished})
+        self.assertEqual(sum("set-value" in r["argv"] for r in native), 1)
+        payloads = json.dumps(self.http.chat_requests)
+        for image in images:
+            self.assertNotIn(image["observation"]["screenshot_path"], payloads)
+        self.assertEqual(result.outcome, "achieved")
+        self.assertIn(str(trace.path), result.evidence_refs)
+        self.assertEqual(self.scoped.usage.model_calls, 4)
+        self.assertEqual(self.scoped.last_observation["observation_id"], "trace-observation-3")
+        self.assertEqual(records[-1]["result"]["usage"]["model_calls"], 4)
+
+    async def test_trajectory_invalid_chat_choice_keeps_raw_reply_and_never_acts(self):
+        trace = self.enable_trajectory()
+        self.agent = self.chat_agent()
+        self.http.choices = iter(["999"])
+        with self.assertRaisesRegex(RuntimeError, "no valid Jev answer"):
+            await self.agent.run(self.request, self.scoped)
+        records = self.trajectory_records(trace)
+        self.assertTrue(any(r["event"] == "decision_failed" for r in records))
+        raw = next(r for r in records if r["event"] == "model_response")["response_body"]
+        self.assertIn("999", raw)
+        self.assertFalse(any(r["event"] == "action_started" for r in records))
+        self.assertEqual(records[-1]["event"], "attempt_finished")
+        self.assertFalse(any(c[0] == "set-value" for c in self.http.commands))
+
+    async def test_trajectory_native_uncertainty_is_durable_without_replay(self):
+        trace = self.enable_trajectory()
+        self.http.set_failure = failure()
+        result = await self.agent.run(self.request, self.scoped)
+        records = self.trajectory_records(trace)
+        action = next(r for r in records if r["event"] == "action_finished")
+        self.assertEqual(action["result"]["delivery"], "delivery_uncertain")
+        self.assertEqual([c[0] for c in self.http.commands].count("set-value"), 1)
+        self.assertTrue(json.loads(result.summary)["unsafe_to_replay"])
+        self.assertEqual(result.outcome, "failed")
+
+    async def test_trajectory_cancel_retains_native_receipt_before_stopping(self):
+        trace = self.enable_trajectory()
+        self.http.write_ready, self.http.write_release = asyncio.Event(), asyncio.Event()
+        task = asyncio.create_task(self.agent.run(self.request, self.scoped))
+        await asyncio.wait_for(self.http.write_ready.wait(), 10)
+        task.cancel()
+        await asyncio.sleep(0)
+        self.assertFalse(task.done())
+        self.http.write_release.set()
+        with self.assertRaises(asyncio.CancelledError) as caught:
+            await asyncio.wait_for(task, 10)
+        records = self.trajectory_records(trace)
+        receipt = next(r for r in records if r["event"] == "native_interrupted")
+        self.assertEqual(receipt["delivery"], "delivered_verified")
+        self.assertTrue(receipt["result"]["ok"])
+        self.assertTrue(any(r["event"] == "screenshot_unavailable" and r["phase"] == "after_action"
+                            for r in records))
+        self.assertEqual(records[-1]["status"], "cancelled")
+        self.assertTrue(json.loads(caught.exception.subagent_result.summary)["unresolved_delivery"])
+        self.assertEqual(self.http.commands[-1][0], "set-value")
+
+    async def test_trajectory_screenshot_failure_does_not_repeat_or_feed_policy(self):
+        trace = self.enable_trajectory()
+        observe = self.scoped._observe
+        calls = 0
+
+        async def fail_once():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("screenshot failed")
+            return await observe()
+
+        self.scoped._observe = fail_once
+        result = await self.agent.run(self.request, self.scoped)
+        records = self.trajectory_records(trace)
+        self.assertTrue(any(r["event"] == "screenshot_unavailable" and r["phase"] == "before_action"
+                            for r in records))
+        self.assertEqual(len([r for r in records if r["event"] == "screenshot"]), 1)
+        self.assertEqual(result.outcome, "achieved")
+        self.assertEqual([c[0] for c in self.http.commands].count("set-value"), 1)
+
+    async def test_trajectory_save_failure_after_write_preserves_replay_guard(self):
+        trace = self.enable_trajectory()
+        original = trace.record
+        failed = False
+
+        def record(event, payload):
+            nonlocal failed
+            if event == "native_finished" and self.http.value != "private-old-value" and not failed:
+                failed = True
+                raise TrajectoryWriteError(payload.get("result"))
+            return original(event, payload)
+
+        with patch.object(trace, "record", side_effect=record):
+            with self.assertRaises(RuntimeError) as caught:
+                await self.agent.run(self.request, self.scoped)
+        summary = json.loads(caught.exception.subagent_result.summary)
+        self.assertTrue(summary["unresolved_delivery"])
+        self.assertEqual(summary["interrupted_action"]["delivery"], "delivered_verified")
+        self.assertEqual([c[0] for c in self.http.commands].count("set-value"), 1)
+
+    async def test_trajectory_cancel_before_dispatch_does_not_claim_an_unknown_write(self):
+        trace = self.enable_trajectory()
+        original = self.scoped._observe
+        ready, release = asyncio.Event(), asyncio.Event()
+
+        async def observe():
+            ready.set()
+            await release.wait()
+            return await original()
+
+        self.scoped._observe = observe
+        task = asyncio.create_task(self.agent.run(self.request, self.scoped))
+        await asyncio.wait_for(ready.wait(), 10)
+        task.cancel()
+        await asyncio.sleep(0)
+        self.assertFalse(task.done())
+        release.set()
+        with self.assertRaises(asyncio.CancelledError) as caught:
+            await asyncio.wait_for(task, 10)
+        summary = json.loads(caught.exception.subagent_result.summary)
+        self.assertFalse(summary["unresolved_delivery"])
+        self.assertNotIn("interrupted_action", summary)
+        action = next(r for r in self.trajectory_records(trace) if r["event"] == "action_finished")
+        self.assertFalse(action["dispatch_invoked"])
+        self.assertFalse(any(c[0] == "set-value" for c in self.http.commands))
+
+    async def test_trajectory_storage_failure_cannot_prevent_cursor_cleanup(self):
+        trace = self.enable_trajectory()
+        self.agent = self.make_agent(options={"cursor": True})
+        original = trace.record
+
+        def record(event, payload):
+            if event == "native_started" and "disable" in payload.get("argv", []):
+                raise TrajectoryWriteError()
+            return original(event, payload)
+
+        with patch.object(trace, "record", side_effect=record):
+            result = await self.agent.run(self.request, self.scoped)
+        self.assertEqual(result.outcome, "achieved")
+        self.assertEqual(self.http.commands[-1], ["cursor-overlay", "disable"])
+        self.assertEqual(self.scoped.usage.cleanup_tool_calls, 1)
+
+    async def test_trajectory_stream_keeps_all_turns_beyond_summary_limit(self):
+        trace = self.enable_trajectory(screenshots=False)
+        self.agent = self.make_agent(limits={"steps": 55, "calls": 150, "stalled_turns": 100})
+        self.http.capabilities = ["Click"]
+        self.http.choices = iter([item for _ in range(45) for item in ("1", "CLICK")] + ["DONE"])
+        self.request.contract.budget.max_model_calls = 150
+        self.request.contract.budget.max_tool_calls = 1000
+        self.budget.config.max_model_calls = 200
+        self.budget.config.max_seconds = 120
+        self.scoped.deadline = time.monotonic() + 120
+        result = await self.agent.run(self.request, self.scoped)
+        records = self.trajectory_records(trace)
+        turns = [r["data"]["turn"] for r in records if r["event"] == "loop_event" and "turn" in r["data"]]
+        self.assertEqual(len(turns), 45)
+        self.assertEqual(turns[-1]["step"], 45)
+        summary = json.loads(result.summary)
+        self.assertTrue(summary["turns_truncated"])
+        self.assertLessEqual(len(summary.get("turns", [])), 40)
+        self.assertFalse(any(r["event"] == "screenshot" for r in records))
+
+    async def test_chat_backend_preserves_requests_and_shared_field_writer(self):
+        with patch.dict(os.environ):
+            os.environ.pop("TYPESAFE_API_KEY", None)
+            self.agent = self.chat_agent()
+            result = await self.agent.run(self.request, self.scoped)
+        self.assertEqual(result.outcome, "achieved")
+        self.writer.assert_awaited_once()
+        self.assertEqual(self.scoped.usage.model_calls, 4)
+        self.assertEqual(len(self.http.chat_requests), 3)
+        for raw, original in zip(self.http.chat_requests, self.http.decisions, strict=True):
+            self.assertEqual(json.loads(raw["messages"][1]["content"]),
+                             {k: v for k, v in original.items() if k != "model"})
+            self.assertEqual(raw["model"], "k3.1-pro")
+            self.assertFalse(raw["stream"])
+            self.assertEqual(raw["response_format"], {"type": "json_object"})
+            self.assertNotIn("tools", raw)
+        self.assertTrue(all(url.startswith("https://chat.example/v1/chat/completions")
+                            for url in self.http.urls if "current-vm" not in url))
+        self.assertNotIn("fixture-chat-key", result.summary)
+
+    async def test_chat_backend_also_selects_applications_and_answers_noul(self):
+        self.agent = self.chat_agent(options={"confirm_destructive": True})
+        self.request.contract.agent_input = {}
+        result = await self.agent.run(self.request, self.scoped)
+        self.assertEqual(result.outcome, "achieved")
+        names = [next(iter(r["questions"])) for r in self.http.decisions]
+        self.assertIn("application", names)
+        self.assertIn("destructive", names)
+        self.assertFalse(any(url.startswith("https://jev.example") for url in self.http.urls))
+
+    async def test_chat_invalid_choice_or_truncated_completion_never_writes(self):
+        for choice, reason in (("999", "stop"), ("1", "length")):
+            with self.subTest(choice=choice, reason=reason):
+                self.agent = self.chat_agent()
+                self.http.choices = iter([choice])
+                self.http.chat_finish_reason = reason
+                with self.assertRaisesRegex(RuntimeError, "no valid Jev answer"):
+                    await self.agent.run(self.request, self.scoped)
+        self.assertEqual(len(self.http.chat_requests), 2)
+        self.assertFalse(any(c[0] in {"set-value", "type", "press", "launch"} for c in self.http.commands))
+        self.writer.assert_not_awaited()
+
+    async def test_chat_retry_attempts_are_each_budgeted(self):
+        self.agent = self.chat_agent(decision={"max_retries": 2})
+        self.http.statuses = [429, 503]
+        result = await self.agent.run(self.request, self.scoped)
+        self.assertEqual(result.outcome, "achieved")
+        self.assertEqual(len(self.http.chat_requests), 5)
+        self.assertEqual(self.scoped.usage.model_calls, 6)
+        self.assertIn('"model": "k3.1-pro"', self.journal.path.read_text())
+
+    async def test_chat_usage_ledger_covers_retries_even_without_trajectory_recording(self):
+        self.agent = self.chat_agent(decision={"max_retries": 2})
+        self.http.statuses = [429, 503]
+        self.http.chat_usage = {"prompt_tokens": 100, "completion_tokens": 30,
+                                "prompt_tokens_details": {"cached_tokens": 80}}
+        path = self.root / "model_usage.jsonl"
+        self.scoped.model_usage = ModelUsageLedger(path, {"agent_id": "gui_jev", "purpose": "selection"})
+        await self.agent.run(self.request, self.scoped)
+        records = list(read_records(path))
+        requests = [row for row in records if row["event"] == "request"]
+        responses = [row for row in records if row["event"] == "response"]
+        self.assertEqual(len(requests), 5)
+        self.assertEqual(len(responses), 5)
+        self.assertEqual([row["http_status"] for row in responses], [429, 503, 200, 200, 200])
+        self.assertEqual(len({row["call_id"] for row in requests}), 5)
+        self.assertTrue(all(row["tokens"]["input_tokens"] is None for row in responses[:2]))
+        self.assertEqual(sum(row["tokens"]["input_tokens"] for row in responses[2:]), 300)
+        self.assertEqual(sum(row["tokens"]["cache_input_tokens"] for row in responses[2:]), 240)
+        self.assertNotIn("fixture-chat-key", path.read_text())
+
+    async def test_chat_default_zero_retries_and_cancel_remain_bounded(self):
+        self.agent = self.chat_agent()
+        self.http.statuses = [429]
+        with self.assertRaisesRegex(RuntimeError, "HTTP 429"):
+            await self.agent.run(self.request, self.scoped)
+        self.assertEqual(len(self.http.chat_requests), 1)
+        self.http.model_ready, self.http.model_release = asyncio.Event(), asyncio.Event()
+        self.http.model_pause_after = 1
+        task = asyncio.create_task(self.agent.run(self.request, self.scoped))
+        await asyncio.wait_for(self.http.model_ready.wait(), 3)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 3)
+        self.assertFalse(any(c[0] in {"set-value", "type", "press", "launch"} for c in self.http.commands))
 
     async def test_real_loop_preserves_jev_choices_and_uses_slow_writer(self):
         result = await self.agent.run(self.request, self.scoped)
@@ -370,7 +695,12 @@ class JevTest(unittest.IsolatedAsyncioTestCase):
         with patch.object(ScriptedHTTP, "__call__", lambda instance, request: server(request)):
             result = await self.agent.run(self.request, self.scoped)
         self.assertEqual(result.outcome, "achieved")
-        self.assertEqual(snapshots, [(20000, 30), (40000, 45)])
+        # The newer SDK first rereads within the original identity-settle budget.
+        # A complete second read needs no deadline escalation.
+        self.assertEqual(len(snapshots), 2)
+        self.assertEqual(snapshots[0], (20000, 30))
+        self.assertTrue(0 < snapshots[1][0] <= 20000)
+        self.assertGreater(snapshots[1][1], snapshots[1][0] / 1000)
         self.assertFalse(any(c[0] == "set-value" for c in self.http.commands))
 
     async def test_transport_diagnostics_survive_native_observation_exception(self):
@@ -680,6 +1010,91 @@ class JevTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.scoped.usage.model_calls, 4)
         self.assertFalse(any(c[0].startswith("clipboard-") for c in self.http.commands))
 
+    async def test_clipboard_refusal_backend_uses_bridge_and_exact_value_evidence(self):
+        self.agent = self.make_agent(desktop={"headed": True})
+        self.http.capabilities = ["Click", "SetFocus"]
+        self.http.set_failure = failure(safe=True)
+        self.http.set_failure["error"]["code"] = "PLATFORM_NOT_SUPPORTED"
+        text = "--image=/tmp/literal\n中文\tsecond line"
+        self.writer.return_value = json.dumps({"text": text}, ensure_ascii=False)
+        result = await self.agent.run(self.request, self.scoped)
+        self.assertEqual(result.outcome, "achieved")
+        self.assertEqual(self.http.value, text)
+        self.assertIn(["clipboard-set", "--", text], self.http.commands)
+        self.assertEqual(sum(c[0] == "press" and c[1] == "ctrl+v" for c in self.http.commands), 1)
+        turn = json.loads(result.summary)["turns"][0]
+        self.assertEqual(turn["route"], "clipboard_replace")
+        self.assertEqual(turn["verification_scope"], "element_value")
+        self.assertEqual(turn["application_commit"], "not_verified")
+        self.assertNotIn(text, result.summary)
+
+    async def test_invalid_resource_binding_stops_before_models_or_tools(self):
+        for paths in (["relative.txt"], ["/tmp/a", "/tmp/a"], ["/tmp/a\nb"]):
+            with self.subTest(paths=paths):
+                self.request.contract.agent_input["resources"] = paths
+                with self.assertRaises(ValueError):
+                    await self.agent.run(self.request, self.scoped)
+        self.assertEqual(self.http.commands, [])
+        self.assertEqual(self.http.decisions, [])
+
+    async def test_cancel_during_clipboard_paste_joins_and_retains_unresolved_write(self):
+        self.agent = self.make_agent(desktop={"headed": True})
+        self.http.capabilities = ["Click", "SetFocus"]
+        self.http.set_failure = failure(safe=True)
+        self.http.set_failure["error"]["code"] = "PLATFORM_NOT_SUPPORTED"
+        self.http.paste_ready, self.http.paste_release = asyncio.Event(), asyncio.Event()
+        task = asyncio.create_task(self.agent.run(self.request, self.scoped))
+        await asyncio.wait_for(self.http.paste_ready.wait(), 3)
+        task.cancel()
+        await asyncio.sleep(0)
+        self.assertFalse(task.done())
+        self.http.paste_release.set()
+        with self.assertRaises(asyncio.CancelledError) as caught:
+            await asyncio.wait_for(task, 3)
+        summary = json.loads(caught.exception.subagent_result.summary)
+        self.assertTrue(summary["unresolved_delivery"])
+        self.assertEqual(summary["interrupted_action"]["operation"], "TYPE_TEXT")
+        self.assertEqual(sum(c[0] == "press" and c[1] == "ctrl+v" for c in self.http.commands), 1)
+        self.assertEqual(self.http.commands[-1][0], "press")
+        self.assertNotIn("second line", caught.exception.subagent_result.summary)
+
+    async def test_resource_choice_binds_literal_argument_and_preserves_uncertain_receipt(self):
+        path = '/tmp/a "quoted" $(literal).txt'
+        self.agent = self.make_agent(desktop={"headed": True}, options={"reconcile_observed_popups": True})
+        self.request.contract.agent_input["resources"] = [path]
+        self.http.choices = iter(["WINDOW", "OPEN_RESOURCE:0"])
+        self.http.launch_failure = failure()
+        result = await self.agent.run(self.request, self.scoped)
+        self.assertEqual(result.exit_reason, "action_failed")
+        launches = [c for c in self.http.commands if c[0] == "launch"]
+        self.assertEqual(launches, [["launch", "Fixture", "--arg=" + path, "--timeout", "5000"]])
+        summary = json.loads(result.summary)
+        self.assertEqual(summary["turns"][0]["details"]["application_commit"], "not_verified")
+        self.assertEqual(summary["unsafe_to_replay"][0]["operation"], "OPEN_RESOURCE:*")
+        self.assertIsNone(summary["unsafe_to_replay"][0]["window_id"])
+
+    async def test_production_options_run_through_scope_review_and_completion_check(self):
+        import yaml
+
+        config = yaml.safe_load((Path(__file__).resolve().parents[1] / "config.yaml").read_text())
+        options = config["harness"]["orchestration"]["gui_jev"]["options"]
+        self.agent = self.make_agent(desktop={"headed": True}, options=options)
+        self.http.choices = iter(["1", "TYPE_TEXT", "within_request", "DONE", "satisfied"])
+        result = await self.agent.run(self.request, self.scoped)
+        self.assertEqual(result.outcome, "achieved")
+        questions = [next(iter(r["questions"])) for r in self.http.decisions]
+        self.assertIn("goal_scope", questions)
+        self.assertIn("completion", questions)
+        self.assertFalse(any("--owned-by" in c for c in self.http.commands))
+        self.assertFalse(any(c[0] == "screenshot" for c in self.http.commands))
+
+    def test_keys_limit_accepts_all_new_defaults_and_clipboard_backend_can_be_disabled(self):
+        self.assertEqual(jev.JevInput(keys=list(self.agent.options.keys)).keys, list(self.agent.options.keys))
+        self.assertGreater(len(self.agent.options.keys), 100)
+        self.assertFalse(self.make_agent(desktop={"clipboard_text": False}).desktop_config.clipboard_text)
+        with self.assertRaises(ValueError):
+            jev.JevInput(keys=["tab"] * 193)
+
     async def test_budget_exhaustion_after_cursor_enable_still_disables_overlay(self):
         self.agent = self.make_agent(options={"cursor": True, "text": ["supplied"]})
         self.request.contract.budget.max_tool_calls = 4
@@ -908,13 +1323,15 @@ class JevTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.http.decisions), 1)
         self.assertEqual(self.scoped.usage.model_calls, 1)
 
-    async def run_pipeline(self, *, max_model_calls=100, decisions=None):
+    async def run_pipeline(self, *, max_model_calls=100, decisions=None, selector=None):
         harness = fixtures.OrchestrationTest()
         await harness.asyncSetUp()
         self.addCleanup(harness.doCleanups)
         harness.config.desktop.backend = "osworld"
         harness.config.desktop.osworld.vm_ip = "current-vm"
         harness.config.orchestration.gui_jev.enabled = True
+        if selector is not None:
+            harness.config.orchestration.gui_jev.decision = GuiJevDecisionConfig.model_validate(selector)
         harness.config.orchestration.max_model_calls = max_model_calls
         original = fixtures.ScriptedModel.run_step
 
@@ -933,6 +1350,22 @@ class JevTest(unittest.IsolatedAsyncioTestCase):
                 ]
             )
         return harness, result
+
+    async def test_chat_backend_flows_through_factory_and_parent_verification(self):
+        with patch.dict(os.environ):
+            os.environ.pop("TYPESAFE_API_KEY", None)
+            harness, result = await self.run_pipeline(selector={
+                "backend": "chat_completions", "model": "k3.1-pro", "base_url": "https://chat.example/v1",
+            })
+        self.assertEqual(result.terminal_decision.action.value, "finish")
+        self.assertEqual(self.http.value, "full pipeline")
+        self.assertEqual(len(self.http.chat_requests), 3)
+        self.assertEqual(harness.rounds.state.orchestration.usage.model_calls, 6)
+        previous = harness.model.contexts[-1]["previous_result"]
+        self.assertEqual(previous["outcome"], "achieved")
+        self.assertNotEqual(
+            harness.model.contexts[0]["observation"], harness.model.contexts[-1]["observation"],
+        )
 
     async def test_full_pipeline_registers_plugin_then_verifies_fresh_observation(self):
         harness, result = await self.run_pipeline()

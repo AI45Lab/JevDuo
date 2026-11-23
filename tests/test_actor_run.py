@@ -10,6 +10,28 @@ import actor_run
 
 
 class ActorRunTest(unittest.TestCase):
+    def test_user_simulator_private_spec_is_opt_in_and_keeps_knowledge_out_of_query(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            vm = Mock(vm_ip="vm", server_port=5000, task_root="/official/runtime")
+            vm.user_simulator_config.return_value = {"type": "llm", "knowledge": "hidden fixture knowledge"}
+            harness = {"max_steps": 20, "max_wall_seconds": 100,
+                       "user_interaction": {"enabled": True},
+                       "orchestration": {"max_cycles": 20, "max_seconds": 100,
+                                         "max_model_calls": 100, "max_tool_calls": 1000}}
+            with patch.object(actor_run, "run_agent", return_value={
+                "returncode": 0, "step_count": 1, "terminal_status": "finish"}) as run:
+                actor_run.run_actor(vm, model={"api_key": "private-model-key", "model": "scripted",
+                                              "base_url": "https://unused.invalid/v1"}, harness=harness,
+                                    query="original instruction", session_id="s", directory=directory,
+                                    log_dir=directory/'agent', started=actor_run.time.perf_counter())
+            self.assertEqual(run.call_args.kwargs["query"], "original instruction")
+            spec = directory/'user_interaction.spec.json'
+            self.assertEqual(spec.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(run.call_args.kwargs['extra_env']['JEVDUO_USER_SIMULATOR_SPEC'], str(spec))
+            self.assertEqual(json.loads(spec.read_text())["user_simulator"]["knowledge"],
+                             "hidden fixture knowledge")
+
     def test_terminal_actions_errors_and_budget_stops_are_delivered_once(self):
         cases = [
             ({"terminal_status": "finish"}, "DONE", "done"),

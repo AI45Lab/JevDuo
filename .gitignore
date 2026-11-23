@@ -25,3 +25,4 @@ job_specs/
 
 # 本地密钥（不进仓库）
 .env.local
+AGENTS.md

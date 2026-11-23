@@ -99,10 +99,14 @@ class DesktopConfig:
     session: str | None = None
     agent_id: str | None = None
     headed: bool = False
+    action_timeout_ms: int | None = None
+    clipboard_text: bool = False
 
     def __post_init__(self):
         import math
 
+        if type(self.clipboard_text) is not bool:
+            raise ValueError("clipboard_text must be a boolean")
         if type(self.snapshot_timeout_ms) is not int or not 1 <= self.snapshot_timeout_ms <= 300000:
             raise ValueError("snapshot timeout must be an integer from 1 to 300000 ms")
         if (
@@ -111,6 +115,10 @@ class DesktopConfig:
             or not 0 <= self.verify_ms <= 60000
         ):
             raise ValueError("JEV_VERIFY_MS must be a number of milliseconds from 0 to 60000")
+        if self.action_timeout_ms is not None and (
+            type(self.action_timeout_ms) is not int or not 1 <= self.action_timeout_ms <= 300000
+        ):
+            raise ValueError("action timeout must be an integer from 1 to 300000 ms")
         if not self.binary:
             raise ValueError("an agent-desktop binary is required")
 
@@ -122,12 +130,15 @@ class DesktopConfig:
                 "AGENT_DESKTOP_SNAPSHOT_TIMEOUT_MS", "15000" if remote else "3000"
             ),
             "verify_ms": os.environ.get("JEV_VERIFY_MS", "2000"),
+            "action_timeout_ms": os.environ.get("AGENT_DESKTOP_ACTION_TIMEOUT_MS"),
             "session": os.environ.get("AGENT_DESKTOP_SESSION"),
             "agent_id": os.environ.get("AGENT_DESKTOP_AGENT_ID"),
             **(overrides or {}),
         }
         if isinstance(values["snapshot_timeout_ms"], str):
             values["snapshot_timeout_ms"] = int(values["snapshot_timeout_ms"])
+        if isinstance(values["action_timeout_ms"], str):
+            values["action_timeout_ms"] = int(values["action_timeout_ms"])
         if isinstance(values["verify_ms"], str):
             values["verify_ms"] = float(values["verify_ms"])
         return cls(**values)

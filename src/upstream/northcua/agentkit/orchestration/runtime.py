@@ -94,11 +94,15 @@ class ScopedRuntime:
         *,
         reserve_model_calls: int = 0,
         infer_tools: Callable[[list[Message], list[JsonObject], Callable[[], None]], Awaitable[Message]] | None = None,
+        trajectory=None,
+        model_usage=None,
     ) -> None:
         self.request, self.budget = request, budget
         self._observe, self._execute, self._infer = observe, execute, infer
         self._cleanup = cleanup
         self._infer_tools = infer_tools
+        self.trajectory = trajectory
+        self.model_usage = model_usage
         self.reserve_model_calls = reserve_model_calls
         self.usage = Usage()
         self.last_observation: JsonObject = {}
@@ -171,6 +175,12 @@ class ScopedRuntime:
             async with asyncio.timeout(self.remaining_budget().max_seconds):
                 self.last_observation = await self._observe()
                 return self.last_observation
+
+    async def observe_for_trajectory(self) -> JsonObject:
+        """Archive-only read; do not replace the subagent's verified return observation."""
+        async with self._operation():
+            async with asyncio.timeout(self.remaining_budget().max_seconds):
+                return await self._observe()
 
     async def execute(self, tool_name: str, arguments: JsonObject, *, sensitive: bool = False) -> JsonObject:
         async with self._operation():

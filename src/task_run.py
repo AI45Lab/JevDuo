@@ -20,8 +20,11 @@ from pathlib import Path
 
 
 def _redact(text: str) -> str:
-    key = os.environ.get("JEVDUO_API_KEY", "")
-    return text.replace(key, "***") if key else text
+    for name in ("JEVDUO_API_KEY", "JEVDUO_JEV_CHAT_API_KEY", "TYPESAFE_API_KEY"):
+        key = os.environ.get(name, "")
+        if key:
+            text = text.replace(key, "***")
+    return text
 
 
 _MISSING = "[missing tool output; the call did not produce a result]"

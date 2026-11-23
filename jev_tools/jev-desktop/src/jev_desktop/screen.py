@@ -11,6 +11,54 @@ def rounded(value):
     return math.floor(value + 0.5)
 
 
+def positive_bounds(node):
+    bounds = node.get("bounds") or {}
+    return (
+        all(
+            isinstance(bounds.get(key), (int, float)) and math.isfinite(bounds[key])
+            for key in ("x", "y", "width", "height")
+        )
+        and bounds["width"] > 0
+        and bounds["height"] > 0
+    )
+
+
+def target_identity(node):
+    return {key: node.get(key) for key in ("role", "name", "path", "bounds")}
+
+
+def selection_still_unselected(node, nodes):
+    if (
+        node.get("role") not in {"cell", "row", "treeitem", "option", "tab", "listitem"}
+        or "Select" not in node.get("available_actions", [])
+        or "selected" in node.get("states", [])
+    ):
+        return False
+    matches = [n for n in nodes if target_identity(n) == target_identity(node)]
+    return (
+        len(matches) == 1
+        and matches[0].get("ref_actionable") is not False
+        and "Select" in matches[0].get("available_actions", [])
+        and "selected" not in matches[0].get("states", [])
+    )
+
+
+def expansion_still_collapsed(node, nodes):
+    if (
+        node.get("role") not in {"cell", "row", "treeitem", "disclosure"}
+        or "Expand" not in node.get("available_actions", [])
+        or "expanded" in node.get("states", [])
+    ):
+        return False
+    matches = [n for n in nodes if target_identity(n) == target_identity(node)]
+    return (
+        len(matches) == 1
+        and matches[0].get("ref_actionable") is not False
+        and "Expand" in matches[0].get("available_actions", [])
+        and "expanded" not in matches[0].get("states", [])
+    )
+
+
 def collect(tree):
     found = []
 
@@ -43,12 +91,20 @@ def outside_window(data, window_id):
 
 
 def overlay_role(tree):
-    if tree["role"] in ("sheet", "alert", "menu", "popover"):
-        return tree["role"]
-    for child in tree.get("children", []):
-        found = overlay_role(child)
-        if found:
-            return found
+    found = set()
+
+    def visit(node):
+        if "hidden" in node.get("states", []):
+            return
+        if node["role"] == "webarea":
+            return
+        if "offscreen" not in node.get("states", []):
+            found.add(node["role"])
+        for child in node.get("children", []):
+            visit(child)
+
+    visit(tree)
+    return next((role for role in ("sheet", "alert", "popover", "menu") if role in found), None)
     return None
 
 
@@ -61,7 +117,7 @@ def describe(node, rich=False, *, values=True):
         result["holds"] = str(node["value"])[:120]
     if node.get("states"):
         result["state"] = ", ".join(node["states"])
-    if '"' not in result["what"] and node.get("bounds"):
+    if '"' not in result["what"] and positive_bounds(node):
         result["at"] = f"x {rounded(node['bounds']['x'])}, y {rounded(node['bounds']['y'])}"
     if rich:
         if node.get("available_actions"):

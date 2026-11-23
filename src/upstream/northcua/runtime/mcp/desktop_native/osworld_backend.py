@@ -47,3 +47,14 @@ class OSWorldDesktopBackend(
         self.base_url = f"http://{self.vm_ip}:{self.server_port}"
         self._session = requests.Session()
         self._session.trust_env = False
+
+    @property
+    def data_tool_timeouts(self) -> dict[str, float]:
+        """Let MCP read wrappers cover the configured finite HTTP retry envelope."""
+        screenshot = (self.screenshot_timeout_seconds * self.retry_times
+                      + self.retry_interval_seconds * (self.retry_times - 1))
+        # Includes image decoding/encoding. Active-window capture first reads window geometry.
+        return {
+            "capture_desktop_screenshot": screenshot + 5.0,
+            "capture_window_screenshot": min(self.command_timeout_seconds, 30.0) + 5.0 + screenshot + 5.0,
+        }

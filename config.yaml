@@ -6,7 +6,7 @@ models:
   default: k3.1-pro
   apis:
     k3.1-pro:
-      base_url: http://100.103.152.177:8080/v1
+      base_url: http://100.103.250.241:8080/v1
       model: k3.1-pro
       api_key_env: JEVDUO_KIMI_API_KEY
       max_tokens: 65536
@@ -16,7 +16,7 @@ models:
       reasoning_effort: null
       direct_api: true
     MiniMax-M3.1-Flash:
-      base_url: http://100.103.152.177:8080/v1
+      base_url: http://100.103.250.241:8080/v1
       model: MiniMax-M3.1-Flash
       api_key_env: JEVDUO_MINIMAX_API_KEY
       max_tokens: 65536
@@ -61,12 +61,34 @@ harness:
       mode: hybrid
     gui_jev:
       enabled: true
+      trajectory:
+        enabled: true
+        screenshots: true
+      decision:
+        backend: chat_completions
+        model: k3.1-pro
+        max_tokens: 4096
       launch_args:
         google-chrome.desktop:
         - --force-renderer-accessibility
       desktop:
         binary: /opt/jev/agent-desktop-repair-014-1111-2255/bin/agent-desktop
         headed: true
+        clipboard_text: true
+      options:
+        replan_safe_failures: true
+        reconcile_observed_popups: true
+        text_replans: 2
+        replan_changed_text_targets: true
+        allow_infeasible: true
+        # Bundled native CLI has no list-windows --owned-by contract yet.
+        follow_owned_dialogs: false
+        review_goal_scope: true
+        follow_application_windows: true
+        remember_closed_windows: true
+        replan_no_effect: true
+        verify_terminal: true
+        startup_observation_retries: 3
     max_cycles: 20
     subagent_steps_per_cycle: 50
     model_timeout_retries: 2
@@ -125,6 +147,6 @@ log:
 evaluation_model:
   provider: openai_compatible
   model: k3.1-pro
-  base_url: http://100.103.152.177:8080/v1
+  base_url: http://100.103.250.241:8080/v1
   api_key_env: JEVDUO_KIMI_API_KEY
   min_output_tokens: 8192
