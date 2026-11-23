@@ -22,6 +22,8 @@ orchestration:
     mode: hybrid
   gui_jev:
     enabled: false
+    decision:
+      backend: typesafe  # Or chat_completions with explicit model/base_url/api_key_env.
     launch_args: {}
 context_management:
   mode: 'off'

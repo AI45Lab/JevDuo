@@ -66,17 +66,32 @@ class GeneralSubagent:
         self.spec = SubagentSpec(
             agent_id="general",
             description=(
-                f"General {config.mode} fallback for tasks outside gui_jev's semantic GUI operations: "
-                "canvas/drawing, coordinate clicking, dragging, hotkeys and text. "
-                "Requires allowed_tools=[execute_pyautogui_code]; "
+                f"BOUNDED {config.mode.upper()} FALLBACK. Use for a demonstrated visual or command-only "
+                "portion outside gui_jev's current native targets, supported keys and input contract. "
+                "It reasons over screenshots and executes literal PyAutoGUI calls for pixel locations, "
+                "drawing/canvas gestures, inaccessible visual objects, mouse/keyboard sequences and text. "
+                "Examples include dragging an object with no usable AX identity or performing a visual "
+                "canvas manipulation; ordinary menus, forms, editable fields and settings should go to Jev. "
+                "Jev can itself use supported keyboard shortcuts and pointer actions on bound AX elements, "
+                "so needing a click, drag or hotkey alone does not require general. "
+                "Its GUI language permits straight-line calls with literal arguments, pyperclip.copy and "
+                "time.sleep; general Python logic belongs in the separate shell tool when available. "
+                "Requires execute_pyautogui_code in allowed_tools even for a hybrid contract; "
                 + (
-                    "also allow run_command for file inspection, Bash/Python scripts and result verification "
-                    "inside the current task VM. "
+                    "hybrid mode additionally supports run_command for task-required filesystem inspection, "
+                    "Bash/Python operations, artifact checks and concrete environment diagnosis inside the "
+                    "CURRENT TASK VM. Add run_command to allowed_tools only for the required command portion. "
                     if config.mode == "hybrid"
-                    else ""
+                    else "GUI mode exposes no shell or filesystem command tool. "
                 )
-                + "agent_input must be {}. Use gui_jev for supported semantic GUI operations; "
-                "delegate a bounded recovery subgoal here when needed."
+                + "Add wait_for_state if waiting is needed; observation and finish interfaces are internal. "
+                "agent_input must be {}. Give a concrete capability gap, one coherent fallback goal, explicit "
+                "success evidence and a return condition. It receives fresh screenshots and real tool results, "
+                "but a successful tool call or finish claim does not establish whole-task completion. "
+                "After the unsupported portion is resolved, return supported GUI work to Jev. "
+                "Changing to general never authorizes replay of an unresolved Jev write. It uses the same VM, "
+                "task constraints, shared budgets and parent verification; it is not a replacement for Jev "
+                "merely because an application or instruction appears complex."
             ),
             capabilities=capabilities,
             required_tools=("execute_pyautogui_code",),

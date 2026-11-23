@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import replace
 
 from fastmcp import FastMCP
 
@@ -29,7 +30,12 @@ def _register_desktop_native_data_tools(
     state: DesktopNativeServerState,
     backend: DesktopNativeBackend,
 ) -> None:
-    register_contract_handlers(data_mcp, desktop_data_contracts(), _desktop_data_handler_map(state, backend))
+    timeouts = getattr(backend, "data_tool_timeouts", {})
+    contracts = tuple(
+        replace(contract, timeout_seconds=max(contract.timeout_seconds, timeouts.get(contract.tool_id, 0)))
+        for contract in desktop_data_contracts()
+    )
+    register_contract_handlers(data_mcp, contracts, _desktop_data_handler_map(state, backend))
 
 
 def _record_desktop_frame_metadata(

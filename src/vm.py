@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from evaluation_transport import evaluate_with_service_check
 from evaluator_dependencies import prepare_evaluator_dependencies
 from setup_transport import prepared_setup_transport
 
@@ -19,12 +20,13 @@ from setup_transport import prepared_setup_transport
 class Vm:
     def __init__(self, *, task_root: str | Path, vm_path: str | Path,
                  run_root: str | Path, asset_root: str | Path | None = None,
-                 startup_wait_seconds: float = 30.0):
+                 startup_wait_seconds: float = 30.0, require_a11y_tree: bool = False):
         self.task_root = Path(task_root).resolve()
         self.vm_path = str(vm_path)
         self.run_root = Path(run_root)
         self.asset_root = Path(asset_root) if asset_root else None
         self.startup_wait_seconds = float(startup_wait_seconds)
+        self.require_a11y_tree = bool(require_a11y_tree)
         self.env: Any = None
         # 任务模块 import 期就把资产 URL 固化，必须在 fetch_task 之前设好
         self._bootstrap()
@@ -121,7 +123,7 @@ class Vm:
             screen_size=(1920, 1080),
             headless=True,
             os_type="Ubuntu",
-            require_a11y_tree=True,
+            require_a11y_tree=self.require_a11y_tree,
             cache_dir=str(self.run_root / "evaluation_cache"),
         )
         runtime_module = sys.modules["desktop_env.desktop_env"]
@@ -143,10 +145,18 @@ class Vm:
         if self.env is not None:
             self.env.step(action, pause=pause)
 
+    def user_simulator_config(self) -> dict | None:
+        if self.env is None:
+            return None
+        return self.env._task_get(self.env.task_config, "user_simulator", None)
+
     def score(self, task: dict) -> Any:
         if self.env is None:
             return None
-        return self.env.evaluate()
+        return evaluate_with_service_check(
+            self.env.evaluate, endpoint=f"http://{self.vm_ip}:{self.server_port}/file",
+            receipt=self.run_root / "evaluation_transport" / f"{task['id']}.jsonl",
+        )
 
     def close(self) -> None:
         if self.env is not None:

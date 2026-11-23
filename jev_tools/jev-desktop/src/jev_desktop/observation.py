@@ -1,7 +1,12 @@
 """Scoped accessibility observations over an injected command callable."""
 
+import time
+
 from .contracts import DesktopError, Observation
 from .screen import collect, offerable, outside_window, overlay_role
+from .selection_value import selection_values
+from .snapshot_retry import snapshot
+from .startup_observation import empty_document_tree
 
 
 def unreadable(what, result):
@@ -9,12 +14,16 @@ def unreadable(what, result):
     return DesktopError(f"{what} could not be read: {code}", code)
 
 
-def observe(cli, scope, timeout_ms, *, recover=True):
+def observe(cli, scope, timeout_ms, *, recover=True, sleep=time.sleep, clock=time.monotonic):
     args = (["--app", scope.app] if scope.app else []) + (
         ["--window-id", scope.window_id] if scope.window_id else []
     )
     base = ["snapshot", *args, "--compact", "--include-bounds", "--timeout-ms", str(timeout_ms)]
-    snap = cli(*base, *(["--root", scope.root] if scope.root else []))
+
+    def read(*argv):
+        return snapshot(cli, argv, timeout_ms, sleep=sleep, clock=clock)
+
+    snap = read(*base, *(["--root", scope.root] if scope.root else []))
     if (
         not snap["ok"]
         and scope.window_id
@@ -23,13 +32,13 @@ def observe(cli, scope, timeout_ms, *, recover=True):
     ):
         from dataclasses import replace
 
-        return observe(cli, replace(scope, app=None), timeout_ms, recover=recover)
+        return observe(cli, replace(scope, app=None), timeout_ms, recover=recover, sleep=sleep, clock=clock)
     if not snap["ok"] and scope.root:
         raise unreadable("that region", snap)
     if snap["ok"] and scope.root and scope.window_id and outside_window(snap["data"], scope.window_id):
         raise DesktopError("that region is outside the pinned window", "ROOT_OUTSIDE_WINDOW")
     if not snap["ok"] and snap.get("error", {}).get("code") != "WINDOW_NOT_FOUND":
-        snap = cli(*base, "--max-depth", "4")
+        snap = read(*base, "--max-depth", "4")
     if not snap["ok"]:
         raise unreadable("the screen", snap)
     if scope.window_id and outside_window(snap["data"], scope.window_id):
@@ -52,7 +61,7 @@ def observe(cli, scope, timeout_ms, *, recover=True):
             else None
         )
     if surface:
-        scoped = cli(*base, "--surface", surface)
+        scoped = read(*base, "--surface", surface)
         if scoped["ok"]:
             if scope.window_id and outside_window(scoped["data"], scope.window_id):
                 raise DesktopError("the surface is outside the pinned window", "SURFACE_OUTSIDE_WINDOW")
@@ -63,15 +72,19 @@ def observe(cli, scope, timeout_ms, *, recover=True):
             raise unreadable(f"the {surface}", scoped)
     data = snap["data"]
     if recover and timeout_ms < 60000 and (data.get("identity_unproven") or data.get("complete") is False):
-        return observe(cli, scope, min(timeout_ms * 2, 60000), recover=False)
+        return observe(cli, scope, min(timeout_ms * 2, 60000), recover=False, sleep=sleep, clock=clock)
     if data.get("identity_unproven"):
         raise DesktopError("the screen identity is unproven", "INCOMPLETE_OBSERVATION")
+    if data.get("complete") is True:
+        data = {**data, "tree": selection_values(data["tree"])}
     context = []
 
     def walk(node):
-        if {"hidden", "offscreen"}.intersection(node.get("states", [])):
+        if "hidden" in node.get("states", []):
             return
-        if node.get("name") or node.get("value") is not None:
+        if "offscreen" not in node.get("states", []) and (
+            node.get("name") or node.get("value") is not None or "focused" in node.get("states", [])
+        ):
             context.append(
                 {
                     key: node[key]
@@ -93,6 +106,7 @@ def observe(cli, scope, timeout_ms, *, recover=True):
             "surface": surface or "window",
             "unclassified_surfaces": unclassified,
             "complete": data.get("complete"),
+            "empty_document_structure": empty_document_tree(data["tree"]),
             "context": context,
             "root": scope.root,
             "snapshot_timeout_ms": timeout_ms,

@@ -35,11 +35,21 @@ does not make a model request or execute a desktop action.
 
 ## Source provenance and validation
 
-The 17 Python source modules were copied without code changes from the frozen
-`o21-30x30-1112-111127/source-snapshot/jev_desktop/` evaluation snapshot. Packaging
-metadata was restored from the original `jev/pyproject.toml` (version 0.1.0). The
-Apache-2.0 license is retained from the original agent-desktop project. This Python
-package was not part of the Rust repository's `ubuntu2204` commit.
+The initial package was restored from the frozen
+`o21-30x30-1112-111127/source-snapshot/jev_desktop/` evaluation snapshot. On
+2026-11-19 the 35 Python source modules were replaced with the CLI-trajectory-adapted
+SDK from the local `agent-desktop/jev` development checkout. The runtime modules
+are included here byte for byte; no import of that external checkout is needed.
+The corresponding unit tests are included under `tests/`, with imports sorted
+for this package layout. Their local-process fixture allows shared-storage
+interpreter startup time while preserving its short timeout case.
+Packaging metadata (version 0.1.0) and the Apache-2.0 license
+are retained. This Python update does not rebuild or redeploy the guest Rust CLI.
+
+For an explicitly configured private HTTP model gateway, set `TYPESAFE_ALLOW_HTTP=1`
+alongside `TYPESAFE_BASE_URL` (the full `/v1/systemone` endpoint), `TYPESAFE_MODEL`
+and `TYPESAFE_API_KEY`. Remote HTTP is rejected by default; the opt-in does not
+permit credentials embedded in URLs, invalid ports or non-HTTP schemes.
 
 The source is included here, so archived runs and the former sibling checkout are
 not required for installation. The subtree import records this restored package as
@@ -50,4 +60,19 @@ scripted HTTP and fake desktop responses, without contacting a VM or model servi
 
 ```bash
 venv/bin/python -m pytest -q tests/test_jev_subagent.py tests/test_jev_feedback.py tests/test_native_execution.py
+venv/bin/python -m unittest discover -s jev_tools/jev-desktop/tests -q
 ```
+
+The JevDuo adapter enables the guarded clipboard backend by default, with
+`desktop.clipboard_text: false` as an explicit override. The SDK's standalone
+default remains off. `TYPE_TEXT` still means whole-field replacement; the backend
+is considered only after a positively undelivered safe native refusal. It proves
+focus and the complete old selection before pasting once and verifies exact AX
+readback afterward. Readback verifies field content, not application save/commit.
+
+`RunOptions.resources` binds at most 16 absolute guest paths to finite
+`OPEN_RESOURCE:n` choices. The JevDuo caller supplies `agent_input.resources`, or
+static `gui_jev.options.resources`. Paths are literal arguments, never shell or
+free-form launch flags. Unknown delivery is not retried. See
+[the integration contract](../../docs/JEV_CLI_ADAPTATION.md) for runtime options,
+native compatibility limitations and verification commands.

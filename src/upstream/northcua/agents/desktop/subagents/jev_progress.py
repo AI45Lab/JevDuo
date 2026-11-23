@@ -18,7 +18,15 @@ def unreconciled_actions(history: list[dict]) -> tuple[dict, ...]:
         if summary.get("unresolved_delivery"):
             blocked.append({"operation": "*", "target": "*", "window_id": summary.get("screen", {}).get("window_id")})
         for action in summary.get("unsafe_to_replay", []):
-            blocked.append({**action, "window_id": summary.get("screen", {}).get("window_id")})
+            if str(action.get("operation", "")).startswith("OPEN_RESOURCE:"):
+                # A future contract can bind different paths to these indices.
+                # Preserve uncertainty across windows and all finite resource slots.
+                blocked.extend(
+                    {**action, "operation": f"OPEN_RESOURCE:{index}", "target": "*", "window_id": None}
+                    for index in range(16)
+                )
+            else:
+                blocked.append({"window_id": summary.get("screen", {}).get("window_id"), **action})
     return tuple(blocked)
 
 
@@ -30,7 +38,7 @@ def repeated_blocker(history: list[dict], agent_input: dict, threshold: int = 3)
         if contract.get("agent_id") != "gui_jev":
             break
         previous_input = contract.get("agent_input") or {}
-        scope = ("app", "window_id", "root", "snapshot_timeout_ms", "input_mode", "allowed_operations", "keys")
+        scope = ("app", "window_id", "root", "snapshot_timeout_ms", "input_mode", "allowed_operations", "keys", "resources")
         if any(agent_input.get(key) != previous_input.get(key) for key in scope):
             break
         result = cycle.get("subagent_result") or {}

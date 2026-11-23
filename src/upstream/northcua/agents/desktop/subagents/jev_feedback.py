@@ -9,23 +9,33 @@ def feedback(events: list[dict], *, execution_diagnostics: list[dict] | None = N
     diagnostics = (execution_diagnostics or [])[-8:]
     terminal = events[-1] if events else {}
     turns = [event["turn"] for event in events if "turn" in event]
-    screen = terminal.get("screen") or next((event["screen"] for event in reversed(events) if event.get("screen")), {})
+    screen = terminal.get("after_screen") or terminal.get("screen") or next(
+        (event.get("after_screen") or event["screen"] for event in reversed(events)
+         if event.get("after_screen") or event.get("screen")), {}
+    )
     error = terminal.get("error")
     last = turns[-1] if turns else {}
     snapshot = next((entry for entry in reversed(diagnostics) if "snapshot_timeout_ms" in entry), {})
-    unsafe = [
-        {key: turn.get(key) for key in ("operation", "target", "ref", "delivery")}
-        for turn in turns
-        if turn.get("delivery") in ("delivered_unverified", "delivery_uncertain")
-        and (
-            not turn.get("ok")
-            or turn.get("changed") is None
-            or (
-                turn.get("operation") in {"TYPE_TEXT", "INSERT_TEXT", "CLEAR", "SELECT", "LAUNCH"}
-                and turn.get("changed") is not True
-            )
-        )
-    ]
+    unsafe = []
+    for event in events:
+        turn = event.get("turn")
+        if not turn or turn.get("delivery") not in ("delivered_unverified", "delivery_uncertain"):
+            continue
+        resource = str(turn.get("operation", "")).startswith("OPEN_RESOURCE:")
+        if resource or not turn.get("ok") or turn.get("changed") is None or (
+            turn.get("operation") in {"TYPE_TEXT", "INSERT_TEXT", "CLEAR", "SELECT", "LAUNCH"}
+            and turn.get("changed") is not True
+        ):
+            action = {key: turn.get(key) for key in ("operation", "target", "ref", "delivery")}
+            if resource:
+                # Indices can be rebound by the next contract. Block every resource
+                # handoff across windows until the caller independently reconciles it.
+                action.update(operation="OPEN_RESOURCE:*", target="*", window_id=None)
+            else:
+                window = (event.get("screen") or {}).get("window_id")
+                if window is not None:
+                    action["window_id"] = window
+            unsafe.append(action)
     return {
         "stop": terminal.get("stop", "no_terminal_event"),
         "error": error,
