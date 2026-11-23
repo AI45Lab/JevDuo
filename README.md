@@ -25,6 +25,7 @@ https://github.com/user-attachments/assets/f48203cb-eb2b-496e-8020-83c1ffbf7838
 `gui_jev` 的有限选择当前由 `k3.1-pro` 的 Chat Completions 接口完成，保留 Jev 的原始
 候选输入和回答格式；它独立复用 `models.apis.k3.1-pro`，不再要求 TypeSafe 凭据。
 编排与插件配置详见 [ORCHESTRATION.md](docs/ORCHESTRATION.md)。
+可选的 [Fast Router](docs/FAST_ROUTER.md) 在共享预算内为同一目标选择和转派执行者。
 `gui_jev` 使用的原生桌面工具源码随仓库保存在 `jev_tools/agent-desktop/`，
 构建和部署方法见[使用仓库内的 agent-desktop](#使用仓库内的-agent-desktop)。
 
@@ -219,8 +220,8 @@ chmod 600 .env.local
 `JEVDUO_REGISTRY_AUTH` 支持裸 `user:pass` 或其 base64 编码。
 `JEVDUO_KIMI_API_KEY` 用于当前默认 actor，也用于 `evaluation_model` 配置的官方评分模型；
 使用 `--model MiniMax-M3.1-Flash` 只切换 actor，不会同时切换评分模型。
-`TYPESAFE_API_KEY` 用于 Jev 决策服务。`run.sh` 自动加载 `.env.local`，driver 将明确支持的
-`TYPESAFE_API_KEY`、`TYPESAFE_MODEL`、`TYPESAFE_BASE_URL` 写入私有 spec，再注入 agent 进程。
+`TYPESAFE_API_KEY` 用于 Fast Router 和 TypeSafe 后端的 Jev 决策服务。
+`run.sh` 自动加载 `.env.local`，driver 将支持的 TypeSafe 环境变量写入私有 spec，再注入 agent 进程。
 
 ## 提交评测
 

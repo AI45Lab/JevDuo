@@ -69,6 +69,17 @@ class FeedbackTests(unittest.TestCase):
         self.assertEqual(summary["blocked_reason"], "REMOTE_EXECUTION_UNCONFIRMED")
         self.assertEqual(summary["interrupted_action"], receipt)
         self.assertTrue(summary["unresolved_delivery"])
+        self.assertTrue(summary["turns_truncated"])
+        self.assertEqual(summary["error"]["code"], "REMOTE_EXECUTION_UNCONFIRMED")
+        self.assertTrue(summary["turns"])
+
+    def test_final_truncation_keeps_recent_action_evidence(self):
+        turn = {"operation": "TYPE_TEXT", "target": "Subject", "ok": True, "changed": True,
+                "trace": {str(i): "x" * 2000 for i in range(40)}}
+        summary = json.loads(bounded_json(feedback([{"turn": turn}, {"stop": "budget_exhausted"}])))
+        self.assertTrue(summary["evidence_truncated"])
+        self.assertTrue(summary["turns_truncated"])
+        self.assertEqual(summary["turns"], [{k: v for k, v in turn.items() if k != "trace"}])
 
     def test_non_object_historical_summaries_do_not_crash_recovery(self):
         for value in (None, [], 42, "message"):

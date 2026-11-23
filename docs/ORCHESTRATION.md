@@ -1,5 +1,8 @@
 # Slow Orchestrator 框架
 
+启用 [Fast Router](FAST_ROUTER.md) 后，Slow 定义目标和验收条件，框架根据 Fast 提供的
+执行能力与进展信号派发子代理。两种模式共用插件、工具隔离和清理协议。
+
 提供编排框架、插件协议和可选的 `gui_jev`、`general` 适配器。Subagent Registry 默认空；
 按各插件配置显式注册。`game_jev` 尚未实现。Desktop 唯一执行模式为编排模式；
 本工程根目录 `config.yaml` 配置了预算并启用两个插件。

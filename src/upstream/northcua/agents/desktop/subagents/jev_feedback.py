@@ -82,14 +82,21 @@ def bounded_json(value: dict, limit: int = 32000) -> str:
     if len(text) > limit:
         value["screen"] = {key: item for key, item in value.get("screen", {}).items() if key != "visible_context"}
         value["context_truncated"] = True
+        value["turns_truncated"] = value.get("turns_truncated", False) or len(value.get("turns", [])) > 8
         value["turns"] = value.get("turns", [])[-8:]
         text = json.dumps(value, ensure_ascii=False)
     if len(text) > limit:
         screen_id = value.get("screen", {}).get("window_id")
+        turns = [
+            {key: turn[key] for key in ("operation", "target", "ref", "delivery", "ok", "changed") if key in turn}
+            for turn in value.get("turns", [])[-3:]
+        ]
         value = {
             key: value.get(key)
             for key in (
                 "stop",
+                "error",
+                "budget_reason",
                 "blocked_reason",
                 "last_operation",
                 "interrupted_action",
@@ -99,6 +106,8 @@ def bounded_json(value: dict, limit: int = 32000) -> str:
             )
         }
         value["screen"] = {"window_id": screen_id} if screen_id else {}
+        value["turns"] = turns
+        value["turns_truncated"] = True
         value["evidence_truncated"] = True
         text = json.dumps(value, ensure_ascii=False)
     if len(text) > limit:

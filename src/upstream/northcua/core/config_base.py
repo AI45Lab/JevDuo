@@ -150,6 +150,24 @@ class GeneralSubagentConfig(BaseModel):
     mode: Literal["gui", "hybrid"] = "hybrid"
 
 
+class FastRouterConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    model: str | None = None
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    attempt_model_calls: int = Field(default=20, ge=2)
+    attempt_tool_calls: int = Field(default=25, ge=1)
+    timeout_seconds: float = Field(default=30, gt=0, allow_inf_nan=False)
+    verification_reserve_seconds: float = Field(default=60, ge=0, allow_inf_nan=False)
+    capability_threshold: float = Field(default=0.7, ge=0, le=1)
+    preference_margin: float = Field(default=0.1, ge=0, le=1)
+    progress_threshold: float = Field(default=0.7, ge=0, le=1)
+    preferred_agent: str = "gui_jev"
+    fallback_agent: str | None = "general"
+    allowed_tools: list[str] | None = None
+
+
 class OrchestrationConfig(BaseModel):
     """Desktop orchestration budgets; the production plugin registry starts empty."""
 
@@ -165,6 +183,7 @@ class OrchestrationConfig(BaseModel):
     model_timeout_retries: int = Field(default=0, ge=0, le=5)
     gui_jev: GuiJevConfig = Field(default_factory=GuiJevConfig)
     general: GeneralSubagentConfig = Field(default_factory=GeneralSubagentConfig)
+    fast_router: FastRouterConfig = Field(default_factory=FastRouterConfig)
 
 
 class CoordinatePolicyConfig(BaseModel):

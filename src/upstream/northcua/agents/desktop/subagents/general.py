@@ -95,6 +95,7 @@ class GeneralSubagent:
             ),
             capabilities=capabilities,
             required_tools=("execute_pyautogui_code",),
+            optional_tools=("wait_for_state", "run_command") if config.mode == "hybrid" else ("wait_for_state",),
         )
 
     async def run(self, request: SubagentRequest, runtime: SubagentRuntime) -> SubagentResult:

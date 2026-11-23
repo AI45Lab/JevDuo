@@ -17,8 +17,10 @@ from uuid import uuid4
 
 import httpx
 from jev_desktop import AgentDesktop, DesktopConfig, JevLoop, Limits, RunOptions, Scope, TypeSafeModel
+from jev_desktop.contracts import DesktopError, TextModelError
 from jev_desktop.desktop import CATALOG
 from jev_desktop.desktop import delivery_evidence
+from jev_desktop.screen import collect, offerable
 from jev_desktop.text_model import INSTRUCTIONS
 from pydantic import Field, StrictBool, StrictInt
 
@@ -31,6 +33,8 @@ from northcua.agentkit.orchestration.contracts import (
     Usage,
 )
 from northcua.agentkit.orchestration.runtime import BudgetExceeded
+from northcua.agentkit.orchestration.decisions import DecisionClient
+from northcua.agentkit.orchestration.routing import result_evidence
 from northcua.core.config import DesktopPolicyConfig
 from northcua.core.config_base import GuiJevConfig
 
@@ -220,10 +224,13 @@ class _Desktop(AgentDesktop):
         self.app_inventory = {}
 
     def observe(self, scope):
-        observed = super().observe(scope)
+        observation = super().observe(scope)
         self.bridge.record("ax_observation", action_id=self.bridge.active_action, scope=asdict(scope),
-                           observation=asdict(observed))
-        return observed
+                           observation=asdict(observation))
+        # Unaddressable refs identify one capture, not a change in the displayed field.
+        for target in observation.screen.get("unaddressable_targets", []):
+            target.pop("ref_id", None)
+        return observation
 
     def _action(self, operation, call, *, window_id=None, ref=None, native=False, arguments=None):
         receipt = None
@@ -309,30 +316,11 @@ class _DecisionModel:
         self.bridge, self.config = bridge, config
 
     def ask(self, request):
-        async def ask() -> dict:
-            async def post():
-                response = await self.bridge.post_model(
-                    self.config.endpoint, {**request, "model": self.config.model},
-                    api_key=self.config.api_key, timeout=30, backend="typesafe", attempt=attempt + 1,
-                )
-                response.raise_for_status()
-                result = response.json()
-                if not isinstance(result, dict) or not isinstance(result.get("answers"), dict):
-                    raise ValueError("invalid Jev response")
-                return result
-
-            for attempt in range(3):
-                try:
-                    return await self.bridge.runtime.call_model(self.config.model, post)
-                except httpx.HTTPStatusError as error:
-                    if error.response.status_code not in (429, 503, 529) or attempt == 2:
-                        raise RuntimeError(f"Jev returned HTTP {error.response.status_code}") from None
-                    await asyncio.sleep(0.5 * 2**attempt)
-                except (httpx.HTTPError, ValueError):
-                    raise RuntimeError("Jev returned no valid decision; no action dispatched") from None
-            raise RuntimeError("Jev stayed unavailable")
-
-        return self.bridge.call(ask)
+        return self.bridge.call(
+            lambda: DecisionClient(self.config).ask(
+                request, self.bridge.runtime.call_model, post_model=self.bridge.post_model,
+            )
+        )
 
 
 class _TextModel:
@@ -416,6 +404,10 @@ class JevSubagent:
         capabilities=("native_gui", "accessibility", "text_input", "keyboard", "pointer", "selection"),
         required_tools=("agent_desktop",),
         input_model=JevInput,
+        bind_input=lambda intent: {
+            **({"app": intent.application} if intent.application else {}),
+            **({"text": intent.text} if intent.text is not None else {}),
+        },
     )
 
     def __init__(self, config: GuiJevConfig, desktop: DesktopPolicyConfig):
@@ -437,8 +429,48 @@ class JevSubagent:
             **options.model_dump(exclude={"scope", "resources"}, exclude_unset=True),
         )
 
+    async def routing_observation(self, read):
+        result = await read({
+            "argv": ["snapshot", "--compact", "--include-bounds", "--timeout-ms", "3000"],
+            "timeout": 8,
+        })
+        if not result.get("ok"):
+            return {"status": "unavailable", "error": (result.get("error") or {}).get("code")}
+        data = result["data"]
+        if data.get("identity_unproven") or data.get("complete") is False:
+            return {"status": "incomplete", "app": data.get("app"), "window": data.get("window")}
+        nodes = [n for n in collect(data["tree"]) if not {"offscreen", "hidden"}.intersection(n.get("states", []))]
+        actionable = [n for n in offerable(nodes) if n.get("ref_actionable") is not False]
+        selected = actionable if len(actionable) <= 80 else actionable[:40] + actionable[-40:]
+        text_nodes = [n for n in nodes if n.get("name")]
+        text_nodes = text_nodes if len(text_nodes) <= 40 else text_nodes[:20] + text_nodes[-20:]
+        return {
+            "status": "observed", "app": data.get("app"), "window": data.get("window"),
+            "actionable_count": len(actionable),
+            "controls": [
+                {"role": n["role"], "name": str(n.get("name", ""))[:160],
+                 "value": str(n.get("value", ""))[:240], "actions": n["available_actions"]}
+                for n in selected
+            ],
+            "visible_text": [str(n["name"])[:240] for n in text_nodes],
+            "truncated": len(actionable) > 80 or len(nodes) > 40,
+        }
+
     async def run(self, request: SubagentRequest, runtime: SubagentRuntime) -> SubagentResult:
         agent_input = JevInput.model_validate(request.contract.agent_input)
+        text = agent_input.text if agent_input.text is not None else self.options.text
+        progress = [result_evidence(attempt.result) for attempt in request.prior_attempts]
+        if isinstance(text, list):
+            for attempt, evidence in zip(request.prior_attempts, progress, strict=True):
+                summary = evidence["summary"]
+                if attempt.contract.agent_id != "gui_jev" or not isinstance(summary, dict) or summary.get("turns_truncated"):
+                    text = None
+                    break
+                consumed = sum(
+                    turn.get("text_source") == "supplied" and turn.get("ok") is True
+                    for turn in summary.get("turns", [])
+                )
+                text = text[consumed:]
         blocker = repeated_blocker(request.history, request.contract.agent_input)
         bridge = _Bridge(runtime)
         scope = replace(
@@ -447,7 +479,7 @@ class JevSubagent:
         options = replace(
             self.options,
             scope=scope,
-            text=agent_input.text if agent_input.text is not None else self.options.text,
+            text=text,
             text_model=_TextModel(bridge),
             input_mode=agent_input.input_mode,
             keys=tuple(agent_input.keys) if agent_input.keys is not None else self.options.keys,
@@ -465,6 +497,9 @@ class JevSubagent:
                 "goal": request.contract.goal,
                 "success_criteria": request.contract.success_criteria,
                 "constraints": request.contract.constraints,
+                **({"prior_progress": progress, "requested_text": agent_input.text,
+                    "continuation": "Continue from the current observed state; do not repeat completed changes."}
+                   if progress else {}),
             },
             ensure_ascii=False,
         )
@@ -516,6 +551,10 @@ class JevSubagent:
 
         def partial_result(error):
             summary = feedback(events, execution_diagnostics=bridge.execution_diagnostics)
+            if isinstance(error, BudgetExceeded) and str(error) in {
+                "subgoal_model_calls_limit", "subgoal_tool_calls_limit",
+            }:
+                summary.update(stop="budget_exhausted", error=None, blocked_reason=None, budget_reason=str(error))
             action = bridge.pending_action
             if action is not None:
                 summary["interrupted_action"] = action
@@ -542,7 +581,14 @@ class JevSubagent:
             image = final_observation.get("screenshot_path")
             bridge.record("subgoal_observation", observation=final_observation, policy_input=False,
                           image_available=isinstance(image, str) and Path(image).is_file())
-        except Exception as error:
+        except Exception as original_error:
+            # Jev wraps failures for redaction; preserve the harness's budget signal.
+            error = original_error
+            cause: BaseException = error
+            while isinstance(cause, (DesktopError, TextModelError)) and cause.__context__ is not None:
+                cause = cause.__context__
+            if isinstance(cause, BudgetExceeded):
+                error = cause
             events.append(
                 {
                     "stop": "exception",
@@ -555,6 +601,8 @@ class JevSubagent:
             error.subagent_result = partial_result(error)
             with suppress(TrajectoryWriteError):
                 bridge.record("attempt_finished", status="exception", result=error.subagent_result.model_dump(mode="json"))
+            if error is not original_error:
+                raise error
             raise
         except BaseException as error:
             bridge.stop()
@@ -585,7 +633,7 @@ class JevSubagent:
             else "failed"
             if stop in ("action_failed", "exception")
             else "yielded"
-            if stop.startswith("stopped ")
+            if stop.startswith("stopped at ") and stop.endswith(" budget")
             else "blocked"
         )
         result = SubagentResult(
