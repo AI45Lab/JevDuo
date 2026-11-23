@@ -15,6 +15,7 @@ from nexau.archs.llm.llm_config import LLMConfig
 from nexau.archs.main_sub.agent_context import GlobalStorage
 from nexau.archs.main_sub.config import AgentConfig
 from nexau.archs.main_sub.execution.hooks import BeforeModelHookInput
+from nexau.core.messages import Role
 from northcua.agentinfra.context.adapters.provider_guard import (
     ProviderContextBudgetGuard,
     install_provider_context_budget_guard,
@@ -119,15 +120,56 @@ class ScriptedModel:
     def __init__(self, actions):
         self.actions = iter(actions)
         self.contexts = []
+        self.prompts = []
 
     async def run_step(self, **kwargs):
         kwargs["before_provider_call"]()
         messages = kwargs["build_envelope"]([], None)
+        self.prompts.append(messages)
         prompt = messages[-1].content[0].text
         if not prompt.startswith("{"):
             response = "local model response"
         else:
-            payload = json.loads(prompt)
+            payload = {}
+            history = []
+            results, notes = {}, {}
+            decisions = []
+            for message in messages:
+                if message.role == Role.ASSISTANT:
+                    try:
+                        decisions.append(json.loads(message.content[0].text))
+                    except ValueError:
+                        pass
+                if message.role != Role.USER or not message.content[0].text.startswith("{"):
+                    continue
+                event = json.loads(message.content[0].text)
+                if event.get("event") == "subagent_result":
+                    results[event["ref"]] = event["result"]
+                elif event.get("event") == "note_updated":
+                    notes[event["ref"]] = event["entry"]
+                for cycle in event.get("history", []):
+                    cycle = dict(cycle)
+                    if cycle.get("subagent_result_ref") is not None:
+                        cycle["subagent_result"] = results[cycle["subagent_result_ref"]]
+                    for name in ("decision", "final_verification"):
+                        ref = cycle.get(f"{name}_ref")
+                        if ref is not None:
+                            value = next(
+                                d for d in reversed(decisions)
+                                if d.get("observation_id") == ref["observation_id"]
+                                and d.get("action") == ref["action"]
+                                and (d.get("contract") or {}).get("subgoal_id") == ref.get("subgoal_id")
+                            )
+                            value = json.loads(json.dumps(value))
+                            if "contract_budget_override" in ref:
+                                value["contract"]["budget"] = ref["contract_budget_override"]
+                            cycle[name] = value
+                    history.append(cycle)
+                payload.update(event)
+                if event.get("event") == "current_state" and "previous_result_ref" in event:
+                    payload["previous_result"] = results.get(event["previous_result_ref"])
+                    payload["notes"] = [notes[entry["ref"]] for entry in event["notes_refs"]]
+            payload["history"] = history
             self.contexts.append(payload)
             action = next(self.actions)
             response = json.dumps(
@@ -726,6 +768,25 @@ class OrchestrationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(restored.orchestration.previous_result.exit_reason, "OSError")
         self.assertEqual(restored.step_logs[0].orchestration.subagent_result.outcome, "failed")
         self.assertEqual(result.status.value, "fail")
+
+    async def test_slow_prefix_survives_new_cycle_and_final_verification(self):
+        from nexau.core.serializers.openai_chat import serialize_ump_to_openai_chat_payload
+
+        self.config.orchestration.max_cycles = 1
+        self.config.orchestration.subagent_steps_per_cycle = 2
+        self.factory.subagents.register(FakeSubagent("no_extra_inference"))
+        await self.run_script([
+            {"action": "CONTINUE", "contract": contract().model_dump()},
+            {"action": "SUCCESS"},
+        ])
+        first, second = self.model.prompts
+        self.assertEqual([m.model_dump(exclude={"metadata"}) for m in first],
+                         [m.model_dump(exclude={"metadata"}) for m in second[:len(first)]])
+        first_wire = serialize_ump_to_openai_chat_payload(first)
+        second_wire = serialize_ump_to_openai_chat_payload(second)
+        self.assertEqual(first_wire, second_wire[:len(first_wire)])
+        self.assertIn("terminal verification", second[-1].content[0].text)
+        self.assertEqual(first[0], second[0])
 
     async def test_action_routing_and_coordinates_survive_platform_adapters(self):
         self.config.desktop.coordinate_policy.input_space = CoordinateSpace.NORMALIZED_1000
