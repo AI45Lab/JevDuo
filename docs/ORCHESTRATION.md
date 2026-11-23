@@ -58,7 +58,7 @@ Token usage 保留在 LLM trace，目前不提供 token 或金额硬预算。
 
 | 类型 | 内容 |
 |---|---|
-| `SlowContext` | Task、当前 Observation 引用、History、Note、上次子任务结果、预算、可用插件 |
+| Slow 对话事件 | 固定 Task/插件/预算前缀，追加 cycle 结果、当前 Observation、Note、用量和剩余时间 |
 | `SlowDecision` | SUCCESS / FAIL / CONTINUE、当前 observation_id、核验说明、证据、可选 Contract 和 Note |
 | `SubgoalContract` | ID、Agent ID、目标、成功标准、约束、工具白名单、能力要求、预算、插件参数 |
 | `SubagentRequest` | Session/Round/Attempt 身份、原始任务、Contract、初始 Observation、History 和 Note |
@@ -85,6 +85,25 @@ Slow 复用 `AgentKitModelStepExecutor` 的模型配置、fallback、上下文�
 环境工具、原生子 Agent、MCP 和原有 hooks/middleware，抑制 app MCP 注入，并检查实际
 provider 工具表。输出必须是符合 schema 的 JSON，SUCCESS 必须引用当前 observation_id。
 这项结构校验不替代任务语义核验和官方评分。
+
+### 追加对话与压缩
+
+Slow 在同一题内保留独立对话。规则、响应 schema、原始任务和插件说明构成固定前缀；
+每轮追加已完成 cycle 的回执、新观察、剩余预算和模型原始回答。历史 cycle 按 ID
+只加入一次。子 agent 结果以 `subagent_result` 事件保存完整内容，cycle 回执和当前状态
+通过会话内 `ref` 引用同一份结果；同一 attempt 的内容变化会产生新版本，不覆盖旧回执。
+cycle 用 `decision_ref` 指向已有的原始 Slow 回答，框架调整的子目标预算单独记录为
+`contract_budget_override`；无法精确对应原回答的恢复记录保留完整决策。
+
+notes 按 key 追加变化事件，未变化的内容不重发。`current_state.notes_refs` 给出当前有效
+notes 的完整引用清单，删除也有明确事件。压缩前将最近结果、对应已派发决策及当前有效
+notes 标记为保留对象，仅修改本次请求副本的元数据，provider 可见的历史前缀保持原文。
+决策纠错及最后一轮核验仍追加消息，当前截图继续完整发送；原始 cycle、结果和 notes
+审计记录不受投影去重影响。旧会话升级只追加协议和所需记录，不重写已发送的消息。
+
+Slow 的原始消息追加保存在每题 `query_XXXX/conversations/slow.sqlite3` 中，文件权限
+为 600。恢复会保留消息内容和元数据。对话检测到过期的并发写入时，会在写入前报错。
+请求前缀的稳定性可通过离线测试验证。缓存命中还取决于实际 provider、缓存有效期和路由。
 
 ### 空响应恢复与完整响应记录
 

@@ -10,6 +10,7 @@ import time
 from contextlib import suppress
 from copy import deepcopy
 from dataclasses import dataclass, replace
+from pathlib import Path
 from uuid import uuid4
 
 from nexau.core.messages import ImageBlock, Message, Role, TextBlock
@@ -31,13 +32,13 @@ from northcua.agentkit.model_step import (
 from northcua.agentkit.orchestration.contracts import (
     CycleRecord,
     OrchestrationState,
-    SlowContext,
     SlowDecision,
     SubagentRegistry,
     SubagentRequest,
     SubagentResult,
     Usage,
 )
+from northcua.agentkit.orchestration.conversation import Conversation, event_message
 from northcua.agentkit.orchestration.runtime import (
     BudgetExceeded,
     Journal,
@@ -65,6 +66,7 @@ from northcua.transport.ws.message_seed import SUPPRESS_RAW_AGENT_MCP_SERVERS_KE
 
 from ..prompt.orchestration import SLOW_ROUTER_PROMPT
 from .observation import DesktopObservationProvider
+from .slow_context import SlowContextEvents, pin_slow_references
 from .state import DesktopRuntimeStateStore
 
 
@@ -160,6 +162,13 @@ class DesktopOrchestrationPorts:
         )
         self.observation = None
         self.cycle_id = ""
+        self._slow_conversations: dict[Path, Conversation] = {}
+
+    def _slow_conversation(self) -> Conversation:
+        path = self.store.query_dir() / "conversations" / "slow.sqlite3"
+        if path not in self._slow_conversations:
+            self._slow_conversations[path] = Conversation(path)
+        return self._slow_conversations[path]
 
     @property
     def state(self) -> OrchestrationState:
@@ -296,21 +305,14 @@ class DesktopOrchestrationPorts:
             history[session_step] = [*interrupted, *history.get(session_step, [])]
         return [cycle for session_step in sorted(history) for cycle in history[session_step]]
 
-    def project(self, context):
+    def project(self, context, final_cycle=None):
         assert self.observation is not None
-        payload = SlowContext(
-            task=context.query,
-            observation=self.observation_ref(),
-            history=self.cycle_history(context.cursor.round_num),
-            notes=self.memory.active_entries(context.cursor.round_num),
-            previous_result=self.state.previous_result,
-            usage=self.state.usage,
-            budget=self.service.app_config.orchestration.model_dump(),
-            seconds_left=self.budget.seconds_left(),
-            available_subagents=self.registry.descriptors(),
-        )
         system = SLOW_ROUTER_PROMPT + "\nSchema: " + json.dumps(SlowDecision.model_json_schema())
-        user_message = Message(role=Role.USER, content=[TextBlock(text=payload.model_dump_json())])
+        system += (
+            " Context is an append-only task conversation. Historical observations, budgets and notes "
+            "describe their recorded time. Use the latest current_state event as current authority. "
+            "Child results are claims requiring verification against fresh evidence."
+        )
         if self.budget.config.subagent_steps_per_cycle is not None:
             system += (
                 f" Fixed-cycle policy: at most {self.budget.config.max_cycles} cycles; every dispatched "
@@ -328,10 +330,48 @@ class DesktopOrchestrationPorts:
                 "larger subgoal budgets are allowed. Global quotas and deadlines take precedence. "
                 "Reserve budget for a subsequent verification cycle."
             )
+        conversation = self._slow_conversation()
+        conversation.extend(
+            [
+                Message(role=Role.SYSTEM, content=[TextBlock(text=system)]),
+                event_message(
+                    {
+                        "task": context.query,
+                        "available_subagents": self.registry.descriptors(),
+                        "budget": self.service.app_config.orchestration.model_dump(),
+                    }
+                ),
+            ],
+            event_id="initial",
+        )
+        events = SlowContextEvents(conversation)
+        cycles = self.cycle_history(context.cursor.round_num)
+        if final_cycle is not None:
+            cycles.append(final_cycle)
+        for cycle in cycles:
+            events.append_cycle(cycle)
+        payload = {
+            "event": "current_state",
+            "observation": self.observation_ref(),
+            "usage": self.state.usage.model_dump(),
+            "seconds_left": self.budget.seconds_left(),
+        }
+        if final_cycle is not None:
+            payload["instruction"] = (
+                "This is terminal verification of the final execution cycle. Inspect the fresh observation "
+                "and the referenced previous result. Return SUCCESS or FAIL with current evidence. No further subgoal can "
+                "be dispatched; do not claim success merely from a child claim."
+            )
+        user_message = events.current_state(
+            payload,
+            result=self.state.previous_result,
+            notes=self.memory.active_entries(context.cursor.round_num),
+        )
         image = self.observation.snapshot.clean_screenshot_url
         if image:
             user_message.content.append(ImageBlock(url=image))
-        return [Message(role=Role.SYSTEM, content=[TextBlock(text=system)]), user_message]
+        conversation.append(user_message, event_id=f"observation:{payload['observation']['observation_id']}")
+        return conversation.snapshot()
 
     async def _infer_step(self, messages, charge, context, agent_path, tool_definitions=None):
         inference_id = uuid4().hex
@@ -416,6 +456,8 @@ class DesktopOrchestrationPorts:
     async def _model_attempt(self, messages, charge, context, agent_path, tool_definitions):
         from ..subagents.general_model import configure_tools
 
+        if agent_path == "orchestrator":
+            pin_slow_references(messages)
         return await self.model.run_step(
             agent_kind="orchestrator",
             session_id=context.cursor.session_id,
@@ -448,9 +490,11 @@ class DesktopOrchestrationPorts:
 
     async def run_model_step(self, context):
         messages = list(context.prompt)
+        conversation = self._slow_conversation()
         current = self.observation_ref()
         for attempt in range(3):
             response = await self.infer(messages, lambda: self.budget.charge("model_calls"), context)
+            conversation.append(Message(role=Role.ASSISTANT, content=[TextBlock(text=response)]))
             try:
                 decision = SlowDecision.model_validate_json(response)
                 if decision.observation_id != current["observation_id"]:
@@ -482,15 +526,22 @@ class DesktopOrchestrationPorts:
                 )
                 self.journal.write("decision_validation_retry", self.state,
                                    cycle_id=self.cycle_id, attempt=attempt + 1, detail=detail)
-                messages.extend([
-                    Message(role=Role.ASSISTANT, content=[TextBlock(text=response)]),
-                    Message(role=Role.USER, content=[TextBlock(text=(
-                        "Your decision was rejected before execution. Correct only the decision JSON "
-                        "using the supplied schema; do not invent progress or dispatch any tool. "
-                        f"Validation: {detail}. Current observation_id: {current['observation_id']}. "
-                        "For SUCCESS include that exact ID in evidence_refs."
-                    ))]),
-                ])
+                conversation.append(
+                    Message(
+                        role=Role.USER,
+                        content=[
+                            TextBlock(
+                                text=(
+                                    "Your decision was rejected before execution. Correct only the decision JSON "
+                                    "using the supplied schema; do not invent progress or dispatch any tool. "
+                                    f"Validation: {detail}. Current observation_id: {current['observation_id']}. "
+                                    "For SUCCESS include that exact ID in evidence_refs."
+                                )
+                            ),
+                        ],
+                    )
+                )
+                messages = conversation.snapshot()
         raise AssertionError("unreachable decision recovery state")
 
     async def dispatch_tools(self, context, model_result) -> DispatchResult:
@@ -749,18 +800,16 @@ class DesktopOrchestrationPorts:
             # Verify within this transaction: twenty cycles can actually dispatch
             # twenty subgoals, without a hidden twenty-first action cycle.
             self.observation = await self.capture(context)
-            messages = self.project(context)
-            payload = json.loads(messages[1].content[0].text)
-            payload["history"].append(CycleRecord(
-                cycle_id=self.cycle_id, observation_id=decision.observation_id,
-                decision=decision, subagent_result=result, usage=self.state.usage.model_copy(),
-            ).model_dump(mode="json"))
-            messages[1].content[0] = TextBlock(text=json.dumps(payload, ensure_ascii=False))
-            messages[0].content.append(TextBlock(text=(
-                "This is the terminal verification of the final execution cycle. Inspect the fresh "
-                "observation and previous_result. Return SUCCESS or FAIL with current evidence. "
-                "No further subgoal can be dispatched; do not claim success merely from a child claim."
-            )))
+            messages = self.project(
+                context,
+                final_cycle=CycleRecord(
+                    cycle_id=self.cycle_id,
+                    observation_id=decision.observation_id,
+                    decision=decision,
+                    subagent_result=result,
+                    usage=self.state.usage.model_copy(),
+                ),
+            )
             verification = await self.run_model_step(replace(context, prompt=messages))
             self.journal.write("final_verification", self.state, cycle_id=self.cycle_id,
                                decision=verification.model_dump(mode="json"))
